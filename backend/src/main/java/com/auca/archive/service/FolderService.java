@@ -179,6 +179,9 @@ public class FolderService {
     }
 
     public boolean isDocumentAccessible(DocumentEntity document, UserRole role) {
+        if (role == UserRole.ADMIN) {
+            return true;
+        }
         if (role == null) {
             return true;
         }
@@ -255,6 +258,9 @@ public class FolderService {
     }
 
     private boolean isFolderAccessible(FolderEntity folder, UserRole role, Set<Long> visited) {
+        if (role == UserRole.ADMIN) {
+            return true;
+        }
         if (folder == null) {
             return false;
         }

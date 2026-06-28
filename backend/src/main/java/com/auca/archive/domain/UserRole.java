@@ -1,6 +1,7 @@
 package com.auca.archive.domain;
 
 public enum UserRole {
+    ADMIN("System Administrator", "System Maintenance Dashboard", "ICT Office", "admin"),
     REGISTRAR("Registrar", "Registrar Dashboard", "Registrar Office", "registrar"),
     EXAMINATION_OFFICER("Examination Officer", "Examination Dashboard", "Examination Office", "examination-officer"),
     HOD("HOD", "HOD Dashboard", "Department Office", "hod");

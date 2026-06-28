@@ -48,6 +48,9 @@ public class AccountEntity {
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
+    @Column(length = 512)
+    private String privileges;
+
     public AccountEntity() {
     }
 
@@ -121,5 +124,13 @@ public class AccountEntity {
 
     public void setLastLoginAt(LocalDateTime lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public String getPrivileges() {
+        return privileges;
+    }
+
+    public void setPrivileges(String privileges) {
+        this.privileges = privileges;
     }
 }

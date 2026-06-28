@@ -25,6 +25,9 @@ public class ArchiveAccessService {
     }
 
     public boolean matchesRoleFolderCode(String folderCode, UserRole role) {
+        if (role == UserRole.ADMIN) {
+            return true;
+        }
         if (role == null) {
             return true;
         }
@@ -54,6 +57,7 @@ public class ArchiveAccessService {
         ).toLowerCase(Locale.ROOT);
 
         return switch (role) {
+            case ADMIN -> true;
             case REGISTRAR -> containsAny(haystack, "registrar", "registration", "enrollment", "transcript", "graduation", "admission");
             case EXAMINATION_OFFICER -> containsAny(haystack, "exam", "marks", "grading", "paper", "semester", "mid-sem", "final");
             case HOD -> containsAny(haystack, "hod", "department", "thesis", "approval", "faculty");
@@ -66,6 +70,7 @@ public class ArchiveAccessService {
         }
 
         return switch (role) {
+            case ADMIN -> List.of("REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN");
             case REGISTRAR -> List.of("REG", "SREG", "SRIN", "SAPP");
             case EXAMINATION_OFFICER -> List.of("SEXM");
             case HOD -> List.of("SAPP");
@@ -78,6 +83,7 @@ public class ArchiveAccessService {
         }
 
         return switch (role) {
+            case ADMIN -> Set.of(StudentDocumentCategory.values());
             case REGISTRAR -> Set.of(
                     StudentDocumentCategory.REGISTRATION_FORM,
                     StudentDocumentCategory.REINTEGRATION_FORM,

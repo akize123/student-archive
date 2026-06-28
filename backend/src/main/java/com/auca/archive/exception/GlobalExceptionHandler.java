@@ -51,17 +51,29 @@ public class GlobalExceptionHandler {
             return "Please check your details and try again.";
         }
 
-        boolean usernameMissing = messages.stream().anyMatch(message -> message.toLowerCase().contains("username"));
-        boolean passwordMissing = messages.stream().anyMatch(message -> message.toLowerCase().contains("password"));
+        boolean usernameMissing = messages.stream().anyMatch(message -> message.toLowerCase().contains("username is required"));
+        boolean passwordMissing = messages.stream().anyMatch(message -> message.toLowerCase().equals("password is required"));
+        boolean passwordTooShort = messages.stream().anyMatch(message -> message.toLowerCase().contains("at least 6 characters"));
+        boolean departmentMissing = messages.stream().anyMatch(message -> message.toLowerCase().contains("department is required"));
+        boolean fullNameMissing = messages.stream().anyMatch(message -> message.toLowerCase().contains("full name is required"));
 
+        if (passwordTooShort) {
+            return "Password must be at least 6 characters.";
+        }
+        if (departmentMissing) {
+            return "Please enter a department.";
+        }
+        if (fullNameMissing) {
+            return "Please enter the user full name.";
+        }
         if (usernameMissing && passwordMissing) {
             return "Please enter your username and password.";
         }
         if (usernameMissing) {
-            return "Please enter your username.";
+            return "Please enter a username.";
         }
         if (passwordMissing) {
-            return "Please enter your password.";
+            return "Please enter a password.";
         }
 
         return String.join(" ", messages);
