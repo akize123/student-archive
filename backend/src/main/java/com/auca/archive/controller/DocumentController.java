@@ -1,0 +1,92 @@
+package com.auca.archive.controller;
+
+import com.auca.archive.domain.DocumentStatus;
+import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.dto.DocumentDetailResponse;
+import com.auca.archive.dto.DocumentListItemResponse;
+import com.auca.archive.dto.UpdateDocumentStatusRequest;
+import com.auca.archive.dto.UploadDocumentRequest;
+import com.auca.archive.service.DocumentService;
+import jakarta.validation.Valid;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/documents")
+public class DocumentController {
+    private final DocumentService documentService;
+
+    public DocumentController(DocumentService documentService) {
+        this.documentService = documentService;
+    }
+
+    @GetMapping
+    public List<DocumentListItemResponse> search(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) StudentDocumentCategory category,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        return documentService.search(q, category, role);
+    }
+
+    @GetMapping("/{id}")
+    public DocumentDetailResponse getDocument(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) {
+        return documentService.getDocument(id, role);
+    }
+
+    @GetMapping("/{id}/download")
+    public ResponseEntity<Resource> download(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) throws IOException {
+        Resource resource = documentService.download(id, role);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource);
+    }
+
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public DocumentDetailResponse upload(
+            @Valid @RequestPart("metadata") UploadDocumentRequest metadata,
+            @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) throws IOException {
+        return documentService.upload(metadata, file, role);
+    }
+
+    @PatchMapping("/{id}/status")
+    public DocumentDetailResponse updateStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateDocumentStatusRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        return documentService.updateStatus(id, DocumentStatus.valueOf(request.status().toUpperCase()), role);
+    }
+
+    @DeleteMapping("/{id}")
+    public Map<String, String> deleteDocument(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        documentService.deleteDocument(id, role);
+        Map<String, String> response = new java.util.LinkedHashMap<>();
+        response.put("message", "Document deleted");
+        return response;
+    }
+}
