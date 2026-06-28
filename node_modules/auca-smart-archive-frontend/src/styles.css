@@ -1506,6 +1506,10 @@ tbody tr:hover {
   background: rgba(0, 84, 166, 0.03);
 }
 
+tbody tr.document-row {
+  cursor: pointer;
+}
+
 .file-cell {
   display: flex;
   align-items: center;
@@ -2528,11 +2532,22 @@ tbody tr:hover {
 .explorer-file {
   background: #fff;
   cursor: pointer;
+  outline: none;
+}
+
+.explorer-file:focus-visible {
+  border-color: rgba(0, 84, 166, 0.35);
+  box-shadow: 0 0 0 3px rgba(0, 84, 166, 0.08);
 }
 
 .explorer-file:hover {
   border-color: rgba(0, 84, 166, 0.22);
   box-shadow: var(--shadow-soft);
+}
+
+.explorer-file.opening {
+  opacity: 0.72;
+  pointer-events: none;
 }
 
 .explorer-filter-bar {
@@ -2577,6 +2592,29 @@ tbody tr:hover {
   padding: 0 4px;
   color: var(--auca-blue-dark);
   font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.explorer-hint {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(0, 84, 166, 0.06);
+  border: 1px solid rgba(0, 84, 166, 0.10);
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.explorer-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  color: var(--auca-navy);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.78rem;
   font-weight: 600;
 }
 
