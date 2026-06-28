@@ -17,10 +17,16 @@ import java.util.Locale;
 public class AccountService {
     private final AccountRepository accountRepository;
     private final PasswordHasher passwordHasher;
+    private final AdminService adminService;
 
-    public AccountService(AccountRepository accountRepository, PasswordHasher passwordHasher) {
+    public AccountService(
+            AccountRepository accountRepository,
+            PasswordHasher passwordHasher,
+            AdminService adminService
+    ) {
         this.accountRepository = accountRepository;
         this.passwordHasher = passwordHasher;
+        this.adminService = adminService;
     }
 
     @Transactional
@@ -67,7 +73,8 @@ public class AccountService {
                 role.getDisplayName(),
                 account.getDepartment(),
                 role.getDashboardTitle(),
-                role.getDashboardKey()
+                role.getDashboardKey(),
+                adminService.resolvePrivilegeCodes(account)
         );
     }
 

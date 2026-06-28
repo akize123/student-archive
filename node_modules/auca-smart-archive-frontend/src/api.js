@@ -212,3 +212,25 @@ export function decideApproval(id, decision, note) {
     body: JSON.stringify({ decision, note })
   })
 }
+
+export function getAdminDashboard() {
+  return request('/api/admin/dashboard')
+}
+
+export function getAdminPrivileges() {
+  return request('/api/admin/privileges')
+}
+
+export function createAdminUser(payload) {
+  return request('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function updateAdminUser(userId, payload) {
+  return request(`/api/admin/users/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  })
+}

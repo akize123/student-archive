@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
 import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, openDocument, searchDocuments, submitUpload } from './api'
+import AdminDashboard from './components/AdminDashboard'
 import BrandLogo from './components/BrandLogo'
 import ArchiveLandingVisual from './components/ArchiveLandingVisual'
 import {
@@ -156,6 +157,11 @@ const quickAccess = [
   { label: 'Trash', icon: TrashIcon, count: null, action: 'trash' }
 ]
 
+const adminQuickAccess = [
+  { label: 'System Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
+]
+
 const studentDocumentCategories = [
   {
     value: 'REGISTRATION_FORM',
@@ -255,6 +261,14 @@ const emptyDashboard = {
 const AUTH_SESSION_KEY = 'auca-archive-session'
 
 const roleDashboardConfig = {
+  ADMIN: {
+    roleLabel: 'System Administrator',
+    dashboardTitle: 'System Maintenance Dashboard',
+    department: 'ICT Office',
+    welcomeCopy: 'Maintain users, roles, privileges, and monitor archive system health.',
+    defaultCategory: '',
+    visibleCategories: []
+  },
   REGISTRAR: {
     roleLabel: 'Registrar',
     dashboardTitle: 'Registrar Dashboard',
@@ -442,6 +456,9 @@ function statusTone(status) {
 }
 
 function getVisibleDocumentCategories(role) {
+  if (role === 'ADMIN') {
+    return []
+  }
   const allowed = roleDashboardConfig[role]?.visibleCategories || studentDocumentCategories.map((category) => category.value)
   return studentDocumentCategories.filter((category) => allowed.includes(category.value))
 }
@@ -1745,8 +1762,20 @@ function App() {
   function handleQuickAccess(action) {
     if (action === 'dashboard') {
       navigateToDashboard()
+      return
+    }
+    if (action === 'browse') {
+      const firstFolder = (dashboard ?? emptyDashboard).archiveTree?.[0]
+      if (firstFolder) {
+        openFolder(firstFolder.id)
+      } else {
+        setNotice('No archive folders are available yet.')
+      }
     }
   }
+
+  const isAdmin = session.role === 'ADMIN'
+  const sidebarQuickAccess = isAdmin ? adminQuickAccess : quickAccess
 
   function openFolder(folderId) {
     if (!folderId) {
@@ -1880,7 +1909,7 @@ function App() {
 
           <div className="sidebar-section sidebar-quick-access">
             <p className="eyebrow">Quick Access</p>
-            {quickAccess.map((item) => {
+            {sidebarQuickAccess.map((item) => {
               const Icon = item.icon
               const isActive = item.action === 'dashboard' && !isFolderRoute
               return (
@@ -1959,6 +1988,8 @@ function App() {
               onNotify={setNotice}
               onDataChange={refreshExplorerData}
             />
+          ) : isAdmin ? (
+            <AdminDashboard onNotify={setNotice} />
           ) : (
             <>
           <div className="breadcrumb-bar">

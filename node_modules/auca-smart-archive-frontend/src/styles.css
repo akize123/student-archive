@@ -2739,3 +2739,155 @@ tbody tr.document-row {
     justify-content: flex-end;
   }
 }
+
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.admin-hero {
+  border-left-color: var(--auca-blue-dark);
+}
+
+.admin-stats-grid {
+  margin-top: 0;
+}
+
+.admin-role-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-role-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-role-chip strong {
+  font-size: 0.84rem;
+  color: var(--auca-navy);
+}
+
+.admin-role-chip span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.admin-users-panel .panel-head {
+  align-items: flex-start;
+}
+
+.admin-privilege-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-edit-btn {
+  white-space: nowrap;
+}
+
+.admin-user-modal {
+  width: min(760px, 100%);
+}
+
+.admin-user-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-user-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.admin-user-form input,
+.admin-user-form select {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  outline: none;
+  color: var(--text);
+  background: #fff;
+}
+
+.admin-active-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px !important;
+}
+
+.admin-privilege-picker {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-privilege-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.admin-privilege-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-privilege-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  cursor: pointer;
+}
+
+.admin-privilege-option.checked {
+  border-color: rgba(0, 84, 166, 0.24);
+  background: rgba(0, 84, 166, 0.05);
+}
+
+.admin-privilege-option input {
+  margin-top: 4px;
+}
+
+.admin-privilege-option strong,
+.admin-privilege-option span {
+  display: block;
+}
+
+.admin-privilege-option span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.admin-user-form .modal-actions {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .admin-user-form,
+  .admin-privilege-grid {
+    grid-template-columns: 1fr;
+  }
+}
