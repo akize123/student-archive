@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, searchDocuments, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, openDocument, searchDocuments, submitUpload } from './api'
 import BrandLogo from './components/BrandLogo'
 import ArchiveLandingVisual from './components/ArchiveLandingVisual'
 import {
@@ -813,6 +813,7 @@ function FolderView({
   const [confirmState, setConfirmState] = useState(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+  const [openingDocumentId, setOpeningDocumentId] = useState(null)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
@@ -854,6 +855,39 @@ function FolderView({
       }
       return next
     })
+  }
+
+  async function handleOpenDocument(documentItem) {
+    if (!documentItem?.id || openingDocumentId) {
+      return
+    }
+
+    setOpeningDocumentId(documentItem.id)
+    try {
+      const result = await openDocument(documentItem.id)
+      if (result?.mode === 'download') {
+        onNotify?.(`Downloading ${result.filename}...`)
+      }
+    } catch (err) {
+      onNotify?.(err.message || 'Unable to open document.')
+    } finally {
+      setOpeningDocumentId(null)
+    }
+  }
+
+  function handleDocumentClick(event, documentItem) {
+    if (event.ctrlKey || event.metaKey) {
+      toggleDocumentSelection(documentItem.id)
+      return
+    }
+    handleOpenDocument(documentItem)
+  }
+
+  function handleDocumentKeyDown(event, documentItem) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      handleOpenDocument(documentItem)
+    }
   }
 
   function getSelectedDocuments(allDocuments) {
@@ -1228,6 +1262,10 @@ function FolderView({
 
       {selectionCount ? (
         <p className="explorer-selection-note">{selectionCount} item{selectionCount === 1 ? '' : 's'} selected</p>
+      ) : visibleDocuments.length ? (
+        <p className="explorer-hint">
+          Click a document to open it. <kbd>Ctrl</kbd>+click to select items for download or delete.
+        </p>
       ) : null}
 
       <div className={`explorer-content ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}>
@@ -1250,11 +1288,14 @@ function FolderView({
         ))}
 
         {visibleDocuments.map((document) => (
-          <button
+          <div
             key={document.id}
-            type="button"
-            className={`explorer-item explorer-file ${selectedDocumentIds.has(document.id) ? 'selected' : ''}`}
-            onClick={() => toggleDocumentSelection(document.id)}
+            role="button"
+            tabIndex={0}
+            className={`explorer-item explorer-file ${selectedDocumentIds.has(document.id) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
+            onClick={(event) => handleDocumentClick(event, document)}
+            onKeyDown={(event) => handleDocumentKeyDown(event, document)}
+            title="Click to open. Ctrl+click to select."
           >
             <ExplorerStatusBadge status={document.status} />
             <div className="explorer-item-icon file">
@@ -1264,7 +1305,7 @@ function FolderView({
               <strong>{document.fileName || document.title}</strong>
               <span>{formatBytes(document.sizeBytes)}</span>
             </div>
-          </button>
+          </div>
         ))}
 
         {isEmpty ? (
@@ -2030,7 +2071,12 @@ function App() {
                       </tr>
                     ) : recentFiles.length ? (
                       recentFiles.map((fileRow) => (
-                        <tr key={fileRow.id}>
+                        <tr
+                          key={fileRow.id}
+                          className="document-row"
+                          onClick={() => openDocument(fileRow.id).catch((err) => setNotice(err.message || 'Unable to open document.'))}
+                          title="Click to open document"
+                        >
                           <td>
                             <div className="file-cell">
                               <DocumentIcon className="icon doc" />

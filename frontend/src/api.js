@@ -116,7 +116,7 @@ export function deleteFolder(folderId) {
   })
 }
 
-export async function downloadDocument(documentId) {
+async function fetchDocumentFile(documentId) {
   const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
     headers: {
       ...getSessionRoleHeader()
@@ -136,13 +136,50 @@ export async function downloadDocument(documentId) {
     } else {
       message = await response.text()
     }
-    throw new Error(message || `Download failed with status ${response.status}`)
+    throw new Error(message || `Request failed with status ${response.status}`)
   }
 
   const blob = await response.blob()
   const disposition = response.headers.get('content-disposition') || ''
   const match = disposition.match(/filename="(.+?)"/)
   const filename = match ? match[1] : 'document.pdf'
+  const contentType = response.headers.get('content-type') || blob.type || 'application/octet-stream'
+
+  return { blob, filename, contentType }
+}
+
+export async function openDocument(documentId) {
+  const { blob, filename, contentType } = await fetchDocumentFile(documentId)
+  const extension = filename.split('.').pop()?.toLowerCase() || ''
+  const canPreview = extension === 'pdf' || contentType.includes('pdf')
+  const previewBlob = canPreview && !contentType.includes('pdf')
+    ? new Blob([blob], { type: 'application/pdf' })
+    : blob
+  const url = URL.createObjectURL(previewBlob)
+
+  if (canPreview) {
+    const tab = window.open(url, '_blank')
+    if (!tab) {
+      URL.revokeObjectURL(url)
+      throw new Error('Pop-up blocked. Allow pop-ups for this site to preview documents.')
+    }
+    tab.opener = null
+    window.setTimeout(() => URL.revokeObjectURL(url), 120000)
+    return { mode: 'preview', filename }
+  }
+
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return { mode: 'download', filename }
+}
+
+export async function downloadDocument(documentId) {
+  const { blob, filename } = await fetchDocumentFile(documentId)
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
