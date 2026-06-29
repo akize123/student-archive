@@ -42,6 +42,7 @@ public class DocumentService {
     private final FolderService folderService;
     private final StudentService studentService;
     private final ArchiveAccessService accessService;
+    private final DocumentScanService documentScanService;
     private final Path storageRoot;
     private final long minUploadSizeBytes;
     private final long maxUploadSizeBytes;
@@ -51,6 +52,7 @@ public class DocumentService {
             FolderService folderService,
             StudentService studentService,
             ArchiveAccessService accessService,
+            DocumentScanService documentScanService,
             @Value("${archive.min-upload-size-bytes:1024}") long minUploadSizeBytes,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes,
             @Value("${archive.storage-root:storage}") String storageRoot
@@ -59,6 +61,7 @@ public class DocumentService {
         this.folderService = folderService;
         this.studentService = studentService;
         this.accessService = accessService;
+        this.documentScanService = documentScanService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
         this.minUploadSizeBytes = minUploadSizeBytes;
         this.maxUploadSizeBytes = maxUploadSizeBytes;
@@ -276,6 +279,8 @@ public class DocumentService {
                 }
                 pageNumber++;
             }
+
+            documentScanService.requireVerified(fileBytes, request);
         }
     }
 

@@ -4,8 +4,11 @@ import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.dto.DocumentDetailResponse;
 import com.auca.archive.dto.DocumentListItemResponse;
+import com.auca.archive.dto.DocumentScanContext;
+import com.auca.archive.dto.DocumentScanResponse;
 import com.auca.archive.dto.UpdateDocumentStatusRequest;
 import com.auca.archive.dto.UploadDocumentRequest;
+import com.auca.archive.service.DocumentScanService;
 import com.auca.archive.service.DocumentService;
 import jakarta.validation.Valid;
 import org.springframework.core.io.Resource;
@@ -33,9 +36,11 @@ import java.util.Map;
 @RequestMapping("/api/documents")
 public class DocumentController {
     private final DocumentService documentService;
+    private final DocumentScanService documentScanService;
 
-    public DocumentController(DocumentService documentService) {
+    public DocumentController(DocumentService documentService, DocumentScanService documentScanService) {
         this.documentService = documentService;
+        this.documentScanService = documentScanService;
     }
 
     @GetMapping
@@ -59,6 +64,14 @@ public class DocumentController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(resource);
+    }
+
+    @PostMapping(value = "/scan", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public DocumentScanResponse scan(
+            @RequestPart("file") MultipartFile file,
+            @RequestPart(value = "context", required = false) DocumentScanContext context
+    ) throws IOException {
+        return documentScanService.scan(file, context);
     }
 
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

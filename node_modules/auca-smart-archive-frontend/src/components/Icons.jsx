@@ -94,6 +94,24 @@ export function TrashIcon(props) {
   )
 }
 
+export function MailIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </SvgIcon>
+  )
+}
+
+export function LockIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </SvgIcon>
+  )
+}
+
 export function ChevronLeftIcon(props) {
   return (
     <SvgIcon {...props}>

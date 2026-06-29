@@ -206,6 +206,16 @@ export function submitUpload(metadata, file) {
   })
 }
 
+export function scanDocument(file, context = {}) {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('context', new Blob([JSON.stringify(context)], { type: 'application/json' }))
+  return request('/api/documents/scan', {
+    method: 'POST',
+    body: formData
+  })
+}
+
 export function decideApproval(id, decision, note) {
   return request(`/api/approvals/${id}/decision`, {
     method: 'POST',
