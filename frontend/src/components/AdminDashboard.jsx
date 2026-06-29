@@ -203,76 +203,61 @@ export default function AdminDashboard({ onNotify }) {
   if (loading) {
     return (
       <section className="admin-page">
-        <div className="panel">
-          <p className="eyebrow">System maintenance</p>
-          <h2>Loading admin dashboard...</h2>
-        </div>
+        <p className="admin-loading">Loading users…</p>
       </section>
     )
   }
 
   return (
     <section className="admin-page">
-      <div className="hero admin-hero">
-        <div className="hero-copy">
-          <p className="eyebrow">AUCA Archive Portal - System Maintenance</p>
-          <h1>Administrator dashboard</h1>
-          <p className="hero-subtitle">
-            Create users, assign roles, and manage privileges for the archive system.
-          </p>
+      <header className="admin-top">
+        <div className="admin-top-copy">
+          <h1>Users</h1>
+          <p>Manage accounts, roles, and access.</p>
         </div>
+        <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
+          New user
+        </button>
+      </header>
+
+      <div className="admin-overview">
+        <dl className="admin-metrics">
+          <div className="admin-metric">
+            <dt>Total</dt>
+            <dd>{data?.totalUsers ?? 0}</dd>
+          </div>
+          <div className="admin-metric">
+            <dt>Active</dt>
+            <dd>{data?.activeUsers ?? 0}</dd>
+          </div>
+          <div className="admin-metric">
+            <dt>Inactive</dt>
+            <dd>{data?.inactiveUsers ?? 0}</dd>
+          </div>
+          <div className="admin-metric">
+            <dt>Roles</dt>
+            <dd>{roleBreakdown.length}</dd>
+          </div>
+        </dl>
+
+        {roleBreakdown.length ? (
+          <div className="admin-role-row">
+            {roleBreakdown.map(([role, count]) => (
+              <span key={role} className="admin-role-tag">
+                {role.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}
+                <em>{count}</em>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
-      <section className="stats-grid admin-stats-grid">
-        <article className="stat-card">
-          <p>Total users</p>
-          <strong>{data?.totalUsers ?? 0}</strong>
-          <span>registered accounts</span>
-        </article>
-        <article className="stat-card">
-          <p>Active users</p>
-          <strong>{data?.activeUsers ?? 0}</strong>
-          <span>can sign in</span>
-        </article>
-        <article className="stat-card">
-          <p>Inactive users</p>
-          <strong>{data?.inactiveUsers ?? 0}</strong>
-          <span>disabled accounts</span>
-        </article>
-        <article className="stat-card">
-          <p>Roles in use</p>
-          <strong>{roleBreakdown.length}</strong>
-          <span>across the system</span>
-        </article>
-      </section>
-
-      {roleBreakdown.length ? (
-        <section className="admin-role-strip">
-          {roleBreakdown.map(([role, count]) => (
-            <div key={role} className="admin-role-chip">
-              <strong>{role.replaceAll('_', ' ')}</strong>
-              <span>{count} user{count === 1 ? '' : 's'}</span>
-            </div>
-          ))}
-        </section>
-      ) : null}
-
-      <section className="panel admin-users-panel">
-        <div className="panel-head">
-          <div>
-            <h2>User management</h2>
-            <p>Create accounts, update roles, and assign privileges.</p>
-          </div>
-          <button type="button" className="primary-btn" onClick={openCreateModal}>
-            Create user
-          </button>
-        </div>
-
-        <div className="table-shell">
-          <table>
+      <div className="admin-card">
+        <div className="table-shell admin-table-shell">
+          <table className="admin-table">
             <thead>
               <tr>
-                <th>User</th>
+                <th>Name</th>
                 <th>Role</th>
                 <th>Department</th>
                 <th>Privileges</th>
@@ -285,34 +270,32 @@ export default function AdminDashboard({ onNotify }) {
               {(data?.users || []).map((user) => (
                 <tr key={user.id}>
                   <td>
-                    <div className="file-cell">
-                      <div>
-                        <strong>{user.fullName}</strong>
-                        <span>{user.username}</span>
-                      </div>
+                    <div className="admin-user-cell">
+                      <strong>{user.fullName}</strong>
+                      <span>{user.username}</span>
                     </div>
                   </td>
                   <td>{user.roleLabel}</td>
                   <td>{user.department}</td>
                   <td>
                     <div className="admin-privilege-tags">
-                      {(user.privileges || []).slice(0, 3).map((privilege) => (
-                        <span key={privilege} className="summary-chip">{privilege.replaceAll('_', ' ')}</span>
+                      {(user.privileges || []).slice(0, 2).map((privilege) => (
+                        <span key={privilege} className="admin-tag">{privilege.replaceAll('_', ' ').toLowerCase()}</span>
                       ))}
-                      {(user.privileges || []).length > 3 ? (
-                        <span className="summary-chip">+{user.privileges.length - 3}</span>
+                      {(user.privileges || []).length > 2 ? (
+                        <span className="admin-tag admin-tag-more">+{user.privileges.length - 2}</span>
                       ) : null}
                     </div>
                   </td>
                   <td>
-                    <span className={user.active ? 'status approved' : 'status rejected'}>
+                    <span className={`admin-status ${user.active ? 'is-active' : 'is-inactive'}`}>
                       {user.active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td>{formatDateTime(user.lastLoginAt)}</td>
+                  <td className="admin-muted-cell">{formatDateTime(user.lastLoginAt)}</td>
                   <td>
-                    <button type="button" className="ghost-btn admin-edit-btn" onClick={() => openEditModal(user)}>
-                      Manage
+                    <button type="button" className="admin-row-action" onClick={() => openEditModal(user)}>
+                      Edit
                     </button>
                   </td>
                 </tr>
@@ -320,15 +303,15 @@ export default function AdminDashboard({ onNotify }) {
             </tbody>
           </table>
         </div>
-      </section>
+      </div>
 
       {modalMode ? (
         <div className="modal-backdrop" onClick={closeModal} role="presentation">
           <div className="modal admin-user-modal" onClick={(event) => event.stopPropagation()} role="presentation">
-            <div className="modal-head">
+            <div className="modal-head admin-modal-head">
               <div>
-                <p className="eyebrow">{modalMode === 'create' ? 'Create user' : 'Manage user'}</p>
-                <h2>{modalMode === 'create' ? 'New system account' : form.fullName}</h2>
+                <h2>{modalMode === 'create' ? 'New user' : form.fullName}</h2>
+                <p>{modalMode === 'create' ? 'Add a system account' : 'Update account details'}</p>
               </div>
               <button type="button" className="ghost-icon" onClick={closeModal}>
                 <XIcon className="icon" />
@@ -397,7 +380,7 @@ export default function AdminDashboard({ onNotify }) {
               </label>
 
               <div className="admin-privilege-picker">
-                <p className="eyebrow">Privileges</p>
+                <span className="admin-field-label">Privileges</span>
                 <p className="admin-privilege-note">
                   {form.role === 'ADMIN'
                     ? 'Administrators receive full system privileges automatically.'

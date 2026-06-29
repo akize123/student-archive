@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, openDocument, searchDocuments, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, openDocument, scanDocument, searchDocuments, submitUpload } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import BrandLogo from './components/BrandLogo'
-import ArchiveLandingVisual from './components/ArchiveLandingVisual'
 import {
   ArrowRightIcon,
   ArrowUpIcon,
@@ -25,7 +24,9 @@ import {
   XIcon,
   EyeIcon,
   EyeOffIcon,
-  HomeIcon
+  HomeIcon,
+  MailIcon,
+  LockIcon
 } from './components/Icons'
 
 const demoDashboard = {
@@ -259,6 +260,64 @@ const emptyDashboard = {
 }
 
 const AUTH_SESSION_KEY = 'auca-archive-session'
+const TRASH_STORAGE_KEY = 'auca-archive-trash'
+
+function readTrashItems() {
+  if (typeof window === 'undefined') {
+    return []
+  }
+  try {
+    const raw = window.localStorage.getItem(TRASH_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function writeTrashItems(items) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(TRASH_STORAGE_KEY, JSON.stringify(items.slice(0, 100)))
+}
+
+function addTrashItems(entries) {
+  if (!entries?.length) {
+    return
+  }
+  writeTrashItems([...entries, ...readTrashItems()])
+}
+
+function isWithinDays(value, days) {
+  if (!value) {
+    return true
+  }
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) {
+    return true
+  }
+  return Date.now() - timestamp <= days * 24 * 60 * 60 * 1000
+}
+
+function filterTreeNodes(nodes, query) {
+  const trimmed = String(query || '').trim().toLowerCase()
+  if (!trimmed) {
+    return nodes
+  }
+
+  function walk(list) {
+    return list.reduce((acc, node) => {
+      const children = node.children?.length ? walk(node.children) : []
+      const matches = String(node.name || '').toLowerCase().includes(trimmed)
+      if (matches || children.length) {
+        acc.push({ ...node, children })
+      }
+      return acc
+    }, [])
+  }
+
+  return walk(nodes)
+}
 
 const roleDashboardConfig = {
   ADMIN: {
@@ -338,6 +397,17 @@ function formatDate(value) {
     year: 'numeric',
     month: 'short',
     day: '2-digit'
+  }).format(new Date(value))
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  return new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
   }).format(new Date(value))
 }
 
@@ -555,8 +625,24 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, expandedIds, onToggl
   )
 }
 
-function ArchiveTreePanel({ nodes, activeFolderId, onOpenFolder }) {
+function ArchiveTreePanel({
+  nodes,
+  activeFolderId,
+  onOpenFolder,
+  onAddFolder,
+  treeFilter,
+  onTreeFilterChange,
+  treeFilterOpen,
+  onToggleTreeFilter
+}) {
   const [expandedIds, setExpandedIds] = useState(() => collectDefaultExpandedIds(nodes))
+  const visibleNodes = filterTreeNodes(nodes, treeFilter)
+
+  useEffect(() => {
+    if (treeFilter.trim()) {
+      setExpandedIds(collectDefaultExpandedIds(filterTreeNodes(nodes, treeFilter), 0, new Set()))
+    }
+  }, [treeFilter, nodes])
 
   useEffect(() => {
     setExpandedIds((current) => {
@@ -587,17 +673,33 @@ function ArchiveTreePanel({ nodes, activeFolderId, onOpenFolder }) {
       <div className="section-head archive-tree-head">
         <p className="eyebrow">Archive Tree</p>
         <div className="section-actions">
-          <button type="button" className="ghost-icon" aria-label="Add folder">
+          <button type="button" className="ghost-icon" aria-label="Add folder" onClick={onAddFolder}>
             <FolderPlusIcon className="icon" />
           </button>
-          <button type="button" className="ghost-icon" aria-label="Filter folders">
+          <button
+            type="button"
+            className={`ghost-icon ${treeFilterOpen ? 'active' : ''}`}
+            aria-label="Filter folders"
+            aria-pressed={treeFilterOpen}
+            onClick={onToggleTreeFilter}
+          >
             <FilterIcon className="icon" />
           </button>
         </div>
       </div>
+      {treeFilterOpen ? (
+        <div className="archive-tree-filter">
+          <input
+            value={treeFilter}
+            onChange={(event) => onTreeFilterChange?.(event.target.value)}
+            placeholder="Filter folders..."
+            aria-label="Filter folders"
+          />
+        </div>
+      ) : null}
       <div className="archive-tree-scroll">
         <SidebarTree
-          nodes={nodes}
+          nodes={visibleNodes}
           activeFolderId={activeFolderId}
           onOpenFolder={onOpenFolder}
           expandedIds={expandedIds}
@@ -639,56 +741,88 @@ function ActivityDot({ category }) {
 
 function LoginScreen({ form, onChange, onSubmit, busy, error }) {
   const [showPassword, setShowPassword] = useState(false)
+  const [forgotNotice, setForgotNotice] = useState('')
 
   return (
-    <div className="auth-shell">
-      <div className="auth-card">
-        <section className="auth-copy">
-          <BrandLogo variant="full" />
-          <ArchiveLandingVisual />
-        </section>
+    <div className="auth-landing">
+      <section className="auth-landing-left">
+        <a className="auth-back-home" href="https://www.auca.ac.rw/" target="_blank" rel="noreferrer">
+          ← Back to Home
+        </a>
 
-        <section className="auth-form-panel">
-          <form className="auth-form" onSubmit={onSubmit}>
-            <p className="eyebrow">Sign in</p>
-            <h2>Welcome back</h2>
-            <label>
-              <span>Username</span>
+        <div className="auth-landing-content">
+          <header className="auth-uni-brand">
+            <img src="/auca-logo.jpg" alt="" className="auth-uni-logo" />
+            <div className="auth-uni-copy">
+              <span>ADVENTIST UNIVERSITY</span>
+              <span>OF CENTRAL AFRICA</span>
+            </div>
+          </header>
+
+          <form className="auth-portal-form" onSubmit={onSubmit}>
+            <h1>Welcome Back</h1>
+            <p className="auth-portal-lead">Sign in to access the Academic Hub</p>
+
+            <label className="auth-field-label" htmlFor="auth-username">
+              ACADEMIC IDENTITY / FACULTY CODE
+            </label>
+            <div className="auth-input-shell">
+              <MailIcon className="icon auth-field-icon" />
               <input
+                id="auth-username"
                 value={form.username}
                 onChange={(event) => onChange({ ...form, username: event.target.value })}
-                placeholder="Enter your username"
+                placeholder="student@auca.ac.rw"
                 autoComplete="username"
               />
-            </label>
-            <label>
-              <span>Password</span>
-              <div className="password-field">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={(event) => onChange({ ...form, password: event.target.value })}
-                  placeholder="Enter your password"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword((current) => !current)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  aria-pressed={showPassword}
-                >
-                  {showPassword ? <EyeOffIcon className="icon small" /> : <EyeIcon className="icon small" />}
-                </button>
-              </div>
-            </label>
+            </div>
+
+            <div className="auth-password-head">
+              <label className="auth-field-label" htmlFor="auth-password">
+                SECURE PASSWORD
+              </label>
+              <button
+                type="button"
+                className="auth-forgot-link"
+                onClick={() => setForgotNotice('Contact ICT Office to reset your archive access credentials.')}
+              >
+                Forgot access?
+              </button>
+            </div>
+            <div className="auth-input-shell">
+              <LockIcon className="icon auth-field-icon" />
+              <input
+                id="auth-password"
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(event) => onChange({ ...form, password: event.target.value })}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="auth-eye-btn"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOffIcon className="icon small" /> : <EyeIcon className="icon small" />}
+              </button>
+            </div>
+
             {error ? <div className="auth-error" role="alert">{error}</div> : null}
-            <button className="primary-btn auth-submit" type="submit" disabled={busy}>
-              {busy ? 'Signing in...' : 'Sign in'}
+            {forgotNotice ? <div className="auth-forgot-note" role="status">{forgotNotice}</div> : null}
+
+            <button className="auth-portal-btn" type="submit" disabled={busy}>
+              {busy ? 'SIGNING IN...' : 'ACCESS PORTAL →'}
             </button>
           </form>
-        </section>
-      </div>
+        </div>
+      </section>
+
+      <section className="auth-landing-right" aria-hidden="true">
+        <img src="/auca-campus.png" alt="" className="auth-campus-photo" />
+      </section>
     </div>
   )
 }
@@ -819,7 +953,8 @@ function FolderView({
   canGoUp,
   onOpenSearch,
   onNotify,
-  onDataChange
+  onDataChange,
+  onTrashItems
 }) {
   const [viewMode, setViewMode] = useState('grid')
   const [sortBy, setSortBy] = useState('modified')
@@ -1105,12 +1240,35 @@ function FolderView({
       confirmLabel: 'Delete',
       tone: 'danger',
       onConfirm: async () => {
+        const trashedEntries = [
+          ...selectedDocuments
+            .filter((item) => selectedDocumentIds.has(item.id))
+            .map((document) => ({
+              id: document.id,
+              title: document.title || document.fileName,
+              fileName: document.fileName,
+              studentNumber: document.studentNumber,
+              ownerName: document.ownerName,
+              category: document.category,
+              issueDate: document.issueDate,
+              pageCount: document.pageCount,
+              type: 'document',
+              deletedAt: new Date().toISOString()
+            })),
+          ...selectedFolders.map((child) => ({
+            id: child.id,
+            title: child.name,
+            type: 'folder',
+            deletedAt: new Date().toISOString()
+          }))
+        ]
         for (const document of selectedDocuments.filter((item) => selectedDocumentIds.has(item.id))) {
           await deleteDocument(document.id)
         }
         for (const child of selectedFolders) {
           await deleteFolder(child.id)
         }
+        onTrashItems?.(trashedEntries)
         setSelectedFolderIds(new Set())
         setSelectedDocumentIds(new Set())
         onNotify?.('Selected items deleted.')
@@ -1365,6 +1523,16 @@ function App() {
   const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [uploadBusy, setUploadBusy] = useState(false)
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanResult, setScanResult] = useState(null)
+  const [scanError, setScanError] = useState('')
+  const [dashboardView, setDashboardView] = useState('default')
+  const [treeFilterOpen, setTreeFilterOpen] = useState(false)
+  const [treeFilter, setTreeFilter] = useState('')
+  const [trashRevision, setTrashRevision] = useState(0)
+  const [appConfirm, setAppConfirm] = useState(null)
+  const [appConfirmBusy, setAppConfirmBusy] = useState(false)
+  const [appConfirmInput, setAppConfirmInput] = useState('')
   const [notice, setNotice] = useState('')
   const [studentLookupQuery, setStudentLookupQuery] = useState('')
   const [studentLookupResult, setStudentLookupResult] = useState(null)
@@ -1429,6 +1597,9 @@ function App() {
     if (!session) {
       setForm(buildDefaultUploadForm())
       setFile(null)
+      setScanResult(null)
+      setScanError('')
+      setScanBusy(false)
       setModalOpen(false)
       setSelectedCategory('')
       setSearchQuery('')
@@ -1449,6 +1620,56 @@ function App() {
       category: roleConfig.defaultCategory || current.category
     }))
   }, [roleConfig.defaultCategory, session])
+
+  useEffect(() => {
+    if (!file || !modalOpen) {
+      return undefined
+    }
+
+    let active = true
+    setScanBusy(true)
+    setScanError('')
+    setScanResult(null)
+
+    const context = {
+      studentNumber: String(form.studentNumber || '').trim(),
+      studentName: String(form.studentName || '').trim(),
+      category: form.category,
+      course: String(form.course || '').trim(),
+      faculty: String(form.faculty || '').trim(),
+      department: String(form.department || '').trim()
+    }
+
+    scanDocument(file, context)
+      .then((result) => {
+        if (!active) return
+        setScanResult(result)
+        if (result.pageCount) {
+          setForm((current) => ({ ...current, pageCount: result.pageCount }))
+        }
+      })
+      .catch((err) => {
+        if (!active) return
+        setScanResult(null)
+        setScanError(err.message || 'Unable to scan this document.')
+      })
+      .finally(() => {
+        if (active) setScanBusy(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [
+    file,
+    modalOpen,
+    form.studentNumber,
+    form.studentName,
+    form.category,
+    form.course,
+    form.faculty,
+    form.department
+  ])
 
   useEffect(() => {
     if (route.view === 'folder') {
@@ -1646,6 +1867,9 @@ function App() {
     setLoading(false)
     setModalOpen(false)
     setFile(null)
+    setScanResult(null)
+    setScanError('')
+    setScanBusy(false)
     setRoute({ view: 'dashboard', folderId: null })
     setFolderDetail(null)
     setFolderError('')
@@ -1665,8 +1889,6 @@ function App() {
   }
 
   const data = dashboard ?? emptyDashboard
-  const heroParts = String(session.fullName || data.userName || '').trim().split(/\s+/)
-  const heroName = heroParts[heroParts.length - 1] || session.fullName || data.userName
   const dashboardLabel = roleConfig.dashboardTitle
   const departmentLabel = session.department || data.department || roleConfig.department
   const avatarLabel = getInitials(session.fullName || data.userName)
@@ -1674,9 +1896,15 @@ function App() {
     ? getCategoryMeta(selectedCategory)
     : null
   const hasDocumentFilter = Boolean(deferredQuery || selectedCategory)
-  const recentFiles = hasDocumentFilter
-    ? (searchResults ?? [])
-    : (data.recentFiles ?? [])
+  const trashItems = trashRevision >= 0 ? readTrashItems() : []
+  const recentUploads = (data.recentFiles ?? []).filter((fileRow) => isWithinDays(fileRow.modifiedAt || fileRow.issueDate, 7))
+  const recentFiles = dashboardView === 'trash'
+    ? trashItems
+    : dashboardView === 'recent'
+      ? recentUploads
+      : hasDocumentFilter
+        ? (searchResults ?? [])
+        : (data.recentFiles ?? [])
   const storagePercent = data.storageLimitBytes
     ? Math.min(100, (data.storageUsedBytes / data.storageLimitBytes) * 100)
     : 0
@@ -1706,7 +1934,7 @@ function App() {
     }
   }
 
-  async function lookupStudentArchive(studentNumber, { populateForm = false } = {}) {
+  async function lookupStudentArchive(studentNumber, { populateForm = false, updateMainTable = false } = {}) {
     const trimmed = String(studentNumber || '').trim()
     if (!trimmed) {
       setStudentLookupError('Please enter a student ID first.')
@@ -1722,6 +1950,19 @@ function App() {
       setStudentLookupQuery(trimmed)
       setStudentEntryMode('existing')
       setStudentLookupError('')
+      if (updateMainTable) {
+        setDashboardView('default')
+        setSelectedCategory('')
+        setSearchQuery('')
+        setStudentSearchProfile({
+          studentNumber: data.studentNumber,
+          studentName: data.studentName,
+          faculty: data.faculty,
+          department: data.department,
+          documentCount: data.documentCount
+        })
+        setSearchResults(data.documents || [])
+      }
       if (populateForm) {
         setForm((current) => ({
           ...current,
@@ -1759,8 +2000,107 @@ function App() {
     navigateToHash('')
   }
 
+  async function refreshDashboardView() {
+    setSearchQuery('')
+    setSelectedCategory('')
+    setStudentSearchProfile(null)
+    setSearchResults(null)
+    setStudentLookupQuery('')
+    setStudentLookupResult(null)
+    setStudentLookupError('')
+    setLoading(true)
+    try {
+      const fresh = await getDashboard()
+      setDashboard(fresh)
+      setNotice('Dashboard refreshed.')
+    } catch (err) {
+      setNotice(err.message || 'Unable to refresh dashboard.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleTrashItems(entries) {
+    addTrashItems(entries)
+    setTrashRevision((value) => value + 1)
+  }
+
+  function handleTreeAddFolder() {
+    const parentId = activeFolderId || (data.archiveTree || [])[0]?.id
+    const parentName = folderDetail?.name || (data.archiveTree || [])[0]?.name || 'Archive'
+
+    if (!parentId) {
+      setNotice('No archive folder is available yet.')
+      return
+    }
+
+    setAppConfirmInput('')
+    setAppConfirm({
+      title: 'Create new folder',
+      message: `Create a subfolder inside "${parentName}".`,
+      confirmLabel: 'Create folder',
+      inputLabel: 'Folder name',
+      inputPlaceholder: 'Enter folder name',
+      onConfirm: async (folderName) => {
+        const trimmedName = String(folderName || '').trim()
+        if (!trimmedName) {
+          throw new Error('Please enter a folder name.')
+        }
+        await createSubfolder(parentId, trimmedName)
+        if (isFolderRoute) {
+          await reloadFolder()
+        }
+        const fresh = await getDashboard()
+        setDashboard(fresh)
+        setNotice(`Folder "${trimmedName}" created.`)
+      }
+    })
+  }
+
+  function closeAppConfirm() {
+    if (appConfirmBusy) {
+      return
+    }
+    setAppConfirm(null)
+    setAppConfirmInput('')
+  }
+
+  async function runAppConfirmAction() {
+    if (!appConfirm?.onConfirm) {
+      return
+    }
+    setAppConfirmBusy(true)
+    try {
+      await appConfirm.onConfirm(appConfirm.inputLabel ? appConfirmInput : undefined)
+      closeAppConfirm()
+    } catch (err) {
+      setNotice(err.message || 'Action failed.')
+    } finally {
+      setAppConfirmBusy(false)
+    }
+  }
+
   function handleQuickAccess(action) {
     if (action === 'dashboard') {
+      setDashboardView('default')
+      navigateToDashboard()
+      return
+    }
+    if (action === 'recent') {
+      setDashboardView('recent')
+      setSelectedCategory('')
+      setSearchQuery('')
+      setStudentSearchProfile(null)
+      setSearchResults(null)
+      navigateToDashboard()
+      return
+    }
+    if (action === 'trash') {
+      setDashboardView('trash')
+      setSelectedCategory('')
+      setSearchQuery('')
+      setStudentSearchProfile(null)
+      setSearchResults(null)
       navigateToDashboard()
       return
     }
@@ -1845,6 +2185,14 @@ function App() {
       setNotice('Please choose a file to upload.')
       return
     }
+    if (scanBusy) {
+      setNotice('Please wait while the document is being scanned.')
+      return
+    }
+    if (!scanResult?.verified) {
+      setNotice(scanError || scanResult?.summary || 'This document could not be confirmed as an AUCA record.')
+      return
+    }
     if (studentNeedsProfile && (!form.faculty || !form.department)) {
       setNotice('Please select the faculty and department for this new student entry.')
       return
@@ -1887,6 +2235,8 @@ function App() {
       setNotice('Document uploaded successfully.')
       setModalOpen(false)
       setFile(null)
+      setScanResult(null)
+      setScanError('')
       const fresh = await getDashboard()
       setDashboard(fresh)
       if (isFolderRoute && route.folderId) {
@@ -1911,7 +2261,16 @@ function App() {
             <p className="eyebrow">Quick Access</p>
             {sidebarQuickAccess.map((item) => {
               const Icon = item.icon
-              const isActive = item.action === 'dashboard' && !isFolderRoute
+              const isActive = !isFolderRoute && (
+                (item.action === 'dashboard' && dashboardView === 'default')
+                || (item.action === 'recent' && dashboardView === 'recent')
+                || (item.action === 'trash' && dashboardView === 'trash')
+              ) || (item.action === 'browse' && isFolderRoute)
+              const badgeCount = item.action === 'trash'
+                ? trashItems.length
+                : item.action === 'recent'
+                  ? recentUploads.length
+                  : null
               return (
                 <button
                   key={item.label}
@@ -1921,7 +2280,7 @@ function App() {
                 >
                   <Icon className="icon" />
                   <span>{item.label}</span>
-                  {item.count ? <strong>{item.count}</strong> : null}
+                  {badgeCount ? <strong>{badgeCount}</strong> : null}
                 </button>
               )
             })}
@@ -1931,6 +2290,11 @@ function App() {
             nodes={data.archiveTree || []}
             activeFolderId={activeFolderId}
             onOpenFolder={openFolder}
+            onAddFolder={handleTreeAddFolder}
+            treeFilter={treeFilter}
+            onTreeFilterChange={setTreeFilter}
+            treeFilterOpen={treeFilterOpen}
+            onToggleTreeFilter={() => setTreeFilterOpen((current) => !current)}
           />
 
           <div className="sidebar-bottom">
@@ -1987,22 +2351,31 @@ function App() {
               onOpenSearch={() => setBrowseSearchOpen(true)}
               onNotify={setNotice}
               onDataChange={refreshExplorerData}
+              onTrashItems={handleTrashItems}
             />
           ) : isAdmin ? (
             <AdminDashboard onNotify={setNotice} />
           ) : (
-            <>
-          <div className="breadcrumb-bar">
-            <div className="crumbs">
-              <span>Archive</span>
-              <ChevronRightIcon className="icon small" />
-              <span>Student Documents</span>
-              <ChevronRightIcon className="icon small" />
-              <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
+            <div className="dashboard-workspace">
+          <header className="dash-header">
+            <div className="dash-header-copy">
+              <nav className="dash-crumbs" aria-label="Breadcrumb">
+                <span>Archive</span>
+                <ChevronRightIcon className="icon small" />
+                <span>Student documents</span>
+                <ChevronRightIcon className="icon small" />
+                <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
+              </nav>
+              <h1>{dashboardLabel}</h1>
+              <p>{roleConfig.welcomeCopy}</p>
+              <span className="dash-meta">
+                {formatLongDate(new Date())}
+                {data.lastSignIn ? ` · Signed in ${data.lastSignIn}` : ''}
+              </span>
             </div>
-            <div className="crumb-actions">
+            <div className="dash-header-actions">
               <button
-                className="ghost-btn"
+                className="ghost-btn dash-action-btn"
                 type="button"
                 onClick={() => {
                   const firstFolder = (data.archiveTree || [])[0]
@@ -2012,56 +2385,71 @@ function App() {
                 }}
               >
                 <ArrowRightIcon className="icon" />
-                Browse archive
+                Browse
               </button>
-              <button className="primary-btn" type="button" onClick={() => setModalOpen(true)}>
+              <button className="primary-btn dash-action-btn" type="button" onClick={() => setModalOpen(true)}>
                 <UploadIcon className="icon" />
-                Upload document
+                Upload
               </button>
             </div>
-          </div>
+          </header>
 
-          <section className="hero">
-            <div className="hero-copy">
-              <p className="eyebrow">AUCA - {dashboardLabel} - {formatLongDate(new Date())}</p>
-              <h1>{heroName ? `Welcome back, ${heroName}.` : `Welcome back to the ${dashboardLabel}.`}</h1>
-              <p className="hero-subtitle">
-                {roleConfig.welcomeCopy} {data.lastSignIn ? `Last sign-in ${data.lastSignIn}.` : 'Last sign-in unavailable.'}
-              </p>
-            </div>
+          {visibleDocumentCategories.length ? (
+            <nav className="dash-filters" aria-label="Document categories">
+              <button
+                type="button"
+                className={`dash-filter ${!selectedCategory ? 'active' : ''}`}
+                onClick={() => {
+                  setDashboardView('default')
+                  setSelectedCategory('')
+                }}
+              >
+                All records
+              </button>
+              {visibleDocumentCategories.map((category) => {
+                const active = selectedCategory === category.value
+                return (
+                  <button
+                    key={category.value}
+                    type="button"
+                    className={`dash-filter ${active ? 'active' : ''}`}
+                    onClick={() => {
+                      setDashboardView('default')
+                      setSelectedCategory(active ? '' : category.value)
+                    }}
+                    title={category.summary}
+                  >
+                    {category.label}
+                  </button>
+                )
+              })}
+            </nav>
+          ) : null}
+
+          <section className="dash-metrics">
+            <StatCard label="Uploaded this week" value={data.recentlyUploaded} caption="new files" accent="upload" />
+            <StatCard label="Pending approvals" value={data.pendingApprovals} caption="in your queue" accent="approvals" />
+            <StatCard label="Department files" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
+            <StatCard label="Storage" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
           </section>
 
-          <section className="category-strip">
-            {visibleDocumentCategories.map((category) => {
-              const active = selectedCategory === category.value
-              return (
-                <button
-                  key={category.value}
-                  type="button"
-                  className={`category-chip ${active ? 'active' : ''}`}
-                  onClick={() => setSelectedCategory(active ? '' : category.value)}
-                >
-                  <strong>{category.label}</strong>
-                  <span>{category.summary}</span>
-                </button>
-              )
-            })}
-          </section>
-
-          <section className="stats-grid">
-            <StatCard label="Recently uploaded" value={data.recentlyUploaded} caption="this week" accent="upload" />
-            <StatCard label="Pending approvals" value={data.pendingApprovals} caption="your queue" accent="approvals" />
-            <StatCard label="My department" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
-            <StatCard label="Storage used" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
-          </section>
-
-          <section className="content-grid">
-            <div className="panel panel-large">
-              <div className="panel-head">
+          <section className="dash-grid">
+            <div className="dash-panel dash-panel-main">
+              <div className="dash-panel-head">
                 <div>
-                  <h2>Student archive</h2>
+                  <h2>
+                    {dashboardView === 'trash'
+                      ? 'Trash'
+                      : dashboardView === 'recent'
+                        ? 'Recent uploads'
+                        : 'Student archive'}
+                  </h2>
                   <p>
-                    {studentSearchProfile
+                    {dashboardView === 'trash'
+                      ? 'Items removed from the archive in this browser session.'
+                      : dashboardView === 'recent'
+                        ? 'Documents uploaded or updated in the last 7 days.'
+                        : studentSearchProfile
                       ? `All ${studentSearchProfile.documentCount} document${studentSearchProfile.documentCount === 1 ? '' : 's'} for ${studentSearchProfile.studentName || studentSearchProfile.studentNumber} (${studentSearchProfile.studentNumber}).`
                       : selectedCategoryMeta
                       ? `Showing all ${selectedCategoryMeta.label.toLowerCase()}.`
@@ -2070,21 +2458,32 @@ function App() {
                         : 'Activity across departments you can access'}
                   </p>
                 </div>
+                <div className="dash-panel-actions">
+                  {dashboardView === 'trash' && trashItems.length ? (
+                    <button
+                      type="button"
+                      className="dash-text-btn"
+                      onClick={() => {
+                        writeTrashItems([])
+                        setTrashRevision((value) => value + 1)
+                        setNotice('Trash emptied.')
+                      }}
+                    >
+                      Empty trash
+                    </button>
+                  ) : null}
                 <button
                   type="button"
-                  className="link-btn"
-                  onClick={() => {
-                    setSearchQuery('')
-                    setSelectedCategory('')
-                    setStudentSearchProfile(null)
-                  }}
+                  className="dash-text-btn"
+                  onClick={refreshDashboardView}
                 >
-                  Refresh view <ArrowRightIcon className="icon" />
+                  Refresh <ArrowRightIcon className="icon" />
                 </button>
+                </div>
               </div>
 
-              <div className="table-shell">
-                <table>
+              <div className="table-shell dash-table-shell">
+                <table className="dash-table">
                   <thead>
                     <tr>
                       <th>Document</th>
@@ -2101,19 +2500,26 @@ function App() {
                         <td colSpan="6" className="empty-state">Loading archive...</td>
                       </tr>
                     ) : recentFiles.length ? (
-                      recentFiles.map((fileRow) => (
+                      recentFiles.map((fileRow) => {
+                        const isTrashRow = dashboardView === 'trash'
+                        const rowKey = isTrashRow
+                          ? `${fileRow.type}-${fileRow.id}-${fileRow.deletedAt}`
+                          : fileRow.id
+                        return (
                         <tr
-                          key={fileRow.id}
-                          className="document-row"
-                          onClick={() => openDocument(fileRow.id).catch((err) => setNotice(err.message || 'Unable to open document.'))}
-                          title="Click to open document"
+                          key={rowKey}
+                          className={isTrashRow ? '' : 'document-row'}
+                          onClick={isTrashRow
+                            ? undefined
+                            : () => openDocument(fileRow.id).catch((err) => setNotice(err.message || 'Unable to open document.'))}
+                          title={isTrashRow ? 'Removed from archive' : 'Click to open document'}
                         >
                           <td>
                             <div className="file-cell">
                               <DocumentIcon className="icon doc" />
                               <div>
                                 <strong>{fileRow.title}</strong>
-                                <span>{fileRow.fileName}</span>
+                                <span>{fileRow.fileName || fileRow.type}</span>
                                 {fileRow.examType ? (
                                   <span className="muted-cell">
                                     {[
@@ -2133,22 +2539,33 @@ function App() {
                           </td>
                           <td>
                             <strong>{fileRow.studentNumber || '-'}</strong>
-                            <span className="muted-cell">{fileRow.ownerName || 'Student name unavailable'}</span>
+                            <span className="muted-cell">{fileRow.ownerName || (isTrashRow ? 'Removed item' : 'Student name unavailable')}</span>
                           </td>
                           <td>
-                            <span className="document-chip">{getCategoryMeta(fileRow.category).label}</span>
+                            <span className="document-chip">
+                              {isTrashRow
+                                ? (fileRow.type === 'folder' ? 'Folder' : getCategoryMeta(fileRow.category).label)
+                                : getCategoryMeta(fileRow.category).label}
+                            </span>
                           </td>
-                          <td>{formatDate(fileRow.issueDate || fileRow.modifiedAt)}</td>
+                          <td>{isTrashRow ? formatDateTime(fileRow.deletedAt) : formatDate(fileRow.issueDate || fileRow.modifiedAt)}</td>
                           <td>{fileRow.pageCount ?? '-'}</td>
                           <td>
-                            <span className={statusTone(fileRow.status)}>{fileRow.status || 'UNKNOWN'}</span>
+                            <span className={isTrashRow ? 'status rejected' : statusTone(fileRow.status)}>
+                              {isTrashRow ? 'DELETED' : (fileRow.status || 'UNKNOWN')}
+                            </span>
                           </td>
                         </tr>
-                      ))
+                        )
+                      })
                     ) : (
                       <tr>
                         <td colSpan="6" className="empty-state">
-                          {hasDocumentFilter
+                          {dashboardView === 'trash'
+                            ? 'Trash is empty. Deleted items from this browser will appear here.'
+                            : dashboardView === 'recent'
+                              ? 'No uploads in the last 7 days.'
+                              : hasDocumentFilter
                             ? `No documents found for ${selectedCategoryMeta ? selectedCategoryMeta.label : 'that search'}.`
                             : 'No documents available yet.'}
                         </td>
@@ -2159,15 +2576,15 @@ function App() {
               </div>
             </div>
 
-            <div className="panel rail">
-              <div className="panel-head compact">
-                <h2>Awaiting your approval</h2>
-                <span className="count-badge">{data.awaitingApproval?.length || 0}</span>
+            <aside className="dash-panel dash-panel-side">
+              <div className="dash-panel-head dash-panel-head-inline">
+                <h2>Approvals</h2>
+                <span className="dash-count">{data.awaitingApproval?.length || 0}</span>
               </div>
 
-              <div className="approval-list">
-                {(data.awaitingApproval || []).map((task) => (
-                  <div key={task.id} className="approval-card">
+              <div className="dash-approval-list">
+                {(data.awaitingApproval || []).length ? (data.awaitingApproval || []).map((task) => (
+                  <div key={task.id} className="dash-approval-item">
                     <div className="approval-copy">
                       <div className="approval-title">
                         <DocumentIcon className="icon doc" />
@@ -2188,15 +2605,17 @@ function App() {
                       </div>
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <p className="dash-side-empty">Nothing waiting for approval.</p>
+                )}
               </div>
 
-              <div className="mini-panel student-lookup">
-                <div className="panel-head compact">
-                  <h3>Student archive lookup</h3>
-                  <span className="count-badge">{studentLookupResult?.documentCount || 0}</span>
+              <div className="dash-side-block">
+                <div className="dash-panel-head dash-panel-head-inline">
+                  <h3>Student lookup</h3>
+                  <span className="dash-count">{studentLookupResult?.documentCount || 0}</span>
                 </div>
-                <p className="panel-note">Search a student ID to review every document currently assigned to them.</p>
+                <p className="dash-side-note">Search by student ID to view their full archive.</p>
                 <div className="lookup-form">
                   <input
                     value={studentLookupQuery}
@@ -2209,7 +2628,7 @@ function App() {
                   <button
                     type="button"
                     className="primary-btn lookup-button"
-                    onClick={() => lookupStudentArchive(studentLookupQuery)}
+                    onClick={() => lookupStudentArchive(studentLookupQuery, { updateMainTable: true })}
                     disabled={studentLookupBusy}
                   >
                     {studentLookupBusy ? 'Searching...' : 'Search student'}
@@ -2257,16 +2676,11 @@ function App() {
                 )}
               </div>
 
-              <div className="mini-panel">
-                <h3>Department activity</h3>
-                <div className="activity-chart">
-                  <span>Jan</span>
-                  <span>Jun</span>
-                  <span>Dec</span>
-                </div>
-                <div className="activity-list">
+              <div className="dash-side-block dash-side-block-muted">
+                <h3>Recent activity</h3>
+                <div className="dash-activity-list">
                   {(data.departmentActivity || []).map((entry) => (
-                    <div key={entry.id} className="activity-row">
+                    <div key={entry.id} className="dash-activity-row">
                       <ActivityDot category={entry.category} />
                       <div>
                         <strong>{entry.message}</strong>
@@ -2276,14 +2690,29 @@ function App() {
                   ))}
                 </div>
               </div>
-            </div>
+            </aside>
           </section>
 
           {error ? <div className="banner warning">{error}</div> : null}
-            </>
+            </div>
           )}
         </main>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(appConfirm)}
+        title={appConfirm?.title || ''}
+        message={appConfirm?.message || ''}
+        confirmLabel={appConfirm?.confirmLabel}
+        tone={appConfirm?.tone}
+        inputLabel={appConfirm?.inputLabel}
+        inputPlaceholder={appConfirm?.inputPlaceholder}
+        inputValue={appConfirmInput}
+        onInputChange={setAppConfirmInput}
+        onConfirm={runAppConfirmAction}
+        onCancel={closeAppConfirm}
+        busy={appConfirmBusy}
+      />
 
       {modalOpen ? (
         <div className="modal-backdrop" onClick={() => setModalOpen(false)} role="presentation">
@@ -2608,14 +3037,65 @@ function App() {
 
               <label className="full-width file-picker">
                 <span>File</span>
-                <input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+                <input
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  onChange={(event) => {
+                    const nextFile = event.target.files?.[0] || null
+                    setFile(nextFile)
+                    setScanResult(null)
+                    setScanError('')
+                  }}
+                />
               </label>
+
+              {file ? (
+                <div className={`upload-scan-panel ${scanBusy ? 'is-scanning' : scanResult?.verified ? 'is-verified' : scanResult ? 'is-rejected' : ''}`}>
+                  {scanBusy ? (
+                    <>
+                      <strong>Scanning document…</strong>
+                      <p>Reading the PDF and checking for AUCA-related information.</p>
+                    </>
+                  ) : scanError ? (
+                    <>
+                      <strong>Scan failed</strong>
+                      <p>{scanError}</p>
+                    </>
+                  ) : scanResult ? (
+                    <>
+                      <div className="upload-scan-head">
+                        {scanResult.verified ? <CheckIcon className="icon tiny" /> : <XIcon className="icon tiny" />}
+                        <strong>{scanResult.verified ? 'AUCA document confirmed' : 'Document not accepted'}</strong>
+                      </div>
+                      <p>{scanResult.summary}</p>
+                      {scanResult.matchedSignals?.length ? (
+                        <ul className="upload-scan-signals">
+                          {scanResult.matchedSignals.map((signal) => (
+                            <li key={signal}>{signal}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {scanResult.preview ? (
+                        <p className="upload-scan-preview">“{scanResult.preview}”</p>
+                      ) : null}
+                      <span className="upload-scan-meta">
+                        {scanResult.pageCount} page{scanResult.pageCount === 1 ? '' : 's'}
+                        {scanResult.scanMethod ? ` · ${scanResult.scanMethod}` : ''}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="modal-actions">
                 <button type="button" className="ghost-btn" onClick={() => setModalOpen(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="primary-btn" disabled={uploadBusy}>
+                <button
+                  type="submit"
+                  className="primary-btn"
+                  disabled={uploadBusy || scanBusy || (file && !scanResult?.verified)}
+                >
                   <UploadIcon className="icon" />
                   {uploadBusy ? 'Uploading...' : 'Upload to archive'}
                 </button>
@@ -2638,13 +3118,15 @@ function StatCard({ label, value, caption, accent }) {
   const Icon = iconMap[accent] || UploadIcon
 
   return (
-    <article className={`stat-card ${accent}`}>
-      <div className="stat-icon">
+    <article className={`dash-metric dash-metric-${accent}`}>
+      <span className="dash-metric-icon" aria-hidden="true">
         <Icon className="icon" />
+      </span>
+      <div className="dash-metric-body">
+        <span className="dash-metric-label">{label}</span>
+        <strong>{value}</strong>
+        <span className="dash-metric-caption">{caption}</span>
       </div>
-      <p>{label}</p>
-      <strong>{value}</strong>
-      <span>{caption}</span>
     </article>
   )
 }
