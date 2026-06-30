@@ -1196,6 +1196,67 @@ body:has(.auth-landing)::before {
   color: var(--blue);
 }
 
+.tree-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.tree-item-row:hover .tree-delete-btn,
+.tree-delete-btn:focus-visible {
+  opacity: 1;
+}
+
+.tree-delete-btn:hover {
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+}
+
+.share-modal {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.share-modal-lead {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.share-role-options {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.share-role-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.share-role-option.active {
+  border-color: rgba(16, 42, 98, 0.35);
+  background: rgba(16, 42, 98, 0.04);
+}
+
+.share-role-option input {
+  accent-color: var(--blue);
+}
+
 .sidebar-bottom {
   flex-shrink: 0;
   margin-top: auto;
@@ -3112,6 +3173,55 @@ tbody tr.document-row {
   border: 1px solid var(--line);
   background: #fff;
   overflow: hidden;
+}
+
+.admin-activity-card {
+  margin-bottom: 14px;
+}
+
+.admin-activity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 14px 0;
+}
+
+.admin-activity-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.admin-activity-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.admin-activity-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-activity-tab {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.admin-activity-tab.active {
+  border-color: rgba(16, 42, 98, 0.35);
+  background: rgba(16, 42, 98, 0.06);
+  color: var(--blue);
+}
+
+.admin-activity-table {
+  min-width: 640px;
 }
 
 .admin-table-shell {

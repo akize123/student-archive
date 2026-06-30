@@ -12,10 +12,14 @@ function getSessionRoleHeader() {
       return {}
     }
     const session = JSON.parse(raw)
-    if (!session?.role) {
-      return {}
+    const headers = {}
+    if (session?.role) {
+      headers['X-User-Role'] = session.role
     }
-    return { 'X-User-Role': session.role }
+    if (session?.fullName) {
+      headers['X-User-Name'] = session.fullName
+    }
+    return headers
   } catch {
     return {}
   }
@@ -114,6 +118,67 @@ export function deleteFolder(folderId) {
   return request(`/api/folders/${folderId}`, {
     method: 'DELETE'
   })
+}
+
+export function folderHasContents(folderId) {
+  return request(`/api/folders/${folderId}/has-contents`)
+}
+
+export function shareFolder(folderId, targetRole) {
+  return request(`/api/folders/${folderId}/share`, {
+    method: 'POST',
+    body: JSON.stringify({ targetRole })
+  })
+}
+
+export async function downloadFolderZip(folderId, documentIds = []) {
+  const params = new URLSearchParams()
+  if (documentIds.length) {
+    documentIds.forEach((id) => params.append('documentIds', String(id)))
+  }
+  const query = params.toString()
+  const response = await fetch(`${API_BASE}/api/folders/${folderId}/download${query ? `?${query}` : ''}`, {
+    headers: {
+      ...getSessionRoleHeader()
+    }
+  })
+
+  if (!response.ok) {
+    let message = ''
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      try {
+        const payload = await response.json()
+        message = payload.message || payload.error || ''
+      } catch {
+        message = ''
+      }
+    } else {
+      message = await response.text()
+    }
+    throw new Error(message || `Request failed with status ${response.status}`)
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename="(.+?)"/)
+  const filename = match ? match[1] : 'folder.zip'
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export function getActivities(scope, topic) {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  if (topic) params.set('topic', topic)
+  const query = params.toString()
+  return request(`/api/activity${query ? `?${query}` : ''}`)
 }
 
 async function fetchDocumentFile(documentId) {

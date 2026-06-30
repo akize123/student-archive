@@ -140,6 +140,15 @@ public class ArchiveSeedData implements CommandLineRunner {
         activityEntryRepository.save(activity("Synced registrar archive tree", "System", ActivityCategory.SYNC, 6));
         activityEntryRepository.save(activity("Archived thesis draft", "S. Ingabire", ActivityCategory.ARCHIVE, 8));
         activityEntryRepository.save(activity("Shared exam registration regulations", "Registrar Office", ActivityCategory.SHARE, 12));
+        activityEntryRepository.save(activity("Uploaded registration form for STUD-2026-014", "Registrar Office", ActivityCategory.UPLOAD, 3));
+        activityEntryRepository.save(activity("Processed reintegration request SRIN-2026-008", "K. Twagirayezu", ActivityCategory.APPROVAL, 5));
+        activityEntryRepository.save(activity("Archived application documents for new intake", "Registrar Office", ActivityCategory.ARCHIVE, 7));
+        activityEntryRepository.save(activity("Uploaded final exam paper for IT301", "Examination Office", ActivityCategory.UPLOAD, 1));
+        activityEntryRepository.save(activity("Published semester marks for School of IT", "Examination Office", ActivityCategory.SYNC, 9));
+        activityEntryRepository.save(activity("Shared grading rubric with HOD", "Examination Office", ActivityCategory.SHARE, 11));
+        activityEntryRepository.save(activity("Approved thesis proposal for department review", "T. Mukamana", ActivityCategory.APPROVAL, 10));
+        activityEntryRepository.save(activity("Requested registrar verification for graduation list", "T. Mukamana", ActivityCategory.SYNC, 14));
+        activityEntryRepository.save(activity("Shared department minutes with registrar", "T. Mukamana", ActivityCategory.SHARE, 16));
     }
 
     private FolderEntity ensureFolder(String name, String code, Long parentId) {

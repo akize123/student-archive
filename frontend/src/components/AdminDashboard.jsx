@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { createAdminUser, getAdminDashboard, getAdminPrivileges, updateAdminUser } from '../api'
+import { createAdminUser, getActivities, getAdminDashboard, getAdminPrivileges, updateAdminUser } from '../api'
 import { CheckIcon, XIcon } from './Icons'
 
 const roleOptions = [
@@ -29,6 +29,22 @@ const defaultPrivilegesByRole = {
   REGISTRAR: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   EXAMINATION_OFFICER: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   HOD: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL']
+}
+
+const activityScopeTabs = [
+  { value: 'REGISTRAR', label: 'Registration' },
+  { value: 'EXAMINATION_OFFICER', label: 'Examination' },
+  { value: 'HOD', label: 'HOD' }
+]
+
+function activityCategoryLabel(category) {
+  const normalized = String(category || '').toUpperCase()
+  if (normalized === 'UPLOAD') return 'Upload'
+  if (normalized === 'APPROVAL') return 'Approval'
+  if (normalized === 'ARCHIVE') return 'Archive'
+  if (normalized === 'SHARE') return 'Share'
+  if (normalized === 'SYNC') return 'Sync'
+  return normalized || 'Action'
 }
 
 function buildUserForm(overrides = {}) {
@@ -66,6 +82,22 @@ export default function AdminDashboard({ onNotify }) {
   const [modalMode, setModalMode] = useState(null)
   const [editingUser, setEditingUser] = useState(null)
   const [form, setForm] = useState(emptyUserForm)
+  const [activityScope, setActivityScope] = useState('REGISTRAR')
+  const [roleActivities, setRoleActivities] = useState([])
+  const [activitiesLoading, setActivitiesLoading] = useState(false)
+
+  async function loadRoleActivities(scope = activityScope) {
+    setActivitiesLoading(true)
+    try {
+      const entries = await getActivities(scope)
+      setRoleActivities(entries)
+    } catch (err) {
+      setRoleActivities([])
+      onNotify?.(err.message || 'Unable to load role activity.')
+    } finally {
+      setActivitiesLoading(false)
+    }
+  }
 
   async function loadDashboard() {
     setLoading(true)
@@ -86,6 +118,12 @@ export default function AdminDashboard({ onNotify }) {
   useEffect(() => {
     loadDashboard()
   }, [])
+
+  useEffect(() => {
+    if (!loading) {
+      loadRoleActivities(activityScope)
+    }
+  }, [activityScope, loading])
 
   const roleBreakdown = useMemo(() => {
     const entries = Object.entries(data?.usersByRole || {})
@@ -250,6 +288,59 @@ export default function AdminDashboard({ onNotify }) {
             ))}
           </div>
         ) : null}
+      </div>
+
+      <div className="admin-card admin-activity-card">
+        <div className="admin-activity-head">
+          <div>
+            <h2>Role activity monitor</h2>
+            <p>Review recent actions by department role — not file listings.</p>
+          </div>
+          <div className="admin-activity-tabs">
+            {activityScopeTabs.map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                className={`admin-activity-tab ${activityScope === tab.value ? 'active' : ''}`}
+                onClick={() => setActivityScope(tab.value)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="table-shell admin-table-shell">
+          <table className="admin-table admin-activity-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Performed by</th>
+                <th>Type</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activitiesLoading ? (
+                <tr>
+                  <td colSpan="4" className="admin-muted-cell">Loading activity...</td>
+                </tr>
+              ) : roleActivities.length ? (
+                roleActivities.map((entry) => (
+                  <tr key={entry.id}>
+                    <td><strong>{entry.message}</strong></td>
+                    <td>{entry.actor}</td>
+                    <td><span className="admin-tag">{activityCategoryLabel(entry.category)}</span></td>
+                    <td className="admin-muted-cell">{formatDateTime(entry.createdAt)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="4" className="admin-muted-cell">No recent activity for this role.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="admin-card">

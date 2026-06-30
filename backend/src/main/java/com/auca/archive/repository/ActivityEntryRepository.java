@@ -7,5 +7,7 @@ import java.util.List;
 
 public interface ActivityEntryRepository extends JpaRepository<ActivityEntryEntity, Long> {
     List<ActivityEntryEntity> findTop6ByOrderByCreatedAtDesc();
+
+    List<ActivityEntryEntity> findTop50ByOrderByCreatedAtDesc();
 }
 
