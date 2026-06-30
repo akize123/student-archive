@@ -5,6 +5,7 @@ import com.auca.archive.dto.DocumentListItemResponse;
 import com.auca.archive.dto.FolderBreadcrumbResponse;
 import com.auca.archive.dto.FolderDetailResponse;
 import com.auca.archive.dto.FolderNodeResponse;
+import com.auca.archive.dto.ShareFolderResponse;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.repository.DocumentRepository;
@@ -12,6 +13,10 @@ import com.auca.archive.repository.FolderRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,21 +28,26 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Service
 public class FolderService {
     private final FolderRepository folderRepository;
     private final DocumentRepository documentRepository;
     private final ArchiveAccessService accessService;
+    private final ActivityService activityService;
 
     public FolderService(
             FolderRepository folderRepository,
             DocumentRepository documentRepository,
-            ArchiveAccessService accessService
+            ArchiveAccessService accessService,
+            ActivityService activityService
     ) {
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
         this.accessService = accessService;
+        this.activityService = activityService;
     }
 
     public List<FolderNodeResponse> getTree() {
@@ -169,6 +179,141 @@ public class FolderService {
         }
 
         folderRepository.delete(folder);
+    }
+
+    public byte[] downloadAsZip(Long folderId, List<Long> documentIds, String rawRole) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        FolderEntity folder = getFolderOrThrow(folderId);
+        if (!isFolderAccessible(folder, role)) {
+            throw new IllegalArgumentException("Folder not found: " + folderId);
+        }
+
+        List<DocumentEntity> documents;
+        if (documentIds != null && !documentIds.isEmpty()) {
+            documents = documentIds.stream()
+                    .map(id -> documentRepository.findById(id)
+                            .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)))
+                    .filter(document -> isDocumentAccessible(document, role))
+                    .toList();
+        } else {
+            documents = documentRepository.findByFolderIdOrderByModifiedAtDesc(folderId).stream()
+                    .filter(document -> isDocumentAccessible(document, role))
+                    .toList();
+        }
+
+        if (documents.isEmpty()) {
+            throw new IllegalArgumentException("No documents to download in this folder");
+        }
+
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        Set<String> usedNames = new HashSet<>();
+        try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
+            for (DocumentEntity document : documents) {
+                if (document.getFilePath() == null || document.getFilePath().isBlank()) {
+                    continue;
+                }
+                Path path = Path.of(document.getFilePath());
+                if (!Files.exists(path)) {
+                    continue;
+                }
+                String baseName = document.getFileName() == null || document.getFileName().isBlank()
+                        ? "document-" + document.getId() + ".pdf"
+                        : document.getFileName();
+                String entryName = uniqueZipEntryName(usedNames, baseName);
+                zip.putNextEntry(new ZipEntry(entryName));
+                Files.copy(path, zip);
+                zip.closeEntry();
+            }
+        }
+
+        if (buffer.size() == 0) {
+            throw new IllegalArgumentException("Stored files are unavailable for download");
+        }
+        return buffer.toByteArray();
+    }
+
+    public ShareFolderResponse shareFolder(Long folderId, String targetRoleRaw, String actorRoleRaw, String actorName) {
+        UserRole actorRole = accessService.resolveRole(actorRoleRaw);
+        UserRole targetRole = accessService.resolveRole(targetRoleRaw);
+        validateShareTarget(actorRole, targetRole);
+
+        FolderEntity folder = getFolderOrThrow(folderId);
+        if (!isFolderAccessible(folder, actorRole)) {
+            throw new IllegalArgumentException("Folder not found: " + folderId);
+        }
+
+        activityService.recordShare(folder.getName(), actorName, targetRole);
+        String targetLabel = roleLabel(targetRole);
+        String message = "Folder shared with " + targetLabel + ". They can open it from their archive workspace.";
+        return new ShareFolderResponse(message, "#/folders/" + folderId, targetRole.name(), targetLabel);
+    }
+
+    public boolean folderHasContents(Long id, String rawRole) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        FolderEntity folder = getFolderOrThrow(id);
+        if (!isFolderAccessible(folder, role)) {
+            return false;
+        }
+
+        boolean hasSubfolders = folderRepository.findAll().stream()
+                .anyMatch(candidate -> Objects.equals(candidate.getParentId(), id));
+        if (hasSubfolders) {
+            return true;
+        }
+
+        return !documentRepository.findByFolderId(id).stream()
+                .filter(document -> isDocumentAccessible(document, role))
+                .toList()
+                .isEmpty();
+    }
+
+    private void validateShareTarget(UserRole source, UserRole target) {
+        if (source == UserRole.ADMIN) {
+            if (target == UserRole.ADMIN) {
+                throw new IllegalArgumentException("Choose a department role to share with");
+            }
+            return;
+        }
+
+        List<UserRole> allowed = switch (source) {
+            case REGISTRAR -> List.of(UserRole.EXAMINATION_OFFICER, UserRole.HOD);
+            case EXAMINATION_OFFICER -> List.of(UserRole.REGISTRAR, UserRole.HOD);
+            case HOD -> List.of(UserRole.REGISTRAR, UserRole.EXAMINATION_OFFICER);
+            default -> List.of();
+        };
+
+        if (!allowed.contains(target)) {
+            throw new IllegalArgumentException("You cannot share to that role from your account");
+        }
+    }
+
+    private String roleLabel(UserRole role) {
+        return switch (role) {
+            case ADMIN -> "System Administrator";
+            case REGISTRAR -> "Registrar";
+            case EXAMINATION_OFFICER -> "Examination Officer";
+            case HOD -> "Head of Department";
+        };
+    }
+
+    private String uniqueZipEntryName(Set<String> usedNames, String fileName) {
+        String sanitized = fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (!usedNames.contains(sanitized)) {
+            usedNames.add(sanitized);
+            return sanitized;
+        }
+
+        int dot = sanitized.lastIndexOf('.');
+        String base = dot > 0 ? sanitized.substring(0, dot) : sanitized;
+        String extension = dot > 0 ? sanitized.substring(dot) : "";
+        int counter = 2;
+        String candidate;
+        do {
+            candidate = base + " (" + counter + ")" + extension;
+            counter++;
+        } while (usedNames.contains(candidate));
+        usedNames.add(candidate);
+        return candidate;
     }
 
     public boolean isFolderAccessible(FolderEntity folder, UserRole role) {

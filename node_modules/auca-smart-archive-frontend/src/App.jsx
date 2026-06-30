@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, formatLoginError, getDashboard, getFolder, getStudentArchive, login, openDocument, scanDocument, searchDocuments, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getDashboard, getFolder, getStudentArchive, login, openDocument, scanDocument, searchDocuments, shareFolder, submitUpload } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import BrandLogo from './components/BrandLogo'
 import {
@@ -260,32 +260,69 @@ const emptyDashboard = {
 }
 
 const AUTH_SESSION_KEY = 'auca-archive-session'
-const TRASH_STORAGE_KEY = 'auca-archive-trash'
 
-function readTrashItems() {
+function getTrashStorageKey(role) {
+  return `auca-archive-trash-${role || 'unknown'}`
+}
+
+function readTrashItems(role) {
   if (typeof window === 'undefined') {
     return []
   }
   try {
-    const raw = window.localStorage.getItem(TRASH_STORAGE_KEY)
+    const raw = window.localStorage.getItem(getTrashStorageKey(role))
     return raw ? JSON.parse(raw) : []
   } catch {
     return []
   }
 }
 
-function writeTrashItems(items) {
+function writeTrashItems(role, items) {
   if (typeof window === 'undefined') {
     return
   }
-  window.localStorage.setItem(TRASH_STORAGE_KEY, JSON.stringify(items.slice(0, 100)))
+  window.localStorage.setItem(getTrashStorageKey(role), JSON.stringify(items.slice(0, 100)))
 }
 
-function addTrashItems(entries) {
+function addTrashItems(role, entries) {
   if (!entries?.length) {
     return
   }
-  writeTrashItems([...entries, ...readTrashItems()])
+  writeTrashItems(role, [...entries, ...readTrashItems(role)])
+}
+
+const shareDestinationsByRole = {
+  REGISTRAR: [
+    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
+    { value: 'HOD', label: 'Head of Department' }
+  ],
+  EXAMINATION_OFFICER: [
+    { value: 'REGISTRAR', label: 'Registrar' },
+    { value: 'HOD', label: 'Head of Department' }
+  ],
+  HOD: [
+    { value: 'REGISTRAR', label: 'Registrar' },
+    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' }
+  ],
+  ADMIN: [
+    { value: 'REGISTRAR', label: 'Registrar' },
+    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
+    { value: 'HOD', label: 'Head of Department' }
+  ]
+}
+
+function getShareDestinations(role) {
+  return shareDestinationsByRole[role] || []
+}
+
+function activityCategoryLabel(category) {
+  const normalized = String(category || '').toUpperCase()
+  if (normalized === 'UPLOAD') return 'Upload'
+  if (normalized === 'APPROVAL') return 'Approval'
+  if (normalized === 'ARCHIVE') return 'Archive'
+  if (normalized === 'SHARE') return 'Share'
+  if (normalized === 'SYNC') return 'Sync'
+  return normalized || 'Action'
 }
 
 function isWithinDays(value, days) {
@@ -572,7 +609,7 @@ function collectExpandedPath(nodes, activeFolderId, expanded = new Set()) {
   return expanded
 }
 
-function SidebarTree({ nodes, activeFolderId, onOpenFolder, expandedIds, onToggleExpand }) {
+function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, expandedIds, onToggleExpand }) {
   return (
     <ul className="tree-list" role="tree">
       {nodes.map((node) => {
@@ -580,6 +617,7 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, expandedIds, onToggl
         const isExpanded = expandedIds.has(node.id)
         const isSelected = node.id === activeFolderId
         const isAncestor = isAncestorOfActive(node, activeFolderId)
+        const canDelete = node.parentId != null
 
         return (
           <li key={node.id} className="tree-item" role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined}>
@@ -606,6 +644,20 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, expandedIds, onToggl
                 <span className="tree-label">{node.name}</span>
               </button>
               <span className="tree-count">{node.itemCount ?? 0}</span>
+              {canDelete ? (
+                <button
+                  type="button"
+                  className="tree-delete-btn"
+                  aria-label={`Delete ${node.name}`}
+                  title="Delete folder"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onDeleteFolder?.(node)
+                  }}
+                >
+                  <TrashIcon className="icon tiny" />
+                </button>
+              ) : null}
             </div>
             {hasChildren && isExpanded ? (
               <div className="tree-children">
@@ -613,6 +665,7 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, expandedIds, onToggl
                   nodes={node.children}
                   activeFolderId={activeFolderId}
                   onOpenFolder={onOpenFolder}
+                  onDeleteFolder={onDeleteFolder}
                   expandedIds={expandedIds}
                   onToggleExpand={onToggleExpand}
                 />
@@ -629,6 +682,7 @@ function ArchiveTreePanel({
   nodes,
   activeFolderId,
   onOpenFolder,
+  onDeleteFolder,
   onAddFolder,
   treeFilter,
   onTreeFilterChange,
@@ -702,6 +756,7 @@ function ArchiveTreePanel({
           nodes={visibleNodes}
           activeFolderId={activeFolderId}
           onOpenFolder={onOpenFolder}
+          onDeleteFolder={onDeleteFolder}
           expandedIds={expandedIds}
           onToggleExpand={onToggleExpand}
         />
@@ -942,6 +997,7 @@ function FolderView({
   folder,
   loading,
   error,
+  userRole,
   onOpenFolder,
   onUpload,
   onRefresh,
@@ -966,6 +1022,10 @@ function FolderView({
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareTargetRole, setShareTargetRole] = useState('')
+  const [shareBusy, setShareBusy] = useState(false)
+  const shareDestinations = getShareDestinations(userRole)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
@@ -1177,55 +1237,59 @@ function FolderView({
         return
       }
       openConfirm({
-        title: 'Download documents',
-        message: `Download all ${documents.length} document${documents.length === 1 ? '' : 's'} in "${folder.name}"?`,
-        confirmLabel: 'Download all',
+        title: 'Download folder',
+        message: `Download all ${documents.length} document${documents.length === 1 ? '' : 's'} in "${folder.name}" as a ZIP file?`,
+        confirmLabel: 'Download ZIP',
         onConfirm: async () => {
-          if (!documents.length) {
-            throw new Error('There are no documents to download in this folder.')
-          }
-          for (const document of documents) {
-            await downloadDocument(document.id)
-          }
-          onNotify?.(`Downloaded ${documents.length} document${documents.length === 1 ? '' : 's'}.`)
+          await downloadFolderZip(folder.id)
+          onNotify?.(`Downloaded ${documents.length} document${documents.length === 1 ? '' : 's'} as ZIP.`)
         }
       })
       return
     }
 
     openConfirm({
-      title: 'Download documents',
-      message: `Download ${targets.length} selected document${targets.length === 1 ? '' : 's'}?`,
-      confirmLabel: 'Download',
+      title: 'Download selection',
+      message: `Download ${targets.length} selected document${targets.length === 1 ? '' : 's'} as a ZIP file?`,
+      confirmLabel: 'Download ZIP',
       onConfirm: async () => {
-        for (const document of targets) {
-          await downloadDocument(document.id)
-        }
-        onNotify?.(`Downloaded ${targets.length} document${targets.length === 1 ? '' : 's'}.`)
+        await downloadFolderZip(folder.id, targets.map((document) => document.id))
+        onNotify?.(`Downloaded ${targets.length} document${targets.length === 1 ? '' : 's'} as ZIP.`)
       }
     })
   }
 
   function handleShareClick() {
-    const shareUrl = typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname}${window.location.hash || `#/folders/${folder.id}`}`
-      : `#/folders/${folder.id}`
+    if (!shareDestinations.length) {
+      onNotify?.('No share destinations are available for your role.')
+      return
+    }
+    setShareTargetRole(shareDestinations[0]?.value || '')
+    setShareOpen(true)
+  }
 
-    openConfirm({
-      title: 'Share folder link',
-      message: selectionCount
-        ? `Copy a link to this folder and share it with ${selectionCount} selected item${selectionCount === 1 ? '' : 's'} highlighted?`
-        : `Copy a link to "${folder.name}" so others can open this folder?`,
-      confirmLabel: 'Copy link',
-      onConfirm: async () => {
-        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(shareUrl)
-        } else {
-          throw new Error('Clipboard is not available in this browser.')
-        }
-        onNotify?.('Folder link copied to clipboard.')
+  async function handleShareConfirm() {
+    if (!shareTargetRole) {
+      onNotify?.('Choose a role to share with.')
+      return
+    }
+    setShareBusy(true)
+    try {
+      const result = await shareFolder(folder.id, shareTargetRole)
+      const shareUrl = typeof window !== 'undefined'
+        ? `${window.location.origin}${window.location.pathname}${result.shareUrl || `#/folders/${folder.id}`}`
+        : result.shareUrl
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl)
       }
-    })
+      setShareOpen(false)
+      onNotify?.(result.message || `Shared with ${result.targetRoleLabel}. Link copied to clipboard.`)
+      await onDataChange?.()
+    } catch (err) {
+      onNotify?.(err.message || 'Unable to share this folder.')
+    } finally {
+      setShareBusy(false)
+    }
   }
 
   function handleDeleteClick() {
@@ -1319,6 +1383,43 @@ function FolderView({
         onCancel={closeConfirm}
         onConfirm={(submittedValue) => runConfirmAction(() => confirmState?.onConfirm?.(submittedValue))}
       />
+
+      {shareOpen ? (
+        <div className="modal-backdrop" onClick={shareBusy ? undefined : () => setShareOpen(false)} role="presentation">
+          <div className="modal share-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow">Share folder</p>
+                <h2>{folder.name}</h2>
+              </div>
+              <button type="button" className="ghost-icon" onClick={() => setShareOpen(false)} disabled={shareBusy}>
+                <XIcon className="icon" />
+              </button>
+            </div>
+            <p className="share-modal-lead">Choose who should receive access to this folder in their workspace.</p>
+            <div className="share-role-options">
+              {shareDestinations.map((destination) => (
+                <label key={destination.value} className={`share-role-option ${shareTargetRole === destination.value ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="share-target-role"
+                    value={destination.value}
+                    checked={shareTargetRole === destination.value}
+                    onChange={() => setShareTargetRole(destination.value)}
+                  />
+                  <span>{destination.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="ghost-btn" onClick={() => setShareOpen(false)} disabled={shareBusy}>Cancel</button>
+              <button type="button" className="primary-btn" onClick={handleShareConfirm} disabled={shareBusy || !shareTargetRole}>
+                {shareBusy ? 'Sharing...' : 'Share and copy link'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="explorer-address-bar">
         <div className="explorer-nav-controls">
@@ -1539,6 +1640,8 @@ function App() {
   const [studentLookupBusy, setStudentLookupBusy] = useState(false)
   const [studentLookupError, setStudentLookupError] = useState('')
   const [studentEntryMode, setStudentEntryMode] = useState('idle')
+  const [activities, setActivities] = useState([])
+  const [activitiesBusy, setActivitiesBusy] = useState(false)
   const [route, setRoute] = useState(getRouteFromHash)
   const [folderDetail, setFolderDetail] = useState(null)
   const [folderLoading, setFolderLoading] = useState(false)
@@ -1746,23 +1849,60 @@ function App() {
   }, [roleConfig.defaultCategory, session])
 
   useEffect(() => {
-    if (!session) {
+    if (!session || session.role === 'ADMIN') {
+      setActivities([])
+      setActivitiesBusy(false)
+      return
+    }
+
+    let active = true
+    async function loadActivities() {
+      setActivitiesBusy(true)
+      try {
+        const topic = dashboardView === 'default' && selectedCategory ? selectedCategory : ''
+        const data = await getActivities(null, topic || undefined)
+        if (active) {
+          setActivities(data)
+        }
+      } catch {
+        if (active) {
+          setActivities(dashboard?.departmentActivity || [])
+        }
+      } finally {
+        if (active) {
+          setActivitiesBusy(false)
+        }
+      }
+    }
+
+    if (dashboardView !== 'trash') {
+      loadActivities()
+    }
+    return () => {
+      active = false
+    }
+  }, [session, selectedCategory, dashboardView, dashboard])
+
+  useEffect(() => {
+    if (!session || route.view !== 'folder') {
       setSearchResults(null)
+      setStudentSearchProfile(null)
+      setSearchBusy(false)
+      return
+    }
+
+    if (!deferredQuery) {
+      setSearchResults(null)
+      setStudentSearchProfile(null)
       setSearchBusy(false)
       return
     }
 
     let active = true
     async function loadSearch() {
-      if (!deferredQuery && !selectedCategory) {
-        setSearchResults(null)
-        setStudentSearchProfile(null)
-        setSearchBusy(false)
-        return
-      }
       setSearchBusy(true)
       try {
-        if (deferredQuery && looksLikeStudentId(deferredQuery) && !selectedCategory) {
+        if (looksLikeStudentId(deferredQuery)) {
           try {
             const archive = await getStudentArchive(deferredQuery)
             if (active) {
@@ -1774,34 +1914,37 @@ function App() {
                 documentCount: archive.documentCount
               })
               setSearchResults(archive.documents || [])
-              setError('')
             }
             return
           } catch {
-            if (active) setStudentSearchProfile(null)
+            if (active) {
+              setStudentSearchProfile(null)
+            }
           }
         } else if (active) {
           setStudentSearchProfile(null)
         }
 
-        const data = await searchDocuments(deferredQuery, selectedCategory)
-        if (active) setSearchResults(data)
-        if (active) setError('')
+        const data = await searchDocuments(deferredQuery)
+        if (active) {
+          setSearchResults(data)
+        }
       } catch {
         if (active) {
           setSearchResults([])
           setStudentSearchProfile(null)
         }
-      }
-      finally {
-        if (active) setSearchBusy(false)
+      } finally {
+        if (active) {
+          setSearchBusy(false)
+        }
       }
     }
     loadSearch()
     return () => {
       active = false
     }
-  }, [deferredQuery, selectedCategory, session])
+  }, [deferredQuery, session, route.view])
 
   async function handleLogin(event) {
     event.preventDefault()
@@ -1895,16 +2038,11 @@ function App() {
   const selectedCategoryMeta = selectedCategory && visibleDocumentCategories.some((category) => category.value === selectedCategory)
     ? getCategoryMeta(selectedCategory)
     : null
-  const hasDocumentFilter = Boolean(deferredQuery || selectedCategory)
-  const trashItems = trashRevision >= 0 ? readTrashItems() : []
-  const recentUploads = (data.recentFiles ?? []).filter((fileRow) => isWithinDays(fileRow.modifiedAt || fileRow.issueDate, 7))
-  const recentFiles = dashboardView === 'trash'
-    ? trashItems
-    : dashboardView === 'recent'
-      ? recentUploads
-      : hasDocumentFilter
-        ? (searchResults ?? [])
-        : (data.recentFiles ?? [])
+  const trashItems = trashRevision >= 0 ? readTrashItems(session.role) : []
+  const dashboardActivities = (activities.length ? activities : (data.departmentActivity || []))
+    .filter((entry) => dashboardView !== 'recent' || isWithinDays(entry.createdAt, 7))
+  const recentActivityCount = (activities.length ? activities : (data.departmentActivity || []))
+    .filter((entry) => isWithinDays(entry.createdAt, 7)).length
   const storagePercent = data.storageLimitBytes
     ? Math.min(100, (data.storageUsedBytes / data.storageLimitBytes) * 100)
     : 0
@@ -1934,7 +2072,7 @@ function App() {
     }
   }
 
-  async function lookupStudentArchive(studentNumber, { populateForm = false, updateMainTable = false } = {}) {
+  async function lookupStudentArchive(studentNumber, { populateForm = false } = {}) {
     const trimmed = String(studentNumber || '').trim()
     if (!trimmed) {
       setStudentLookupError('Please enter a student ID first.')
@@ -1950,19 +2088,6 @@ function App() {
       setStudentLookupQuery(trimmed)
       setStudentEntryMode('existing')
       setStudentLookupError('')
-      if (updateMainTable) {
-        setDashboardView('default')
-        setSelectedCategory('')
-        setSearchQuery('')
-        setStudentSearchProfile({
-          studentNumber: data.studentNumber,
-          studentName: data.studentName,
-          faculty: data.faculty,
-          department: data.department,
-          documentCount: data.documentCount
-        })
-        setSearchResults(data.documents || [])
-      }
       if (populateForm) {
         setForm((current) => ({
           ...current,
@@ -2002,9 +2127,6 @@ function App() {
 
   async function refreshDashboardView() {
     setSearchQuery('')
-    setSelectedCategory('')
-    setStudentSearchProfile(null)
-    setSearchResults(null)
     setStudentLookupQuery('')
     setStudentLookupResult(null)
     setStudentLookupError('')
@@ -2012,6 +2134,11 @@ function App() {
     try {
       const fresh = await getDashboard()
       setDashboard(fresh)
+      if (session.role !== 'ADMIN') {
+        const topic = dashboardView === 'default' && selectedCategory ? selectedCategory : ''
+        const activityData = await getActivities(null, topic || undefined)
+        setActivities(activityData)
+      }
       setNotice('Dashboard refreshed.')
     } catch (err) {
       setNotice(err.message || 'Unable to refresh dashboard.')
@@ -2021,8 +2148,44 @@ function App() {
   }
 
   function handleTrashItems(entries) {
-    addTrashItems(entries)
+    addTrashItems(session.role, entries)
     setTrashRevision((value) => value + 1)
+  }
+
+  function handleTreeDeleteFolder(folderNode) {
+    const itemCount = folderNode.itemCount ?? 0
+    if (itemCount > 0) {
+      setAppConfirmInput('')
+      setAppConfirm({
+        title: 'Folder contains items',
+        message: `"${folderNode.name}" has ${itemCount} item${itemCount === 1 ? '' : 's'}. Open the folder and review or remove files before deleting it from the archive tree.`,
+        confirmLabel: 'Open folder',
+        cancelLabel: 'Close',
+        onConfirm: async () => {
+          openFolder(folderNode.id)
+        }
+      })
+      return
+    }
+
+    setAppConfirmInput('')
+    setAppConfirm({
+      title: 'Delete folder',
+      message: `Delete "${folderNode.name}" from the archive tree? This cannot be undone.`,
+      confirmLabel: 'Delete folder',
+      tone: 'danger',
+      onConfirm: async () => {
+        await deleteFolder(folderNode.id)
+        if (activeFolderId === folderNode.id) {
+          navigateToDashboard()
+        } else if (isFolderRoute) {
+          await reloadFolder()
+        }
+        const fresh = await getDashboard()
+        setDashboard(fresh)
+        setNotice(`Folder "${folderNode.name}" deleted.`)
+      }
+    })
   }
 
   function handleTreeAddFolder() {
@@ -2269,7 +2432,7 @@ function App() {
               const badgeCount = item.action === 'trash'
                 ? trashItems.length
                 : item.action === 'recent'
-                  ? recentUploads.length
+                  ? recentActivityCount
                   : null
               return (
                 <button
@@ -2286,16 +2449,19 @@ function App() {
             })}
           </div>
 
+          {(!isAdmin || isFolderRoute) ? (
           <ArchiveTreePanel
             nodes={data.archiveTree || []}
             activeFolderId={activeFolderId}
             onOpenFolder={openFolder}
+            onDeleteFolder={handleTreeDeleteFolder}
             onAddFolder={handleTreeAddFolder}
             treeFilter={treeFilter}
             onTreeFilterChange={setTreeFilter}
             treeFilterOpen={treeFilterOpen}
             onToggleTreeFilter={() => setTreeFilterOpen((current) => !current)}
           />
+          ) : null}
 
           <div className="sidebar-bottom">
             <div className="sidebar-footer">
@@ -2339,6 +2505,7 @@ function App() {
               folder={folderDetail}
               loading={folderLoading}
               error={folderError}
+              userRole={session.role}
               onOpenFolder={openFolder}
               onUpload={() => setModalOpen(true)}
               onRefresh={reloadFolder}
@@ -2362,7 +2529,7 @@ function App() {
               <nav className="dash-crumbs" aria-label="Breadcrumb">
                 <span>Archive</span>
                 <ChevronRightIcon className="icon small" />
-                <span>Student documents</span>
+                <span>Recent activity</span>
                 <ChevronRightIcon className="icon small" />
                 <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
               </nav>
@@ -2395,7 +2562,7 @@ function App() {
           </header>
 
           {visibleDocumentCategories.length ? (
-            <nav className="dash-filters" aria-label="Document categories">
+            <nav className="dash-filters" aria-label="Activity areas">
               <button
                 type="button"
                 className={`dash-filter ${!selectedCategory ? 'active' : ''}`}
@@ -2404,7 +2571,7 @@ function App() {
                   setSelectedCategory('')
                 }}
               >
-                All records
+                All activity
               </button>
               {visibleDocumentCategories.map((category) => {
                 const active = selectedCategory === category.value
@@ -2441,21 +2608,17 @@ function App() {
                     {dashboardView === 'trash'
                       ? 'Trash'
                       : dashboardView === 'recent'
-                        ? 'Recent uploads'
-                        : 'Student archive'}
+                        ? 'Recent activity'
+                        : 'Department activity'}
                   </h2>
                   <p>
                     {dashboardView === 'trash'
-                      ? 'Items removed from the archive in this browser session.'
+                      ? `Items removed from the archive by ${roleConfig.roleLabel || 'your role'}. Other roles cannot see this trash.`
                       : dashboardView === 'recent'
-                        ? 'Documents uploaded or updated in the last 7 days.'
-                        : studentSearchProfile
-                      ? `All ${studentSearchProfile.documentCount} document${studentSearchProfile.documentCount === 1 ? '' : 's'} for ${studentSearchProfile.studentName || studentSearchProfile.studentNumber} (${studentSearchProfile.studentNumber}).`
-                      : selectedCategoryMeta
-                      ? `Showing all ${selectedCategoryMeta.label.toLowerCase()}.`
-                      : deferredQuery
-                        ? `Results for "${deferredQuery}".`
-                        : 'Activity across departments you can access'}
+                        ? 'Actions recorded in the last 7 days.'
+                        : selectedCategoryMeta
+                          ? `Recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
+                          : 'Recent actions across your department workspace.'}
                   </p>
                 </div>
                 <div className="dash-panel-actions">
@@ -2464,7 +2627,7 @@ function App() {
                       type="button"
                       className="dash-text-btn"
                       onClick={() => {
-                        writeTrashItems([])
+                        writeTrashItems(session.role, [])
                         setTrashRevision((value) => value + 1)
                         setNotice('Trash emptied.')
                       }}
@@ -2486,88 +2649,94 @@ function App() {
                 <table className="dash-table">
                   <thead>
                     <tr>
-                      <th>Document</th>
-                      <th>Student</th>
-                      <th>Category</th>
-                      <th>Issued</th>
-                      <th>Pages</th>
-                      <th>Status</th>
+                      {dashboardView === 'trash' ? (
+                        <>
+                          <th>Item</th>
+                          <th>Student</th>
+                          <th>Type</th>
+                          <th>Deleted</th>
+                          <th>Pages</th>
+                          <th>Status</th>
+                        </>
+                      ) : (
+                        <>
+                          <th>Action</th>
+                          <th>Performed by</th>
+                          <th>Type</th>
+                          <th>Date</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
-                    {loading || searchBusy ? (
+                    {dashboardView === 'trash' ? (
+                      loading ? (
+                        <tr>
+                          <td colSpan="6" className="empty-state">Loading trash...</td>
+                        </tr>
+                      ) : trashItems.length ? (
+                        trashItems.map((fileRow) => (
+                          <tr key={`${fileRow.type}-${fileRow.id}-${fileRow.deletedAt}`}>
+                            <td>
+                              <div className="file-cell">
+                                <DocumentIcon className="icon doc" />
+                                <div>
+                                  <strong>{fileRow.title}</strong>
+                                  <span>{fileRow.fileName || fileRow.type}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td>
+                              <strong>{fileRow.studentNumber || '-'}</strong>
+                              <span className="muted-cell">{fileRow.ownerName || 'Removed item'}</span>
+                            </td>
+                            <td>
+                              <span className="document-chip">
+                                {fileRow.type === 'folder' ? 'Folder' : getCategoryMeta(fileRow.category).label}
+                              </span>
+                            </td>
+                            <td>{formatDateTime(fileRow.deletedAt)}</td>
+                            <td>{fileRow.pageCount ?? '-'}</td>
+                            <td><span className="status rejected">DELETED</span></td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="6" className="empty-state">
+                            Trash is empty. Deleted items from your role will appear here.
+                          </td>
+                        </tr>
+                      )
+                    ) : loading || activitiesBusy ? (
                       <tr>
-                        <td colSpan="6" className="empty-state">Loading archive...</td>
+                        <td colSpan="4" className="empty-state">Loading activity...</td>
                       </tr>
-                    ) : recentFiles.length ? (
-                      recentFiles.map((fileRow) => {
-                        const isTrashRow = dashboardView === 'trash'
-                        const rowKey = isTrashRow
-                          ? `${fileRow.type}-${fileRow.id}-${fileRow.deletedAt}`
-                          : fileRow.id
-                        return (
-                        <tr
-                          key={rowKey}
-                          className={isTrashRow ? '' : 'document-row'}
-                          onClick={isTrashRow
-                            ? undefined
-                            : () => openDocument(fileRow.id).catch((err) => setNotice(err.message || 'Unable to open document.'))}
-                          title={isTrashRow ? 'Removed from archive' : 'Click to open document'}
-                        >
+                    ) : dashboardActivities.length ? (
+                      dashboardActivities.map((entry) => (
+                        <tr key={entry.id}>
                           <td>
                             <div className="file-cell">
-                              <DocumentIcon className="icon doc" />
+                              <ActivityDot category={entry.category} />
                               <div>
-                                <strong>{fileRow.title}</strong>
-                                <span>{fileRow.fileName || fileRow.type}</span>
-                                {fileRow.examType ? (
-                                  <span className="muted-cell">
-                                    {[
-                                      getExamPaperTypeMeta(fileRow.examType).label,
-                                      fileRow.course,
-                                      fileRow.academicYear,
-                                      fileRow.semester,
-                                      fileRow.marks != null && fileRow.examType
-                                        ? `${fileRow.marks}/${getExamPaperTypeMeta(fileRow.examType).maxMarks}`
-                                        : null,
-                                      fileRow.examRoom
-                                    ].filter(Boolean).join(' | ')}
-                                  </span>
-                                ) : null}
+                                <strong>{entry.message}</strong>
                               </div>
                             </div>
                           </td>
+                          <td>{entry.actor}</td>
                           <td>
-                            <strong>{fileRow.studentNumber || '-'}</strong>
-                            <span className="muted-cell">{fileRow.ownerName || (isTrashRow ? 'Removed item' : 'Student name unavailable')}</span>
+                            <span className="document-chip">{activityCategoryLabel(entry.category)}</span>
                           </td>
-                          <td>
-                            <span className="document-chip">
-                              {isTrashRow
-                                ? (fileRow.type === 'folder' ? 'Folder' : getCategoryMeta(fileRow.category).label)
-                                : getCategoryMeta(fileRow.category).label}
-                            </span>
-                          </td>
-                          <td>{isTrashRow ? formatDateTime(fileRow.deletedAt) : formatDate(fileRow.issueDate || fileRow.modifiedAt)}</td>
-                          <td>{fileRow.pageCount ?? '-'}</td>
-                          <td>
-                            <span className={isTrashRow ? 'status rejected' : statusTone(fileRow.status)}>
-                              {isTrashRow ? 'DELETED' : (fileRow.status || 'UNKNOWN')}
-                            </span>
-                          </td>
+                          <td>{formatDateTime(entry.createdAt)}</td>
                         </tr>
-                        )
-                      })
+                      ))
                     ) : (
                       <tr>
-                        <td colSpan="6" className="empty-state">
-                          {dashboardView === 'trash'
-                            ? 'Trash is empty. Deleted items from this browser will appear here.'
-                            : dashboardView === 'recent'
-                              ? 'No uploads in the last 7 days.'
-                              : hasDocumentFilter
-                            ? `No documents found for ${selectedCategoryMeta ? selectedCategoryMeta.label : 'that search'}.`
-                            : 'No documents available yet.'}
+                        <td colSpan="4" className="empty-state">
+                          {dashboardView === 'recent'
+                            ? 'No activity recorded in the last 7 days.'
+                            : selectedCategoryMeta
+                              ? `No recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
+                              : 'No activity recorded yet.'}
                         </td>
                       </tr>
                     )}
@@ -2628,7 +2797,7 @@ function App() {
                   <button
                     type="button"
                     className="primary-btn lookup-button"
-                    onClick={() => lookupStudentArchive(studentLookupQuery, { updateMainTable: true })}
+                    onClick={() => lookupStudentArchive(studentLookupQuery)}
                     disabled={studentLookupBusy}
                   >
                     {studentLookupBusy ? 'Searching...' : 'Search student'}

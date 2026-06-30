@@ -26,6 +26,9 @@ class FolderServiceTest {
     @Mock
     private ArchiveAccessService accessService;
 
+    @Mock
+    private ActivityService activityService;
+
     @Test
     void getTreeHandlesRootFoldersWithNullParentIds() {
         FolderEntity root = new FolderEntity("Student Documents", "STD", null);
@@ -37,7 +40,7 @@ class FolderServiceTest {
         when(folderRepository.findAll()).thenReturn(List.of(root, child));
         when(documentRepository.findByFolderId(anyLong())).thenReturn(List.of());
 
-        FolderService folderService = new FolderService(folderRepository, documentRepository, accessService);
+        FolderService folderService = new FolderService(folderRepository, documentRepository, accessService, activityService);
 
         List<FolderNodeResponse> tree = folderService.getTree();
 
