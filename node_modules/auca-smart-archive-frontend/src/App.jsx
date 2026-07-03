@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getDashboard, getFolder, getStudentArchive, login, openDocument, scanDocument, searchDocuments, shareFolder, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getArchivedDocuments, getDashboard, getFolder, getStudentArchive, login, openDocument, permanentlyDeleteDocument, restoreDocument, scanDocument, searchDocuments, shareFolder, submitUpload } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import BrandLogo from './components/BrandLogo'
 import {
@@ -155,11 +155,12 @@ const demoDashboard = {
 const quickAccess = [
   { label: 'Recent', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
-  { label: 'Trash', icon: TrashIcon, count: null, action: 'trash' }
+  { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' }
 ]
 
 const adminQuickAccess = [
   { label: 'System Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' },
   { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
 ]
 
@@ -260,36 +261,6 @@ const emptyDashboard = {
 }
 
 const AUTH_SESSION_KEY = 'auca-archive-session'
-
-function getTrashStorageKey(role) {
-  return `auca-archive-trash-${role || 'unknown'}`
-}
-
-function readTrashItems(role) {
-  if (typeof window === 'undefined') {
-    return []
-  }
-  try {
-    const raw = window.localStorage.getItem(getTrashStorageKey(role))
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
-function writeTrashItems(role, items) {
-  if (typeof window === 'undefined') {
-    return
-  }
-  window.localStorage.setItem(getTrashStorageKey(role), JSON.stringify(items.slice(0, 100)))
-}
-
-function addTrashItems(role, entries) {
-  if (!entries?.length) {
-    return
-  }
-  writeTrashItems(role, [...entries, ...readTrashItems(role)])
-}
 
 const shareDestinationsByRole = {
   REGISTRAR: [
@@ -1010,7 +981,7 @@ function FolderView({
   onOpenSearch,
   onNotify,
   onDataChange,
-  onTrashItems
+  onArchivedChange
 }) {
   const [viewMode, setViewMode] = useState('grid')
   const [sortBy, setSortBy] = useState('modified')
@@ -1299,43 +1270,21 @@ function FolderView({
     }
 
     openConfirm({
-      title: 'Delete selected items',
-      message: `Delete ${selectedFolderIds.size} folder${selectedFolderIds.size === 1 ? '' : 's'} and ${selectedDocumentIds.size} document${selectedDocumentIds.size === 1 ? '' : 's'}? This action cannot be undone.`,
-      confirmLabel: 'Delete',
+      title: 'Move to archive',
+      message: `Move ${selectedDocumentIds.size} document${selectedDocumentIds.size === 1 ? '' : 's'}${selectedFolderIds.size ? ` and ${selectedFolderIds.size} folder${selectedFolderIds.size === 1 ? '' : 's'}` : ''} to archive? Files stay stored until an administrator confirms permanent deletion.`,
+      confirmLabel: 'Move to archive',
       tone: 'danger',
       onConfirm: async () => {
-        const trashedEntries = [
-          ...selectedDocuments
-            .filter((item) => selectedDocumentIds.has(item.id))
-            .map((document) => ({
-              id: document.id,
-              title: document.title || document.fileName,
-              fileName: document.fileName,
-              studentNumber: document.studentNumber,
-              ownerName: document.ownerName,
-              category: document.category,
-              issueDate: document.issueDate,
-              pageCount: document.pageCount,
-              type: 'document',
-              deletedAt: new Date().toISOString()
-            })),
-          ...selectedFolders.map((child) => ({
-            id: child.id,
-            title: child.name,
-            type: 'folder',
-            deletedAt: new Date().toISOString()
-          }))
-        ]
         for (const document of selectedDocuments.filter((item) => selectedDocumentIds.has(item.id))) {
           await deleteDocument(document.id)
         }
         for (const child of selectedFolders) {
           await deleteFolder(child.id)
         }
-        onTrashItems?.(trashedEntries)
         setSelectedFolderIds(new Set())
         setSelectedDocumentIds(new Set())
-        onNotify?.('Selected items deleted.')
+        onNotify?.('Selected items moved to archive.')
+        onArchivedChange?.()
         await onDataChange?.()
       }
     })
@@ -1604,6 +1553,79 @@ function looksLikeStudentId(query) {
   return /[\d]/.test(trimmed) && /^[\w./-]+$/.test(trimmed)
 }
 
+function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument }) {
+  if (!query) {
+    return null
+  }
+
+  return (
+    <section className="dash-panel global-search-panel">
+      <div className="dash-panel-head">
+        <div>
+          <h2>Global search</h2>
+          <p>
+            {busy
+              ? 'Searching the archive index...'
+              : studentProfile
+                ? `${studentProfile.documentCount} document${studentProfile.documentCount === 1 ? '' : 's'} for ${studentProfile.studentName || studentProfile.studentNumber}`
+                : `${results?.length || 0} result${results?.length === 1 ? '' : 's'} for "${query}"`}
+          </p>
+        </div>
+      </div>
+      <div className="table-shell dash-table-shell">
+        <table className="dash-table">
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Student</th>
+              <th>Category</th>
+              <th>Department</th>
+              <th>Modified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {busy ? (
+              <tr>
+                <td colSpan="5" className="empty-state">Searching...</td>
+              </tr>
+            ) : results?.length ? (
+              results.map((fileRow) => (
+                <tr
+                  key={fileRow.id}
+                  className="document-row"
+                  onClick={() => onOpenDocument?.(fileRow.id)}
+                  title="Open document"
+                >
+                  <td>
+                    <div className="file-cell">
+                      <DocumentIcon className="icon doc" />
+                      <div>
+                        <strong>{fileRow.title}</strong>
+                        <span>{fileRow.fileName}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <strong>{fileRow.studentNumber || '-'}</strong>
+                    <span className="muted-cell">{fileRow.ownerName || '-'}</span>
+                  </td>
+                  <td><span className="document-chip">{getCategoryMeta(fileRow.category).label}</span></td>
+                  <td>{fileRow.department || '-'}</td>
+                  <td>{formatDateTime(fileRow.modifiedAt || fileRow.issueDate)}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" className="empty-state">No matching documents found.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 function App() {
   const [session, setSession] = useState(loadStoredSession)
   const [authBusy, setAuthBusy] = useState(false)
@@ -1630,7 +1652,9 @@ function App() {
   const [dashboardView, setDashboardView] = useState('default')
   const [treeFilterOpen, setTreeFilterOpen] = useState(false)
   const [treeFilter, setTreeFilter] = useState('')
-  const [trashRevision, setTrashRevision] = useState(0)
+  const [archiveItems, setArchiveItems] = useState([])
+  const [archiveBusy, setArchiveBusy] = useState(false)
+  const [archiveRevision, setArchiveRevision] = useState(0)
   const [appConfirm, setAppConfirm] = useState(null)
   const [appConfirmBusy, setAppConfirmBusy] = useState(false)
   const [appConfirmInput, setAppConfirmInput] = useState('')
@@ -1875,7 +1899,7 @@ function App() {
       }
     }
 
-    if (dashboardView !== 'trash') {
+    if (dashboardView !== 'archive') {
       loadActivities()
     }
     return () => {
@@ -1884,7 +1908,38 @@ function App() {
   }, [session, selectedCategory, dashboardView, dashboard])
 
   useEffect(() => {
-    if (!session || route.view !== 'folder') {
+    if (!session || dashboardView !== 'archive') {
+      setArchiveItems([])
+      setArchiveBusy(false)
+      return
+    }
+
+    let active = true
+    async function loadArchive() {
+      setArchiveBusy(true)
+      try {
+        const items = await getArchivedDocuments()
+        if (active) {
+          setArchiveItems(items)
+        }
+      } catch {
+        if (active) {
+          setArchiveItems([])
+        }
+      } finally {
+        if (active) {
+          setArchiveBusy(false)
+        }
+      }
+    }
+    loadArchive()
+    return () => {
+      active = false
+    }
+  }, [session, dashboardView, archiveRevision])
+
+  useEffect(() => {
+    if (!session) {
       setSearchResults(null)
       setStudentSearchProfile(null)
       setSearchBusy(false)
@@ -1944,7 +1999,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [deferredQuery, session, route.view])
+  }, [deferredQuery, session])
 
   async function handleLogin(event) {
     event.preventDefault()
@@ -2038,7 +2093,7 @@ function App() {
   const selectedCategoryMeta = selectedCategory && visibleDocumentCategories.some((category) => category.value === selectedCategory)
     ? getCategoryMeta(selectedCategory)
     : null
-  const trashItems = trashRevision >= 0 ? readTrashItems(session.role) : []
+  const archiveList = archiveRevision >= 0 ? archiveItems : []
   const dashboardActivities = (activities.length ? activities : (data.departmentActivity || []))
     .filter((entry) => dashboardView !== 'recent' || isWithinDays(entry.createdAt, 7))
   const recentActivityCount = (activities.length ? activities : (data.departmentActivity || []))
@@ -2147,9 +2202,32 @@ function App() {
     }
   }
 
-  function handleTrashItems(entries) {
-    addTrashItems(session.role, entries)
-    setTrashRevision((value) => value + 1)
+  function handleArchivedChange() {
+    setArchiveRevision((value) => value + 1)
+  }
+
+  async function handleRestoreArchived(documentId) {
+    try {
+      await restoreDocument(documentId)
+      setNotice('Document restored from archive.')
+      handleArchivedChange()
+      const fresh = await getDashboard()
+      setDashboard(fresh)
+    } catch (err) {
+      setNotice(err.message || 'Unable to restore document.')
+    }
+  }
+
+  async function handlePermanentDelete(documentId) {
+    try {
+      await permanentlyDeleteDocument(documentId)
+      setNotice('Document permanently deleted.')
+      handleArchivedChange()
+      const fresh = await getDashboard()
+      setDashboard(fresh)
+    } catch (err) {
+      setNotice(err.message || 'Unable to permanently delete document.')
+    }
   }
 
   function handleTreeDeleteFolder(folderNode) {
@@ -2249,8 +2327,8 @@ function App() {
       navigateToDashboard()
       return
     }
-    if (action === 'recent') {
-      setDashboardView('recent')
+    if (action === 'archive') {
+      setDashboardView('archive')
       setSelectedCategory('')
       setSearchQuery('')
       setStudentSearchProfile(null)
@@ -2258,8 +2336,8 @@ function App() {
       navigateToDashboard()
       return
     }
-    if (action === 'trash') {
-      setDashboardView('trash')
+    if (action === 'recent') {
+      setDashboardView('recent')
       setSelectedCategory('')
       setSearchQuery('')
       setStudentSearchProfile(null)
@@ -2427,10 +2505,10 @@ function App() {
               const isActive = !isFolderRoute && (
                 (item.action === 'dashboard' && dashboardView === 'default')
                 || (item.action === 'recent' && dashboardView === 'recent')
-                || (item.action === 'trash' && dashboardView === 'trash')
+                || (item.action === 'archive' && dashboardView === 'archive')
               ) || (item.action === 'browse' && isFolderRoute)
-              const badgeCount = item.action === 'trash'
-                ? trashItems.length
+              const badgeCount = item.action === 'archive'
+                ? archiveList.length
                 : item.action === 'recent'
                   ? recentActivityCount
                   : null
@@ -2447,6 +2525,19 @@ function App() {
                 </button>
               )
             })}
+          </div>
+
+          <div className="sidebar-section sidebar-global-search">
+            <p className="eyebrow">Global search</p>
+            <label className="sidebar-search-field">
+              <SearchIcon className="icon search" />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search students, files, departments..."
+                aria-label="Global archive search"
+              />
+            </label>
           </div>
 
           {(!isAdmin || isFolderRoute) ? (
@@ -2492,6 +2583,15 @@ function App() {
 
         <main className="main-panel">
           {notice ? <div className="banner explorer-notice">{notice}</div> : null}
+          {deferredQuery ? (
+            <GlobalSearchResults
+              query={deferredQuery}
+              busy={searchBusy}
+              results={searchResults}
+              studentProfile={studentSearchProfile}
+              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => setNotice(err.message || 'Unable to open document.'))}
+            />
+          ) : null}
           {isFolderRoute ? (
             <BrowseSearchPopover
               open={browseSearchOpen}
@@ -2518,9 +2618,9 @@ function App() {
               onOpenSearch={() => setBrowseSearchOpen(true)}
               onNotify={setNotice}
               onDataChange={refreshExplorerData}
-              onTrashItems={handleTrashItems}
+              onArchivedChange={handleArchivedChange}
             />
-          ) : isAdmin ? (
+          ) : isAdmin && dashboardView === 'default' ? (
             <AdminDashboard onNotify={setNotice} />
           ) : (
             <div className="dashboard-workspace">
@@ -2605,15 +2705,17 @@ function App() {
               <div className="dash-panel-head">
                 <div>
                   <h2>
-                    {dashboardView === 'trash'
-                      ? 'Trash'
+                    {dashboardView === 'archive'
+                      ? 'Removed archive'
                       : dashboardView === 'recent'
                         ? 'Recent activity'
                         : 'Department activity'}
                   </h2>
                   <p>
-                    {dashboardView === 'trash'
-                      ? `Items removed from the archive by ${roleConfig.roleLabel || 'your role'}. Other roles cannot see this trash.`
+                    {dashboardView === 'archive'
+                      ? session.role === 'ADMIN'
+                        ? 'Files awaiting permanent deletion confirmation. Only administrators can confirm removal.'
+                        : `Files moved to archive by ${roleConfig.roleLabel || 'your role'}. An administrator must confirm permanent deletion.`
                       : dashboardView === 'recent'
                         ? 'Actions recorded in the last 7 days.'
                         : selectedCategoryMeta
@@ -2622,19 +2724,6 @@ function App() {
                   </p>
                 </div>
                 <div className="dash-panel-actions">
-                  {dashboardView === 'trash' && trashItems.length ? (
-                    <button
-                      type="button"
-                      className="dash-text-btn"
-                      onClick={() => {
-                        writeTrashItems(session.role, [])
-                        setTrashRevision((value) => value + 1)
-                        setNotice('Trash emptied.')
-                      }}
-                    >
-                      Empty trash
-                    </button>
-                  ) : null}
                 <button
                   type="button"
                   className="dash-text-btn"
@@ -2649,14 +2738,14 @@ function App() {
                 <table className="dash-table">
                   <thead>
                     <tr>
-                      {dashboardView === 'trash' ? (
+                      {dashboardView === 'archive' ? (
                         <>
-                          <th>Item</th>
+                          <th>Document</th>
                           <th>Student</th>
-                          <th>Type</th>
-                          <th>Deleted</th>
-                          <th>Pages</th>
-                          <th>Status</th>
+                          <th>Category</th>
+                          <th>Archived</th>
+                          <th>Role</th>
+                          <th>{session.role === 'ADMIN' ? 'Actions' : 'Status'}</th>
                         </>
                       ) : (
                         <>
@@ -2669,41 +2758,54 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {dashboardView === 'trash' ? (
-                      loading ? (
+                    {dashboardView === 'archive' ? (
+                      archiveBusy ? (
                         <tr>
-                          <td colSpan="6" className="empty-state">Loading trash...</td>
+                          <td colSpan="6" className="empty-state">Loading archive...</td>
                         </tr>
-                      ) : trashItems.length ? (
-                        trashItems.map((fileRow) => (
-                          <tr key={`${fileRow.type}-${fileRow.id}-${fileRow.deletedAt}`}>
+                      ) : archiveList.length ? (
+                        archiveList.map((fileRow) => (
+                          <tr key={`archive-${fileRow.id}-${fileRow.archivedAt}`}>
                             <td>
                               <div className="file-cell">
                                 <DocumentIcon className="icon doc" />
                                 <div>
                                   <strong>{fileRow.title}</strong>
-                                  <span>{fileRow.fileName || fileRow.type}</span>
+                                  <span>{fileRow.fileName}</span>
                                 </div>
                               </div>
                             </td>
                             <td>
                               <strong>{fileRow.studentNumber || '-'}</strong>
-                              <span className="muted-cell">{fileRow.ownerName || 'Removed item'}</span>
+                              <span className="muted-cell">{fileRow.ownerName || 'Student'}</span>
                             </td>
                             <td>
                               <span className="document-chip">
-                                {fileRow.type === 'folder' ? 'Folder' : getCategoryMeta(fileRow.category).label}
+                                {getCategoryMeta(fileRow.category).label}
                               </span>
                             </td>
-                            <td>{formatDateTime(fileRow.deletedAt)}</td>
-                            <td>{fileRow.pageCount ?? '-'}</td>
-                            <td><span className="status rejected">DELETED</span></td>
+                            <td>{formatDateTime(fileRow.archivedAt)}</td>
+                            <td>{fileRow.archivedBy || '-'}</td>
+                            <td>
+                              <div className="archive-row-actions">
+                                <button type="button" className="dash-text-btn" onClick={() => handleRestoreArchived(fileRow.id)}>
+                                  Restore
+                                </button>
+                                {session.role === 'ADMIN' ? (
+                                  <button type="button" className="dash-text-btn danger-text" onClick={() => handlePermanentDelete(fileRow.id)}>
+                                    Delete permanently
+                                  </button>
+                                ) : (
+                                  <span className="status rejected">AWAITING ADMIN</span>
+                                )}
+                              </div>
+                            </td>
                           </tr>
                         ))
                       ) : (
                         <tr>
                           <td colSpan="6" className="empty-state">
-                            Trash is empty. Deleted items from your role will appear here.
+                            Archive is empty. Removed files from your role will appear here.
                           </td>
                         </tr>
                       )

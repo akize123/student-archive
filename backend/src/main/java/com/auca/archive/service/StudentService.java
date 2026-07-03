@@ -93,6 +93,7 @@ public class StudentService {
         List<DocumentListItemResponse> documents = documentRepository
                 .findByStudentNumberOrderByIssueDateDesc(student.getStudentNumber())
                 .stream()
+                .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role))
                 .map(this::toListItem)
                 .toList();
@@ -152,7 +153,9 @@ public class StudentService {
                 document.getSemester(),
                 document.getCourse(),
                 document.getMarks(),
-                document.getExamRoom()
+                document.getExamRoom(),
+                document.getArchivedAt(),
+                document.getArchivedBy()
         );
     }
 }

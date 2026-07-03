@@ -1,5 +1,6 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.ExamPaperType;
@@ -17,8 +18,8 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -27,8 +28,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 public class DocumentService {
@@ -43,6 +50,10 @@ public class DocumentService {
     private final StudentService studentService;
     private final ArchiveAccessService accessService;
     private final DocumentScanService documentScanService;
+    private final ArchiveTreeService archiveTreeService;
+    private final FileEncryptionService fileEncryptionService;
+    private final ActivityService activityService;
+    private final DocumentElasticsearchService documentElasticsearchService;
     private final Path storageRoot;
     private final long minUploadSizeBytes;
     private final long maxUploadSizeBytes;
@@ -53,6 +64,11 @@ public class DocumentService {
             StudentService studentService,
             ArchiveAccessService accessService,
             DocumentScanService documentScanService,
+            ArchiveTreeService archiveTreeService,
+            FileEncryptionService fileEncryptionService,
+            ActivityService activityService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false)
+            DocumentElasticsearchService documentElasticsearchService,
             @Value("${archive.min-upload-size-bytes:1024}") long minUploadSizeBytes,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes,
             @Value("${archive.storage-root:storage}") String storageRoot
@@ -62,6 +78,10 @@ public class DocumentService {
         this.studentService = studentService;
         this.accessService = accessService;
         this.documentScanService = documentScanService;
+        this.archiveTreeService = archiveTreeService;
+        this.fileEncryptionService = fileEncryptionService;
+        this.activityService = activityService;
+        this.documentElasticsearchService = documentElasticsearchService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
         this.minUploadSizeBytes = minUploadSizeBytes;
         this.maxUploadSizeBytes = maxUploadSizeBytes;
@@ -93,10 +113,7 @@ public class DocumentService {
                     .toList();
         } else {
             String trimmed = query.trim();
-            documents = documentRepository.findByStudentNumberIgnoreCaseOrderByIssueDateDesc(trimmed);
-            if (documents.isEmpty()) {
-                documents = documentRepository.searchArchive(trimmed);
-            }
+            documents = searchDocumentsFromStore(trimmed, category);
         }
 
         if (category != null) {
@@ -105,6 +122,18 @@ public class DocumentService {
                     .toList();
         }
 
+        return documents.stream()
+                .filter(document -> !document.isArchivedForRemoval())
+                .filter(document -> folderService.isDocumentAccessible(document, role))
+                .map(this::toListItem)
+                .toList();
+    }
+
+    public List<DocumentListItemResponse> listArchived(String rawRole) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        List<DocumentEntity> documents = role == UserRole.ADMIN
+                ? documentRepository.findByArchivedAtIsNotNullOrderByArchivedAtDesc()
+                : documentRepository.findByArchivedAtIsNotNullAndArchivedByOrderByArchivedAtDesc(role.name());
         return documents.stream()
                 .filter(document -> folderService.isDocumentAccessible(document, role))
                 .map(this::toListItem)
@@ -118,6 +147,7 @@ public class DocumentService {
     public DocumentDetailResponse getDocument(Long id, String rawRole) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         return toDetail(documentRepository.findById(id)
+                .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)));
     }
@@ -129,16 +159,27 @@ public class DocumentService {
     public Resource download(Long id, String rawRole) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         DocumentEntity document = documentRepository.findById(id)
+                .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             throw new IllegalArgumentException("Document has no stored file");
         }
-        Resource resource = new UrlResource(Path.of(document.getFilePath()).toUri());
-        if (!resource.exists() || !resource.isReadable()) {
+        Path path = Path.of(document.getFilePath());
+        if (!Files.exists(path)) {
             throw new IllegalArgumentException("Stored file is unavailable");
         }
-        return resource;
+        byte[] storedBytes = Files.readAllBytes(path);
+        byte[] plainBytes = fileEncryptionService.decrypt(storedBytes, document.getEncryptionIv());
+        String filename = document.getFileName() == null || document.getFileName().isBlank()
+                ? "document.pdf"
+                : document.getFileName();
+        return new ByteArrayResource(plainBytes) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        };
     }
 
     @Transactional
@@ -165,9 +206,9 @@ public class DocumentService {
                 request.faculty(),
                 request.department()
         );
-        FolderEntity folder = resolveUploadFolder(request, examPaperType);
+        FolderEntity folder = archiveTreeService.resolveUploadFolder(request, student, examPaperType);
 
-        Path studentRoot = resolveStoragePath(request, student, examPaperType);
+        Path studentRoot = archiveTreeService.resolveStoragePath(storageRoot, request, student, examPaperType);
         Files.createDirectories(studentRoot);
 
         String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
@@ -175,7 +216,8 @@ public class DocumentService {
                 : file.getOriginalFilename();
         String storedName = UUID.randomUUID() + "_" + sanitizeFileName(originalName);
         Path target = studentRoot.resolve(storedName);
-        Files.write(target, fileBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        FileEncryptionService.EncryptedPayload encrypted = fileEncryptionService.encrypt(fileBytes);
+        Files.write(target, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
         DocumentEntity entity = new DocumentEntity();
         entity.setTitle(resolveTitle(request, student, examPaperType));
@@ -194,6 +236,8 @@ public class DocumentService {
         entity.setMarks(request.marks());
         entity.setExamRoom(trimToNull(request.examRoom()));
         entity.setFilePath(target.toString());
+        entity.setEncrypted(fileEncryptionService.isEnabled());
+        entity.setEncryptionIv(encrypted.ivBase64());
         entity.setMimeType(file.getContentType() == null || file.getContentType().isBlank()
                 ? "application/pdf"
                 : file.getContentType());
@@ -208,7 +252,53 @@ public class DocumentService {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setModifiedAt(LocalDateTime.now());
 
-        return toDetail(documentRepository.save(entity));
+        DocumentEntity saved = documentRepository.save(entity);
+        syncSearchIndex(saved);
+        return toDetail(saved);
+    }
+
+    private List<DocumentEntity> searchDocumentsFromStore(String trimmed, StudentDocumentCategory category) {
+        if (documentElasticsearchService != null) {
+            Optional<List<Long>> elasticIds = documentElasticsearchService.searchDocumentIds(trimmed, category);
+            if (elasticIds.isPresent()) {
+                return loadDocumentsByIds(elasticIds.get());
+            }
+        }
+
+        List<DocumentEntity> documents = documentRepository.findByStudentNumberIgnoreCaseOrderByIssueDateDesc(trimmed);
+        if (documents.isEmpty()) {
+            documents = documentRepository.searchArchive(trimmed);
+        }
+        if (category != null) {
+            documents = documents.stream()
+                    .filter(document -> category.equals(document.getCategory()))
+                    .toList();
+        }
+        return documents;
+    }
+
+    private List<DocumentEntity> loadDocumentsByIds(List<Long> ids) {
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, DocumentEntity> byId = documentRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(DocumentEntity::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        return ids.stream()
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private void syncSearchIndex(DocumentEntity document) {
+        if (documentElasticsearchService != null) {
+            documentElasticsearchService.indexDocument(document);
+        }
+    }
+
+    private void removeSearchIndex(Long documentId) {
+        if (documentElasticsearchService != null) {
+            documentElasticsearchService.deleteDocument(documentId);
+        }
     }
 
     @Transactional
@@ -224,15 +314,58 @@ public class DocumentService {
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
         entity.setStatus(status);
         entity.setModifiedAt(LocalDateTime.now());
-        return toDetail(documentRepository.save(entity));
+        DocumentEntity saved = documentRepository.save(entity);
+        syncSearchIndex(saved);
+        return toDetail(saved);
     }
 
     @Transactional
     public void deleteDocument(Long id, String rawRole) {
+        archiveDocument(id, rawRole);
+    }
+
+    @Transactional
+    public void archiveDocument(Long id, String rawRole) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         DocumentEntity entity = documentRepository.findById(id)
+                .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+
+        entity.setArchivedAt(LocalDateTime.now());
+        entity.setArchivedBy(role.name());
+        entity.setModifiedAt(LocalDateTime.now());
+        DocumentEntity saved = documentRepository.save(entity);
+        syncSearchIndex(saved);
+        activityService.recordAction(
+                "Moved \"" + entity.getTitle() + "\" to archive pending admin confirmation",
+                entity.getArchivedBy(),
+                ActivityCategory.ARCHIVE
+        );
+    }
+
+    @Transactional
+    public void restoreDocument(Long id, String rawRole) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        DocumentEntity entity = documentRepository.findById(id)
+                .filter(document -> document.isArchivedForRemoval())
+                .filter(document -> folderService.isDocumentAccessible(document, role))
+                .orElseThrow(() -> new IllegalArgumentException("Archived document not found: " + id));
+        entity.setArchivedAt(null);
+        entity.setArchivedBy(null);
+        entity.setModifiedAt(LocalDateTime.now());
+        DocumentEntity saved = documentRepository.save(entity);
+        syncSearchIndex(saved);
+    }
+
+    @Transactional
+    public void permanentlyDeleteDocument(Long id, String rawRole) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        accessService.requireAdmin(role);
+        DocumentEntity entity = documentRepository.findById(id)
+                .filter(document -> document.isArchivedForRemoval())
+                .filter(document -> folderService.isDocumentAccessible(document, role))
+                .orElseThrow(() -> new IllegalArgumentException("Archived document not found: " + id));
 
         if (entity.getFilePath() != null && !entity.getFilePath().isBlank()) {
             try {
@@ -241,8 +374,9 @@ public class DocumentService {
                 // File removal should not block database cleanup.
             }
         }
-
+        Long documentId = entity.getId();
         documentRepository.delete(entity);
+        removeSearchIndex(documentId);
     }
 
     private void validateUpload(UploadDocumentRequest request, MultipartFile file, byte[] fileBytes) throws IOException {
@@ -319,48 +453,6 @@ public class DocumentService {
         return examPaperType;
     }
 
-    private FolderEntity resolveUploadFolder(UploadDocumentRequest request, ExamPaperType examPaperType) {
-        FolderEntity categoryRoot = folderService.getFolderByCodeOrThrow(request.category().getFolderCode());
-        if (!isExamUpload(request)) {
-            return categoryRoot;
-        }
-
-        FolderEntity typeFolder = folderService.resolveOrCreateFolder(
-                examPaperType.getDisplayName(),
-                categoryRoot.getCode() + "-" + examPaperType.getFolderCode(),
-                categoryRoot.getId()
-        );
-        FolderEntity yearFolder = folderService.resolveOrCreateFolder(
-                trimToNull(request.academicYear()),
-                typeFolder.getCode() + "-" + sanitizeCodeSegment(request.academicYear()),
-                typeFolder.getId()
-        );
-        FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
-                trimToNull(request.semester()),
-                yearFolder.getCode() + "-" + sanitizeCodeSegment(request.semester()),
-                yearFolder.getId()
-        );
-        return folderService.resolveOrCreateFolder(
-                trimToNull(request.course()),
-                semesterFolder.getCode() + "-" + sanitizeCodeSegment(request.course()),
-                semesterFolder.getId()
-        );
-    }
-
-    private Path resolveStoragePath(UploadDocumentRequest request, StudentEntity student, ExamPaperType examPaperType) {
-        Path categoryRoot = storageRoot.resolve(sanitizePathSegment(request.category().getFolderCode()));
-        if (!isExamUpload(request)) {
-            return categoryRoot.resolve(sanitizePathSegment(student.getStudentNumber()));
-        }
-
-        return categoryRoot
-                .resolve(sanitizePathSegment(examPaperType.getFolderCode()))
-                .resolve(sanitizePathSegment(request.academicYear()))
-                .resolve(sanitizePathSegment(request.semester()))
-                .resolve(sanitizePathSegment(request.course()))
-                .resolve(sanitizePathSegment(student.getStudentNumber()));
-    }
-
     private String buildDocumentCode(UploadDocumentRequest request, String studentNumber, String fileName, ExamPaperType examPaperType) {
         String cleanStudentNumber = studentNumber == null ? "STUDENT" : studentNumber.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
         String suffix = Integer.toHexString(Math.abs(fileName.hashCode())).toUpperCase();
@@ -416,7 +508,9 @@ public class DocumentService {
                 document.getSemester(),
                 document.getCourse(),
                 document.getMarks(),
-                document.getExamRoom()
+                document.getExamRoom(),
+                document.getArchivedAt(),
+                document.getArchivedBy()
         );
     }
 

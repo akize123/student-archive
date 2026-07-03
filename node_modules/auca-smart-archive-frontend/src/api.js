@@ -261,6 +261,22 @@ export function deleteDocument(documentId) {
   })
 }
 
+export function getArchivedDocuments() {
+  return request('/api/documents/archived')
+}
+
+export function restoreDocument(documentId) {
+  return request(`/api/documents/${documentId}/restore`, {
+    method: 'POST'
+  })
+}
+
+export function permanentlyDeleteDocument(documentId) {
+  return request(`/api/documents/${documentId}/permanent`, {
+    method: 'DELETE'
+  })
+}
+
 export function submitUpload(metadata, file) {
   const formData = new FormData()
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))

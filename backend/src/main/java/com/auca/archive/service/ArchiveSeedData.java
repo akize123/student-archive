@@ -21,17 +21,20 @@ import java.util.Objects;
 
 @Component
 public class ArchiveSeedData implements CommandLineRunner {
+    private final ArchiveStructureSeedService archiveStructureSeedService;
     private final FolderRepository folderRepository;
     private final DocumentRepository documentRepository;
     private final ApprovalTaskRepository approvalTaskRepository;
     private final ActivityEntryRepository activityEntryRepository;
 
     public ArchiveSeedData(
+            ArchiveStructureSeedService archiveStructureSeedService,
             FolderRepository folderRepository,
             DocumentRepository documentRepository,
             ApprovalTaskRepository approvalTaskRepository,
             ActivityEntryRepository activityEntryRepository
     ) {
+        this.archiveStructureSeedService = archiveStructureSeedService;
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
         this.approvalTaskRepository = approvalTaskRepository;
@@ -40,16 +43,9 @@ public class ArchiveSeedData implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
+        archiveStructureSeedService.seedArchiveStructure();
+
         boolean seedLegacyData = false;
-
-        FolderEntity studentRoot = ensureFolder("Student Documents", "STD", null);
-        ensureFolder(StudentDocumentCategory.REGISTRATION_FORM.getDisplayName(), StudentDocumentCategory.REGISTRATION_FORM.getFolderCode(), studentRoot.getId());
-        ensureFolder(StudentDocumentCategory.REINTEGRATION_FORM.getDisplayName(), StudentDocumentCategory.REINTEGRATION_FORM.getFolderCode(), studentRoot.getId());
-        ensureFolder(StudentDocumentCategory.APPLICATION_DOCUMENTS.getDisplayName(), StudentDocumentCategory.APPLICATION_DOCUMENTS.getFolderCode(), studentRoot.getId());
-        FolderEntity examsRoot = ensureFolder(StudentDocumentCategory.EXAMINATION_DOCUMENTS.getDisplayName(), StudentDocumentCategory.EXAMINATION_DOCUMENTS.getFolderCode(), null);
-        ensureFolder("Mid-Sem", examsRoot.getCode() + "-MIDSEM", examsRoot.getId());
-        ensureFolder("Final Exams", examsRoot.getCode() + "-FINAL", examsRoot.getId());
-
         if (!seedLegacyData) {
             return;
         }

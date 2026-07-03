@@ -24,6 +24,8 @@ public record DocumentListItemResponse(
         String semester,
         String course,
         Integer marks,
-        String examRoom
+        String examRoom,
+        LocalDateTime archivedAt,
+        String archivedBy
 ) {
 }
