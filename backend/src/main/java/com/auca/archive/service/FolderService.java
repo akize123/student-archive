@@ -37,17 +37,20 @@ public class FolderService {
     private final DocumentRepository documentRepository;
     private final ArchiveAccessService accessService;
     private final ActivityService activityService;
+    private final FileEncryptionService fileEncryptionService;
 
     public FolderService(
             FolderRepository folderRepository,
             DocumentRepository documentRepository,
             ArchiveAccessService accessService,
-            ActivityService activityService
+            ActivityService activityService,
+            FileEncryptionService fileEncryptionService
     ) {
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
         this.accessService = accessService;
         this.activityService = activityService;
+        this.fileEncryptionService = fileEncryptionService;
     }
 
     public List<FolderNodeResponse> getTree() {
@@ -92,7 +95,7 @@ public class FolderService {
                 .toList();
 
         List<DocumentListItemResponse> documents = documentRepository
-                .findByFolderIdOrderByModifiedAtDesc(folder.getId())
+                .findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())
                 .stream()
                 .filter(document -> isDocumentAccessible(document, role))
                 .map(this::toListItem)
@@ -174,7 +177,7 @@ public class FolderService {
             throw new IllegalArgumentException("Remove all subfolders before deleting this folder");
         }
 
-        if (!documentRepository.findByFolderId(id).isEmpty()) {
+        if (!documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(id).isEmpty()) {
             throw new IllegalArgumentException("Remove all documents before deleting this folder");
         }
 
@@ -196,7 +199,7 @@ public class FolderService {
                     .filter(document -> isDocumentAccessible(document, role))
                     .toList();
         } else {
-            documents = documentRepository.findByFolderIdOrderByModifiedAtDesc(folderId).stream()
+            documents = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folderId).stream()
                     .filter(document -> isDocumentAccessible(document, role))
                     .toList();
         }
@@ -216,12 +219,14 @@ public class FolderService {
                 if (!Files.exists(path)) {
                     continue;
                 }
+                byte[] storedBytes = Files.readAllBytes(path);
+                byte[] plainBytes = fileEncryptionService.decrypt(storedBytes, document.getEncryptionIv());
                 String baseName = document.getFileName() == null || document.getFileName().isBlank()
                         ? "document-" + document.getId() + ".pdf"
                         : document.getFileName();
                 String entryName = uniqueZipEntryName(usedNames, baseName);
                 zip.putNextEntry(new ZipEntry(entryName));
-                Files.copy(path, zip);
+                zip.write(plainBytes);
                 zip.closeEntry();
             }
         }
@@ -261,7 +266,7 @@ public class FolderService {
             return true;
         }
 
-        return !documentRepository.findByFolderId(id).stream()
+        return !documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(id).stream()
                 .filter(document -> isDocumentAccessible(document, role))
                 .toList()
                 .isEmpty();
@@ -373,7 +378,7 @@ public class FolderService {
     }
 
     private long countDocuments(FolderEntity folder, Map<Long, List<FolderEntity>> childrenByParent, UserRole role) {
-        long total = documentRepository.findByFolderId(folder.getId()).stream()
+        long total = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId()).stream()
                 .filter(document -> isDocumentAccessible(document, role))
                 .count();
         for (FolderEntity child : childrenByParent.getOrDefault(folder.getId(), List.of())) {
@@ -468,7 +473,9 @@ public class FolderService {
                 document.getSemester(),
                 document.getCourse(),
                 document.getMarks(),
-                document.getExamRoom()
+                document.getExamRoom(),
+                document.getArchivedAt(),
+                document.getArchivedBy()
         );
     }
 }

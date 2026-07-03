@@ -51,6 +51,16 @@ public class ActivityService {
     }
 
     @Transactional
+    public ActivityResponse recordAction(String message, String actor, ActivityCategory category) {
+        ActivityEntryEntity entry = new ActivityEntryEntity();
+        entry.setMessage(message);
+        entry.setActor(actor == null || actor.isBlank() ? "Archive user" : actor.trim());
+        entry.setCategory(category == null ? ActivityCategory.ARCHIVE : category);
+        entry.setCreatedAt(LocalDateTime.now());
+        return toResponse(activityEntryRepository.save(entry));
+    }
+
+    @Transactional
     public ActivityResponse recordShare(String folderName, String actor, UserRole targetRole) {
         String targetLabel = roleLabel(targetRole);
         ActivityEntryEntity entry = new ActivityEntryEntity();

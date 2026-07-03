@@ -70,10 +70,10 @@ public class ArchiveAccessService {
         }
 
         return switch (role) {
-            case ADMIN -> List.of("REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN");
-            case REGISTRAR -> List.of("REG", "SREG", "SRIN", "SAPP");
-            case EXAMINATION_OFFICER -> List.of("SEXM");
-            case HOD -> List.of("SAPP");
+            case ADMIN -> List.of("AUCA", "FAC", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD");
+            case REGISTRAR -> List.of("AUCA", "FAC", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD");
+            case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "SEXM", "FLD", "STD");
+            case HOD -> List.of("AUCA", "FAC", "SAPP", "FLD", "STD");
         };
     }
 
@@ -96,6 +96,12 @@ public class ArchiveAccessService {
 
     public boolean isApprovedStatus(DocumentStatus status) {
         return status != null && status == DocumentStatus.APPROVED;
+    }
+
+    public void requireAdmin(UserRole role) {
+        if (role != UserRole.ADMIN) {
+            throw new IllegalArgumentException("Only the system administrator can permanently delete archived files");
+        }
     }
 
     private boolean containsAny(String haystack, String... terms) {

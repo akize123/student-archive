@@ -18,6 +18,9 @@ public interface DocumentRepository extends JpaRepository<DocumentEntity, Long> 
     List<DocumentEntity> findByCategoryOrderByModifiedAtDesc(StudentDocumentCategory category);
     List<DocumentEntity> findByFolderId(Long folderId);
     List<DocumentEntity> findByFolderIdOrderByModifiedAtDesc(Long folderId);
+    List<DocumentEntity> findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(Long folderId);
+    List<DocumentEntity> findByArchivedAtIsNotNullOrderByArchivedAtDesc();
+    List<DocumentEntity> findByArchivedAtIsNotNullAndArchivedByOrderByArchivedAtDesc(String archivedBy);
     List<DocumentEntity> findByFolderIdInOrderByModifiedAtDesc(Collection<Long> folderIds);
     long countByFolderId(Long folderId);
     long countByStatus(DocumentStatus status);

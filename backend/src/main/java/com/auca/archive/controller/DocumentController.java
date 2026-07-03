@@ -52,6 +52,35 @@ public class DocumentController {
         return documentService.search(q, category, role);
     }
 
+    @GetMapping("/archived")
+    public List<DocumentListItemResponse> listArchived(
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        return documentService.listArchived(role);
+    }
+
+    @PostMapping("/{id}/restore")
+    public Map<String, String> restoreDocument(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        documentService.restoreDocument(id, role);
+        Map<String, String> response = new java.util.LinkedHashMap<>();
+        response.put("message", "Document restored from archive");
+        return response;
+    }
+
+    @DeleteMapping("/{id}/permanent")
+    public Map<String, String> permanentlyDeleteDocument(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        documentService.permanentlyDeleteDocument(id, role);
+        Map<String, String> response = new java.util.LinkedHashMap<>();
+        response.put("message", "Document permanently deleted");
+        return response;
+    }
+
     @GetMapping("/{id}")
     public DocumentDetailResponse getDocument(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) {
         return documentService.getDocument(id, role);
@@ -97,9 +126,9 @@ public class DocumentController {
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Role", required = false) String role
     ) {
-        documentService.deleteDocument(id, role);
+        documentService.archiveDocument(id, role);
         Map<String, String> response = new java.util.LinkedHashMap<>();
-        response.put("message", "Document deleted");
+        response.put("message", "Document moved to archive");
         return response;
     }
 }

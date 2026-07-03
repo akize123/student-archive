@@ -55,6 +55,11 @@ public class DocumentEntity {
     @Enumerated(EnumType.STRING)
     private StudentDocumentCategory category;
 
+    private LocalDateTime archivedAt;
+    private String archivedBy;
+    private Boolean encrypted;
+    private String encryptionIv;
+
     public DocumentEntity() {
     }
 
@@ -280,5 +285,41 @@ public class DocumentEntity {
 
     public void setCategory(StudentDocumentCategory category) {
         this.category = category;
+    }
+
+    public LocalDateTime getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(LocalDateTime archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    public String getArchivedBy() {
+        return archivedBy;
+    }
+
+    public void setArchivedBy(String archivedBy) {
+        this.archivedBy = archivedBy;
+    }
+
+    public Boolean getEncrypted() {
+        return encrypted;
+    }
+
+    public void setEncrypted(Boolean encrypted) {
+        this.encrypted = encrypted;
+    }
+
+    public String getEncryptionIv() {
+        return encryptionIv;
+    }
+
+    public void setEncryptionIv(String encryptionIv) {
+        this.encryptionIv = encryptionIv;
+    }
+
+    public boolean isArchivedForRemoval() {
+        return archivedAt != null;
     }
 }
