@@ -824,11 +824,6 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
               >
                 Forgot password
               </button>
-              
-              <label className="auth-staff-checkbox">
-                <input type="checkbox" />
-                <span>I am a staff</span>
-              </label>
             </div>
 
             {error ? <div className="auth-error" role="alert">{error}</div> : null}
