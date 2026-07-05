@@ -4144,3 +4144,6 @@ tbody tr.document-row {
 .auca-theme .auth-signup-link:hover {
   text-decoration: underline;
 }
+.auca-theme .auth-landing-content {
+  width: min(100%, 540px);
+}
