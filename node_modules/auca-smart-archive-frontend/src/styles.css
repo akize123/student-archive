@@ -4029,3 +4029,118 @@ tbody tr.document-row {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+.auca-theme {
+  font-family: 'Poppins', sans-serif !important;
+}
+.auca-theme .auth-portal-form {
+  padding: 0 40px;
+}
+.auca-theme h1 {
+  color: #1a4a7e;
+  font-weight: 600;
+  text-align: center;
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+.auca-theme .auth-portal-lead {
+  text-align: center;
+  font-size: 14px;
+  color: #333;
+  margin-bottom: 32px;
+}
+.auca-theme .auth-field-group {
+  margin-bottom: 20px;
+}
+.auca-theme .auth-field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+  text-transform: none;
+  letter-spacing: normal;
+  margin-bottom: 8px;
+  display: block;
+}
+.auca-theme .auth-input-shell {
+  border: none;
+  background: transparent;
+  padding: 0;
+  height: auto;
+}
+.auca-theme .auth-input-shell input {
+  background-color: #eef4fb;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  width: 100%;
+  color: #333;
+  transition: border-color 0.2s ease;
+}
+.auca-theme .auth-input-shell input:focus {
+  border-color: #1a4a7e;
+  outline: none;
+}
+.auca-theme .auth-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.auca-theme .auth-forgot-link {
+  color: #888;
+  font-size: 13px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.auca-theme .auth-staff-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #555;
+  cursor: pointer;
+}
+.auca-theme .auth-submit-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+.auca-theme .auth-portal-btn {
+  background-color: #6d8299;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 10px 32px;
+  font-size: 15px;
+  font-weight: 500;
+  width: auto;
+  min-width: 120px;
+  border: none;
+  cursor: pointer;
+  box-shadow: none;
+}
+.auca-theme .auth-portal-btn:hover {
+  background-color: #5c6e82;
+}
+.auca-theme .auth-signup-text {
+  text-align: center;
+  font-size: 13px;
+  color: #666;
+  margin-top: 24px;
+}
+.auca-theme .auth-signup-link {
+  color: #3b82f6;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-weight: 500;
+}
+.auca-theme .auth-signup-link:hover {
+  text-decoration: underline;
+}
