@@ -770,15 +770,11 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
   const [forgotNotice, setForgotNotice] = useState('')
 
   return (
-    <div className="auth-landing">
+    <div className="auth-landing auca-theme">
       <section className="auth-landing-left">
-        <a className="auth-back-home" href="https://www.auca.ac.rw/" target="_blank" rel="noreferrer">
-          ← Back to Home
-        </a>
-
         <div className="auth-landing-content">
           <header className="auth-uni-brand">
-            <img src="/auca-logo.jpg" alt="" className="auth-uni-logo" />
+            <img src="/auca-logo.jpg" alt="AUCA Logo" className="auth-uni-logo" />
             <div className="auth-uni-copy">
               <span>ADVENTIST UNIVERSITY</span>
               <span>OF CENTRAL AFRICA</span>
@@ -786,62 +782,65 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
           </header>
 
           <form className="auth-portal-form" onSubmit={onSubmit}>
-            <h1>Welcome Back</h1>
-            <p className="auth-portal-lead">Sign in to access the Academic Hub</p>
+            <h1>Login</h1>
+            <p className="auth-portal-lead">Welcome! Please enter your details.</p>
 
-            <label className="auth-field-label" htmlFor="auth-username">
-              ACADEMIC IDENTITY / FACULTY CODE
-            </label>
-            <div className="auth-input-shell">
-              <MailIcon className="icon auth-field-icon" />
-              <input
-                id="auth-username"
-                value={form.username}
-                onChange={(event) => onChange({ ...form, username: event.target.value })}
-                placeholder="student@auca.ac.rw"
-                autoComplete="username"
-              />
+            <div className="auth-field-group">
+              <label className="auth-field-label" htmlFor="auth-username">
+                Student ID / Teach Code
+              </label>
+              <div className="auth-input-shell">
+                <input
+                  id="auth-username"
+                  value={form.username}
+                  onChange={(event) => onChange({ ...form, username: event.target.value })}
+                  placeholder="25883"
+                  autoComplete="username"
+                />
+              </div>
             </div>
 
-            <div className="auth-password-head">
+            <div className="auth-field-group">
               <label className="auth-field-label" htmlFor="auth-password">
-                SECURE PASSWORD
+                Password
               </label>
+              <div className="auth-input-shell">
+                <input
+                  id="auth-password"
+                  type="password"
+                  value={form.password}
+                  onChange={(event) => onChange({ ...form, password: event.target.value })}
+                  placeholder="••••••••••"
+                  autoComplete="current-password"
+                />
+              </div>
+            </div>
+
+            <div className="auth-options">
               <button
                 type="button"
                 className="auth-forgot-link"
-                onClick={() => setForgotNotice('Contact ICT Office to reset your archive access credentials.')}
+                onClick={() => setForgotNotice('Please contact administration to reset your password.')}
               >
-                Forgot access?
+                Forgot password
               </button>
-            </div>
-            <div className="auth-input-shell">
-              <LockIcon className="icon auth-field-icon" />
-              <input
-                id="auth-password"
-                type={showPassword ? 'text' : 'password'}
-                value={form.password}
-                onChange={(event) => onChange({ ...form, password: event.target.value })}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                className="auth-eye-btn"
-                onClick={() => setShowPassword((current) => !current)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                aria-pressed={showPassword}
-              >
-                {showPassword ? <EyeOffIcon className="icon small" /> : <EyeIcon className="icon small" />}
-              </button>
+              
+              <label className="auth-staff-checkbox">
+                <input type="checkbox" />
+                <span>I am a staff</span>
+              </label>
             </div>
 
             {error ? <div className="auth-error" role="alert">{error}</div> : null}
             {forgotNotice ? <div className="auth-forgot-note" role="status">{forgotNotice}</div> : null}
 
-            <button className="auth-portal-btn" type="submit" disabled={busy}>
-              {busy ? 'SIGNING IN...' : 'ACCESS PORTAL →'}
-            </button>
+            <div className="auth-submit-container">
+              <button className="auth-portal-btn" type="submit" disabled={busy}>
+                {busy ? 'Signing In...' : 'Sign In'}
+              </button>
+            </div>
+
+
           </form>
         </div>
       </section>
