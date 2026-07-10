@@ -32,6 +32,9 @@ public record DocumentDetailResponse(
         String course,
         Integer marks,
         String examRoom,
+        String githubUrl,
+        String externalLinks,
+        String reviewNote,
         String downloadUrl
 ) {
 }

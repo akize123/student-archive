@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="Cursor" version="24.7.17" type="device">
+  <diagram id="auca-activity" name="Activity Diagram">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="920" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="AUCA Smart Archive — Proposed System Activity Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="350" y="12" width="520" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== SWIMLANE 1: STUDENT ==================== -->
+        <mxCell id="lane-student" value="Student" style="swimlane;horizontal=0;startSize=28;fillColor=#f5f5f5;fontStyle=1;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="1340" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="s-start" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-student">
+          <mxGeometry x="30" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="s-login" value="Login" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-student">
+          <mxGeometry x="80" y="42" width="80" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s-auth" value="authentication" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-student">
+          <mxGeometry x="190" y="34" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="s-view" value="View personal&#xa;documents" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-student">
+          <mxGeometry x="340" y="42" width="110" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s-upload" value="Upload final year&#xa;project" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-student">
+          <mxGeometry x="480" y="42" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s-browse" value="Browse personal&#xa;folders" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-student">
+          <mxGeometry x="630" y="42" width="110" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="s-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-student">
+          <mxGeometry x="780" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="s-fail-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-student">
+          <mxGeometry x="220" y="95" width="18" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== SWIMLANE 2: REGISTRAR ==================== -->
+        <mxCell id="lane-registrar" value="Registrar" style="swimlane;horizontal=0;startSize=28;fillColor=#f5f5f5;fontStyle=1;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="1340" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="r-start" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="30" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r-login" value="Login" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="80" y="42" width="80" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="r-auth" value="authentication" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="190" y="34" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="r-lookup" value="Lookup student" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="340" y="42" width="100" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="r-upload" value="Upload registrar&#xa;documents" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="470" y="42" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="r-folder" value="Manage folders" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="620" y="42" width="110" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="r-search" value="Search documents" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="760" y="42" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="r-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="910" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r-fail-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-registrar">
+          <mxGeometry x="220" y="95" width="18" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== SWIMLANE 3: EXAMINATION OFFICER / HOD ==================== -->
+        <mxCell id="lane-examhod" value="Examination Officer / HOD" style="swimlane;horizontal=0;startSize=28;fillColor=#f5f5f5;fontStyle=1;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="310" width="1340" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="e-start" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="30" y="58" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="e-login" value="Login" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="80" y="48" width="80" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="e-auth" value="authentication" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="190" y="40" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="e-exam" value="Upload exam papers" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="340" y="48" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="e-review" value="Review pending&#xa;approvals" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="490" y="48" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="e-decide" value="Approve?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="650" y="40" width="90" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="e-approve" value="Approve document" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="780" y="28" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="e-reject" value="Reject with&#xa;reason / notes" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="780" y="88" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="e-merge" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="940" y="58" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="e-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="990" y="56" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="e-fail-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-examhod">
+          <mxGeometry x="220" y="108" width="18" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== SWIMLANE 4: SYSTEM ==================== -->
+        <mxCell id="lane-system" value="System" style="swimlane;horizontal=0;startSize=28;fillColor=#f5f5f5;fontStyle=1;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="460" width="1340" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="y-start" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-system">
+          <mxGeometry x="30" y="68" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="y-scan" value="Validate document&#xa;scan (PDF/OCR)" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="80" y="58" width="130" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-valid" value="Valid scan?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="250" y="50" width="100" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="y-save" value="Save to storage&#xa;&amp; database" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="390" y="38" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-reject" value="Reject upload" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="390" y="98" width="110" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-merge1" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-system">
+          <mxGeometry x="540" y="68" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="y-quota" value="Check student&#xa;storage quota" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="580" y="58" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-eligible" value="Within limit?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="730" y="50" width="100" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="y-allow" value="Allow upload" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="870" y="38" width="100" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-deny" value="Display quota&#xa;exceeded message" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="860" y="98" width="130" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-merge2" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-system">
+          <mxGeometry x="1020" y="68" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="y-index" value="Index document&#xa;for search" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-system">
+          <mxGeometry x="1060" y="58" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="y-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-system">
+          <mxGeometry x="1210" y="68" width="22" height="22" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== SWIMLANE 5: ADMIN ==================== -->
+        <mxCell id="lane-admin" value="Admin" style="swimlane;horizontal=0;startSize=28;fillColor=#f5f5f5;fontStyle=1;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="630" width="1340" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="a-start" value="" style="ellipse;fillColor=#000000;strokeColor=none;html=1;" vertex="1" parent="lane-admin">
+          <mxGeometry x="30" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="a-login" value="Login" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-admin">
+          <mxGeometry x="80" y="42" width="80" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="a-auth" value="authentication" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-admin">
+          <mxGeometry x="190" y="34" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="a-monitor" value="System entry&#xa;&amp; monitoring" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-admin">
+          <mxGeometry x="340" y="42" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="a-users" value="User management" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-admin">
+          <mxGeometry x="490" y="42" width="120" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="a-audit" value="View audit logs&#xa;&amp; activity feed" style="rounded=1;whiteSpace=wrap;html=1;arcSize=20;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="lane-admin">
+          <mxGeometry x="640" y="42" width="130" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="a-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-admin">
+          <mxGeometry x="800" y="52" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="a-fail-end" value="" style="ellipse;shape=doubleEllipse;fillColor=#ffffff;strokeColor=#000000;strokeWidth=2;html=1;" vertex="1" parent="lane-admin">
+          <mxGeometry x="220" y="95" width="18" height="18" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== STUDENT EDGES ==================== -->
+        <mxCell id="es1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-student" source="s-start" target="s-login"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-student" source="s-login" target="s-auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es3" value="Success" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-student" source="s-auth" target="s-view"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es4" value="Fail" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-student" source="s-auth" target="s-fail-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-student" source="s-view" target="s-upload"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-student" source="s-upload" target="s-browse"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="es7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-student" source="s-browse" target="s-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ==================== REGISTRAR EDGES ==================== -->
+        <mxCell id="er1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-start" target="r-login"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-login" target="r-auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er3" value="Success" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-registrar" source="r-auth" target="r-lookup"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er4" value="Fail" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-registrar" source="r-auth" target="r-fail-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-lookup" target="r-upload"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-upload" target="r-folder"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-folder" target="r-search"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="er8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-registrar" source="r-search" target="r-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ==================== EXAM/HOD EDGES ==================== -->
+        <mxCell id="ee1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-start" target="e-login"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-login" target="e-auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee3" value="Success" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-examhod" source="e-auth" target="e-exam"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee4" value="Fail" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-examhod" source="e-auth" target="e-fail-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-exam" target="e-review"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-review" target="e-decide"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee7" value="YES" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-examhod" source="e-decide" target="e-approve"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee8" value="NO" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-examhod" source="e-decide" target="e-reject"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-approve" target="e-merge"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-reject" target="e-merge"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ee11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-examhod" source="e-merge" target="e-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ==================== SYSTEM EDGES ==================== -->
+        <mxCell id="ey1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-start" target="y-scan"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-scan" target="y-valid"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey3" value="YES" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-system" source="y-valid" target="y-save"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey4" value="NO" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-system" source="y-valid" target="y-reject"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-save" target="y-merge1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-reject" target="y-merge1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-merge1" target="y-quota"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-quota" target="y-eligible"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey9" value="YES" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-system" source="y-eligible" target="y-allow"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey10" value="NO" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-system" source="y-eligible" target="y-deny"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-allow" target="y-merge2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-deny" target="y-merge2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-merge2" target="y-index"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ey14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-system" source="y-index" target="y-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ==================== ADMIN EDGES ==================== -->
+        <mxCell id="ea1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-admin" source="a-start" target="a-login"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-admin" source="a-login" target="a-auth"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea3" value="Success" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-admin" source="a-auth" target="a-monitor"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea4" value="Fail" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;fontSize=10;" edge="1" parent="lane-admin" source="a-auth" target="a-fail-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-admin" source="a-monitor" target="a-users"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-admin" source="a-users" target="a-audit"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ea7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;html=1;" edge="1" parent="lane-admin" source="a-audit" target="a-end"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -6,14 +6,18 @@ const roleOptions = [
   { value: 'ADMIN', label: 'System Administrator' },
   { value: 'REGISTRAR', label: 'Registrar' },
   { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
-  { value: 'HOD', label: 'Head of Department' }
+  { value: 'HOD', label: 'Head of Department' },
+  { value: 'LIBRARIAN', label: 'Librarian' },
+  { value: 'STUDENT', label: 'Student' }
 ]
 
 const roleDepartments = {
   ADMIN: 'ICT Office',
   REGISTRAR: 'Registrar Office',
   EXAMINATION_OFFICER: 'Examination Office',
-  HOD: 'Department Office'
+  HOD: 'Department Office',
+  LIBRARIAN: 'University Library',
+  STUDENT: 'Student Workspace'
 }
 
 const defaultPrivilegesByRole = {
@@ -28,7 +32,9 @@ const defaultPrivilegesByRole = {
   ],
   REGISTRAR: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   EXAMINATION_OFFICER: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
-  HOD: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL']
+  HOD: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL'],
+  LIBRARIAN: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL'],
+  STUDENT: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD']
 }
 
 const activityScopeTabs = [
@@ -251,7 +257,6 @@ export default function AdminDashboard({ onNotify }) {
       <header className="admin-top">
         <div className="admin-top-copy">
           <h1>Users</h1>
-          <p>Manage accounts, roles, and access.</p>
         </div>
         <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
           New user

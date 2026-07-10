@@ -11,6 +11,7 @@ public record LoginResponse(
         String department,
         String dashboardTitle,
         String dashboardKey,
-        List<String> privileges
+        List<String> privileges,
+        String studentNumber
 ) {
 }

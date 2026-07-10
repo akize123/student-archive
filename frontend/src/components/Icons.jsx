@@ -128,6 +128,14 @@ export function ChevronRightIcon(props) {
   )
 }
 
+export function ChevronDownIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </SvgIcon>
+  )
+}
+
 export function ArrowRightIcon(props) {
   return (
     <SvgIcon {...props}>

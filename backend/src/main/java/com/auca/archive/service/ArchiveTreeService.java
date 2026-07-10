@@ -6,21 +6,29 @@ import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.dto.UploadDocumentRequest;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.model.StudentEntity;
+import com.auca.archive.repository.FolderRepository;
 import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.Optional;
 
 @Service
 public class ArchiveTreeService {
     public static final String ROOT_CODE = "AUCA";
 
     private final FolderService folderService;
-    private final StudentCohortService cohortService;
+    private final AcademicTermService academicTermService;
+    private final FolderRepository folderRepository;
 
-    public ArchiveTreeService(FolderService folderService, StudentCohortService cohortService) {
+    public ArchiveTreeService(
+            FolderService folderService,
+            AcademicTermService academicTermService,
+            FolderRepository folderRepository
+    ) {
         this.folderService = folderService;
-        this.cohortService = cohortService;
+        this.academicTermService = academicTermService;
+        this.folderRepository = folderRepository;
     }
 
     public FolderEntity resolveUploadFolder(
@@ -36,13 +44,35 @@ public class ArchiveTreeService {
         FolderEntity facultyFolder = resolveFacultyFolder(faculty, root.getId());
         FolderEntity departmentFolder = resolveDepartmentFolder(facultyFolder, department);
 
-        String cohortCode = cohortService.resolveCohortCode(studentNumber);
-        String cohortFolderName = cohortService.resolveCohortFolderName(studentNumber);
-        String yearCode = departmentFolder.getCode() + "-YR-" + cohortCode;
-        FolderEntity yearFolder = folderService.resolveOrCreateFolder(cohortFolderName, yearCode, departmentFolder.getId());
+        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
+                studentNumber,
+                request.academicYear(),
+                request.semester()
+        );
 
-        String studentCode = yearFolder.getCode() + "-STU-" + sanitizeCode(studentNumber);
-        FolderEntity studentFolder = folderService.resolveOrCreateFolder(studentNumber, studentCode, yearFolder.getId());
+        String academicYearCode = academicTermService.buildAcademicYearFolderCode(
+                departmentFolder.getCode(),
+                term.academicYear()
+        );
+        FolderEntity academicYearFolder = folderService.resolveOrCreateFolder(
+                term.academicYear(),
+                academicYearCode,
+                departmentFolder.getId()
+        );
+
+        String semesterCode = academicTermService.buildSemesterFolderCode(
+                academicYearFolder.getCode(),
+                term.startYear(),
+                term.semesterNumber()
+        );
+        FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
+                term.semesterFolderName(),
+                semesterCode,
+                academicYearFolder.getId()
+        );
+
+        String studentCode = semesterFolder.getCode() + "-STU-" + sanitizeCode(studentNumber);
+        FolderEntity studentFolder = folderService.resolveOrCreateFolder(studentNumber, studentCode, semesterFolder.getId());
 
         StudentDocumentCategory category = request.category();
         FolderEntity categoryFolder = folderService.resolveOrCreateFolder(
@@ -60,21 +90,58 @@ public class ArchiveTreeService {
                 categoryFolder.getCode() + "-" + examPaperType.getFolderCode(),
                 categoryFolder.getId()
         );
-        FolderEntity academicYearFolder = folderService.resolveOrCreateFolder(
-                trim(request.academicYear()),
-                typeFolder.getCode() + "-" + sanitizeCode(request.academicYear()),
-                typeFolder.getId()
-        );
-        FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
-                trim(request.semester()),
-                academicYearFolder.getCode() + "-" + sanitizeCode(request.semester()),
-                academicYearFolder.getId()
-        );
         return folderService.resolveOrCreateFolder(
                 trim(request.course()),
-                semesterFolder.getCode() + "-" + sanitizeCode(request.course()),
-                semesterFolder.getId()
+                typeFolder.getCode() + "-" + sanitizeCode(request.course()),
+                typeFolder.getId()
         );
+    }
+
+    public Optional<Long> findStudentFolderId(StudentEntity student) {
+        if (student == null || student.getStudentNumber() == null || student.getStudentNumber().isBlank()) {
+            return Optional.empty();
+        }
+        String faculty = trim(student.getFaculty());
+        String department = trim(student.getDepartment());
+        if (faculty == null || department == null) {
+            return Optional.empty();
+        }
+
+        Optional<FolderEntity> facultyFolder = findFacultyFolder(faculty);
+        if (facultyFolder.isEmpty()) {
+            return Optional.empty();
+        }
+        Optional<FolderEntity> departmentFolder = findDepartmentFolder(facultyFolder.get(), department);
+        if (departmentFolder.isEmpty()) {
+            return Optional.empty();
+        }
+
+        String marker = academicTermService.studentFolderMarker(student.getStudentNumber());
+        if (marker == null) {
+            return Optional.empty();
+        }
+
+        try {
+            AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(student.getStudentNumber(), null, null);
+            String academicYearCode = academicTermService.buildAcademicYearFolderCode(
+                    departmentFolder.get().getCode(),
+                    term.academicYear()
+            );
+            String semesterCode = academicTermService.buildSemesterFolderCode(
+                    academicYearCode,
+                    term.startYear(),
+                    term.semesterNumber()
+            );
+            String studentCode = semesterCode + marker;
+            Optional<FolderEntity> studentFolder = folderRepository.findByCode(studentCode);
+            if (studentFolder.isPresent()) {
+                return studentFolder.map(FolderEntity::getId);
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Fall back to any student folder under this department.
+        }
+
+        return folderRepository.findFirstByCodeContaining(marker).map(FolderEntity::getId);
     }
 
     public Path resolveStoragePath(
@@ -86,12 +153,18 @@ public class ArchiveTreeService {
         String faculty = requireText(student.getFaculty(), request.faculty(), "Faculty is required");
         String department = requireText(student.getDepartment(), request.department(), "Department is required");
         String studentNumber = student.getStudentNumber();
-        String cohortFolderName = cohortService.resolveCohortFolderName(studentNumber);
+
+        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
+                studentNumber,
+                request.academicYear(),
+                request.semester()
+        );
 
         Path studentRoot = storageRoot
                 .resolve(sanitizePath(faculty))
                 .resolve(sanitizePath(department))
-                .resolve(sanitizePath(cohortFolderName))
+                .resolve(sanitizePath(term.academicYear()))
+                .resolve(sanitizePath(term.semesterFolderName()))
                 .resolve(sanitizePath(studentNumber))
                 .resolve(sanitizePath(request.category().getFolderCode()));
 
@@ -101,8 +174,6 @@ public class ArchiveTreeService {
 
         return studentRoot
                 .resolve(sanitizePath(examPaperType.getFolderCode()))
-                .resolve(sanitizePath(request.academicYear()))
-                .resolve(sanitizePath(request.semester()))
                 .resolve(sanitizePath(request.course()));
     }
 
@@ -118,6 +189,20 @@ public class ArchiveTreeService {
     private FolderEntity resolveDepartmentFolder(FolderEntity facultyFolder, String departmentName) {
         String departmentCode = facultyFolder.getCode() + "-DEPT-" + sanitizeCode(departmentName);
         return folderService.resolveOrCreateFolder(departmentName, departmentCode, facultyFolder.getId());
+    }
+
+    private Optional<FolderEntity> findFacultyFolder(String facultyName) {
+        for (AucaFacultyCatalog.FacultyEntry faculty : AucaFacultyCatalog.FACULTIES) {
+            if (faculty.name().equalsIgnoreCase(facultyName.trim())) {
+                return folderRepository.findByCode("FAC-" + faculty.code());
+            }
+        }
+        return folderRepository.findByCode("FAC-" + sanitizeCode(facultyName));
+    }
+
+    private Optional<FolderEntity> findDepartmentFolder(FolderEntity facultyFolder, String departmentName) {
+        String departmentCode = facultyFolder.getCode() + "-DEPT-" + sanitizeCode(departmentName);
+        return folderRepository.findByCode(departmentCode);
     }
 
     private String requireText(String primary, String fallback, String message) {
@@ -150,6 +235,6 @@ public class ArchiveTreeService {
         if (value == null || value.isBlank()) {
             return "UNKNOWN";
         }
-        return value.replaceAll("[^a-zA-Z0-9._' -]", "_");
+        return value.replaceAll("[^a-zA-Z0-9._' /-]", "_");
     }
 }

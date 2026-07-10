@@ -1,25 +1,21 @@
 package com.auca.archive.service;
 
 import com.auca.archive.config.AucaFacultyCatalog;
-import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.repository.FolderRepository;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
 @Service
 public class ArchiveStructureSeedService {
-    public static final List<String> COHORT_YEARS = List.of(
-            "20", "21", "22", "23", "24", "25", "26", "27", "28", "29"
-    );
-
     private final FolderRepository folderRepository;
+    private final AcademicTermService academicTermService;
 
-    public ArchiveStructureSeedService(FolderRepository folderRepository) {
+    public ArchiveStructureSeedService(FolderRepository folderRepository, AcademicTermService academicTermService) {
         this.folderRepository = folderRepository;
+        this.academicTermService = academicTermService;
     }
 
     public void seedArchiveStructure() {
@@ -36,25 +32,19 @@ public class ArchiveStructureSeedService {
                 String departmentCode = facultyFolder.getCode() + "-DEPT-" + sanitizeCode(department);
                 FolderEntity departmentFolder = ensureFolder(department, departmentCode, facultyFolder.getId());
 
-                for (StudentDocumentCategory category : StudentDocumentCategory.values()) {
-                    ensureFolder(
-                            category.getDisplayName(),
-                            departmentCode + "-" + category.getFolderCode(),
-                            departmentFolder.getId()
-                    );
-                }
+                for (String academicYear : AcademicTermService.ACADEMIC_YEARS) {
+                    String academicYearCode = academicTermService.buildAcademicYearFolderCode(departmentCode, academicYear);
+                    FolderEntity academicYearFolder = ensureFolder(academicYear, academicYearCode, departmentFolder.getId());
 
-                for (String cohortYear : COHORT_YEARS) {
-                    String cohortFolderName = cohortYear + "'s";
-                    String cohortCode = departmentCode + "-YR-" + cohortYear;
-                    FolderEntity cohortFolder = ensureFolder(cohortFolderName, cohortCode, departmentFolder.getId());
-
-                    for (StudentDocumentCategory category : StudentDocumentCategory.values()) {
-                        ensureFolder(
-                                category.getDisplayName(),
-                                cohortCode + "-" + category.getFolderCode(),
-                                cohortFolder.getId()
+                    int startYear = academicTermService.parseStartYear(academicYear);
+                    for (int semester = 1; semester <= AcademicTermService.SEMESTERS_PER_YEAR; semester++) {
+                        String semesterName = academicTermService.formatSemesterFolderName(startYear, semester);
+                        String semesterCode = academicTermService.buildSemesterFolderCode(
+                                academicYearCode,
+                                startYear,
+                                semester
                         );
+                        ensureFolder(semesterName, semesterCode, academicYearFolder.getId());
                     }
                 }
             }

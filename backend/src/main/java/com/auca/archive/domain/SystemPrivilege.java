@@ -37,6 +37,8 @@ public enum SystemPrivilege {
             case REGISTRAR -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
             case EXAMINATION_OFFICER -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
             case HOD -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_APPROVAL);
+            case LIBRARIAN -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_APPROVAL);
+            case STUDENT -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
         };
     }
 

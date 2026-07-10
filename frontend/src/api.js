@@ -19,6 +19,9 @@ function getSessionRoleHeader() {
     if (session?.fullName) {
       headers['X-User-Name'] = session.fullName
     }
+    if (session?.studentNumber) {
+      headers['X-Student-Number'] = session.studentNumber
+    }
     return headers
   } catch {
     return {}
@@ -103,6 +106,10 @@ export function getStudentArchive(studentNumber) {
   return request(`/api/students/${encodeURIComponent(String(studentNumber || '').trim())}`)
 }
 
+export function lookupStudent(studentNumber) {
+  return request(`/api/students/${encodeURIComponent(String(studentNumber || '').trim())}/lookup`)
+}
+
 export function getFolder(folderId) {
   return request(`/api/folders/${folderId}`)
 }
@@ -111,6 +118,27 @@ export function createSubfolder(parentId, name) {
   return request(`/api/folders/${parentId}/subfolders`, {
     method: 'POST',
     body: JSON.stringify({ name })
+  })
+}
+
+export function renameFolder(folderId, name) {
+  return request(`/api/folders/${folderId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name })
+  })
+}
+
+export function moveFolder(folderId, targetParentId) {
+  return request(`/api/folders/${folderId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ targetParentId })
+  })
+}
+
+export function copyFolder(folderId, targetParentId) {
+  return request(`/api/folders/${folderId}/copy`, {
+    method: 'POST',
+    body: JSON.stringify({ targetParentId })
   })
 }
 
@@ -277,10 +305,13 @@ export function permanentlyDeleteDocument(documentId) {
   })
 }
 
-export function submitUpload(metadata, file) {
+export function submitUpload(metadata, file, coverPhoto) {
   const formData = new FormData()
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
   formData.append('file', file)
+  if (coverPhoto) {
+    formData.append('coverPhoto', coverPhoto)
+  }
   return request('/api/documents/upload', {
     method: 'POST',
     body: formData

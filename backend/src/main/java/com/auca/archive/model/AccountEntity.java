@@ -51,6 +51,9 @@ public class AccountEntity {
     @Column(length = 512)
     private String privileges;
 
+    @Column(name = "student_number", length = 64)
+    private String studentNumber;
+
     public AccountEntity() {
     }
 
@@ -132,5 +135,13 @@ public class AccountEntity {
 
     public void setPrivileges(String privileges) {
         this.privileges = privileges;
+    }
+
+    public String getStudentNumber() {
+        return studentNumber;
+    }
+
+    public void setStudentNumber(String studentNumber) {
+        this.studentNumber = studentNumber;
     }
 }

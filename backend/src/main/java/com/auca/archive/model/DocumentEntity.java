@@ -59,6 +59,10 @@ public class DocumentEntity {
     private String archivedBy;
     private Boolean encrypted;
     private String encryptionIv;
+    private String coverPhotoPath;
+    private String githubUrl;
+    private String externalLinks;
+    private String reviewNote;
 
     public DocumentEntity() {
     }
@@ -317,6 +321,38 @@ public class DocumentEntity {
 
     public void setEncryptionIv(String encryptionIv) {
         this.encryptionIv = encryptionIv;
+    }
+
+    public String getCoverPhotoPath() {
+        return coverPhotoPath;
+    }
+
+    public void setCoverPhotoPath(String coverPhotoPath) {
+        this.coverPhotoPath = coverPhotoPath;
+    }
+
+    public String getGithubUrl() {
+        return githubUrl;
+    }
+
+    public void setGithubUrl(String githubUrl) {
+        this.githubUrl = githubUrl;
+    }
+
+    public String getExternalLinks() {
+        return externalLinks;
+    }
+
+    public void setExternalLinks(String externalLinks) {
+        this.externalLinks = externalLinks;
+    }
+
+    public String getReviewNote() {
+        return reviewNote;
+    }
+
+    public void setReviewNote(String reviewNote) {
+        this.reviewNote = reviewNote;
     }
 
     public boolean isArchivedForRemoval() {

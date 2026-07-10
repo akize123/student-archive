@@ -5,3 +5,6 @@ frontend/dist/
 *.log
 backend/storage/
 
+
+tools/*.zip
+*.zip

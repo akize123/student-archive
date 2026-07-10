@@ -18,6 +18,7 @@ public record DocumentListItemResponse(
         String category,
         String type,
         String folderName,
+        Long folderId,
         Boolean starred,
         String examType,
         String academicYear,
@@ -26,6 +27,9 @@ public record DocumentListItemResponse(
         Integer marks,
         String examRoom,
         LocalDateTime archivedAt,
-        String archivedBy
+        String archivedBy,
+        String githubUrl,
+        String externalLinks,
+        String reviewNote
 ) {
 }

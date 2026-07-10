@@ -1,5 +1,6 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.ApprovalStatus;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.dto.ApprovalDecisionRequest;
@@ -15,10 +16,16 @@ import java.util.List;
 public class ApprovalService {
     private final ApprovalTaskRepository approvalTaskRepository;
     private final DocumentService documentService;
+    private final ActivityService activityService;
 
-    public ApprovalService(ApprovalTaskRepository approvalTaskRepository, DocumentService documentService) {
+    public ApprovalService(
+            ApprovalTaskRepository approvalTaskRepository,
+            DocumentService documentService,
+            ActivityService activityService
+    ) {
         this.approvalTaskRepository = approvalTaskRepository;
         this.documentService = documentService;
+        this.activityService = activityService;
     }
 
     public List<ApprovalTaskResponse> pending() {
@@ -33,12 +40,28 @@ public class ApprovalService {
         ApprovalTaskEntity task = approvalTaskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + id));
         String decision = request.decision().trim().toLowerCase();
+        String note = request.note() == null ? "" : request.note().trim();
         if ("approve".equals(decision)) {
             task.setStatus(ApprovalStatus.APPROVED);
-            documentService.updateStatus(task.getDocumentId(), DocumentStatus.APPROVED);
+            task.setNote(note.isBlank() ? "Approved by librarian" : note);
+            documentService.updateStatus(task.getDocumentId(), DocumentStatus.APPROVED, task.getNote(), null);
+            activityService.recordAction(
+                    "Librarian approved final year project \"" + task.getDocumentTitle() + "\"",
+                    "Librarian",
+                    ActivityCategory.APPROVAL
+            );
         } else if ("reject".equals(decision)) {
+            if (note.isBlank()) {
+                throw new IllegalArgumentException("Please provide feedback when rejecting a project");
+            }
             task.setStatus(ApprovalStatus.REJECTED);
-            documentService.updateStatus(task.getDocumentId(), DocumentStatus.REJECTED);
+            task.setNote(note);
+            documentService.updateStatus(task.getDocumentId(), DocumentStatus.REJECTED, note, null);
+            activityService.recordAction(
+                    "Librarian rejected final year project \"" + task.getDocumentTitle() + "\"",
+                    "Librarian",
+                    ActivityCategory.APPROVAL
+            );
         } else {
             throw new IllegalArgumentException("Decision must be approve or reject");
         }

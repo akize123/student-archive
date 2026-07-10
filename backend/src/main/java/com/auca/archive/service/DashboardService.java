@@ -25,6 +25,7 @@ public class DashboardService {
     private final DocumentService documentService;
     private final ActivityService activityService;
     private final ArchiveAccessService accessService;
+    private final StudentStorageService studentStorageService;
 
     public DashboardService(
             DocumentRepository documentRepository,
@@ -32,7 +33,8 @@ public class DashboardService {
             FolderService folderService,
             DocumentService documentService,
             ActivityService activityService,
-            ArchiveAccessService accessService
+            ArchiveAccessService accessService,
+            StudentStorageService studentStorageService
     ) {
         this.documentRepository = documentRepository;
         this.approvalTaskRepository = approvalTaskRepository;
@@ -40,6 +42,7 @@ public class DashboardService {
         this.documentService = documentService;
         this.activityService = activityService;
         this.accessService = accessService;
+        this.studentStorageService = studentStorageService;
     }
 
     public DashboardResponse getDashboard() {
@@ -47,9 +50,15 @@ public class DashboardService {
     }
 
     public DashboardResponse getDashboard(String rawRole) {
+        return getDashboard(rawRole, null);
+    }
+
+    public DashboardResponse getDashboard(String rawRole, String rawStudentNumber) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = rawStudentNumber == null || rawStudentNumber.isBlank() ? null : rawStudentNumber.trim();
+        accessService.requireStudentAccount(role, studentNumber);
         List<DocumentEntity> visibleDocuments = documentRepository.findAll().stream()
-                .filter(document -> folderService.isDocumentAccessible(document, role))
+                .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber))
                 .sorted((left, right) -> {
                     LocalDateTime leftTime = left.getModifiedAt();
                     LocalDateTime rightTime = right.getModifiedAt();
@@ -66,7 +75,7 @@ public class DashboardService {
                 .filter(task -> task.getStatus() == ApprovalStatus.PENDING)
                 .filter(task -> task.getDocumentId() != null)
                 .filter(task -> documentRepository.findById(task.getDocumentId())
-                        .map(document -> folderService.isDocumentAccessible(document, role))
+                        .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
                         .orElse(false))
                 .count();
         long departmentFiles = visibleDocuments.size();
@@ -74,12 +83,16 @@ public class DashboardService {
                 .mapToLong(document -> document.getSizeBytes() == null ? 0L : document.getSizeBytes())
                 .sum();
         List<ActivityResponse> recentActivity = activityService.recent(rawRole);
-        List<DocumentListItemResponse> recentFiles = documentService.search(null, null, rawRole).stream()
+        List<DocumentListItemResponse> recentFiles = documentService.search(null, null, rawRole, rawStudentNumber).stream()
                 .limit(8)
                 .toList();
         ActivityResponse latestActivity = recentActivity.isEmpty() ? null : recentActivity.get(0);
         DocumentListItemResponse latestDocument = recentFiles.isEmpty() ? null : recentFiles.get(0);
         String workspaceDepartment = role == null ? (latestDocument == null ? "" : latestDocument.department()) : role.getDepartment();
+
+        long storageLimitBytes = role == UserRole.STUDENT
+                ? studentStorageService.getStorageLimitBytes()
+                : STORAGE_LIMIT_BYTES;
 
         return new DashboardResponse(
                 latestActivity == null ? "" : latestActivity.actor(),
@@ -91,14 +104,14 @@ public class DashboardService {
                 pendingApprovals,
                 departmentFiles,
                 storageUsedBytes,
-                STORAGE_LIMIT_BYTES,
-                folderService.getTree(rawRole),
+                storageLimitBytes,
+                folderService.getTree(rawRole, rawStudentNumber),
                 recentFiles,
                 approvalTaskRepository.findTop5ByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
                         .stream()
                         .filter(task -> task.getDocumentId() != null)
                         .filter(task -> documentRepository.findById(task.getDocumentId())
-                                .map(document -> folderService.isDocumentAccessible(document, role))
+                                .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
                                 .orElse(false))
                         .map(task -> new com.auca.archive.dto.ApprovalTaskResponse(
                                 task.getId(),

@@ -43,7 +43,7 @@ class FolderServiceTest {
         when(folderRepository.findAll()).thenReturn(List.of(root, child));
         when(documentRepository.findByFolderId(anyLong())).thenReturn(List.of());
 
-        FolderService folderService = new FolderService(folderRepository, documentRepository, accessService, activityService, fileEncryptionService);
+        FolderService folderService = new FolderService(folderRepository, documentRepository, accessService, activityService, fileEncryptionService, "storage");
 
         List<FolderNodeResponse> tree = folderService.getTree();
 

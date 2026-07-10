@@ -16,11 +16,12 @@ public class AccountSchemaMigration implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
+        jdbcTemplate.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS student_number VARCHAR(64)");
         jdbcTemplate.execute("ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_user_role_check");
         jdbcTemplate.execute("""
                 ALTER TABLE accounts
                 ADD CONSTRAINT accounts_user_role_check
-                CHECK (user_role IN ('ADMIN', 'REGISTRAR', 'EXAMINATION_OFFICER', 'HOD'))
+                CHECK (user_role IN ('ADMIN', 'REGISTRAR', 'EXAMINATION_OFFICER', 'HOD', 'STUDENT'))
                 """);
     }
 }

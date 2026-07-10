@@ -89,6 +89,7 @@ public class ActivityService {
                 case REINTEGRATION_FORM -> containsAny(haystack, "reintegration", "reinstate", "srin", "re-entry");
                 case APPLICATION_DOCUMENTS -> containsAny(haystack, "application", "admission", "sapp", "thesis", "approval");
                 case EXAMINATION_DOCUMENTS -> containsAny(haystack, "exam", "marks", "grading", "sexm", "paper", "semester");
+                case FINAL_YEAR_PROJECT -> containsAny(haystack, "project", "thesis", "final year", "capstone", "sfyp");
             };
         } catch (IllegalArgumentException ex) {
             return haystack.contains(topic.trim().toLowerCase(Locale.ROOT));
@@ -114,6 +115,8 @@ public class ActivityService {
             case REGISTRAR -> "Registrar";
             case EXAMINATION_OFFICER -> "Examination Officer";
             case HOD -> "Head of Department";
+            case LIBRARIAN -> "Librarian";
+            case STUDENT -> "Student";
         };
     }
 
