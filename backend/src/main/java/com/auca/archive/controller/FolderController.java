@@ -3,6 +3,8 @@ package com.auca.archive.controller;
 import com.auca.archive.dto.CreateFolderRequest;
 import com.auca.archive.dto.FolderDetailResponse;
 import com.auca.archive.dto.FolderNodeResponse;
+import com.auca.archive.dto.FolderTargetRequest;
+import com.auca.archive.dto.RenameFolderRequest;
 import com.auca.archive.dto.ShareFolderRequest;
 import com.auca.archive.dto.ShareFolderResponse;
 import com.auca.archive.service.FolderService;
@@ -13,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -35,22 +38,60 @@ public class FolderController {
     }
 
     @GetMapping("/tree")
-    public List<FolderNodeResponse> tree(@RequestHeader(value = "X-User-Role", required = false) String role) {
-        return folderService.getTree(role);
+    public List<FolderNodeResponse> tree(
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return folderService.getTree(role, studentNumber);
     }
 
     @GetMapping("/{id}")
-    public FolderDetailResponse getFolder(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) {
-        return folderService.getFolderDetail(id, role);
+    public FolderDetailResponse getFolder(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return folderService.getFolderDetail(id, role, studentNumber);
     }
 
     @PostMapping("/{parentId}/subfolders")
     public FolderNodeResponse createSubfolder(
             @PathVariable Long parentId,
             @Valid @RequestBody CreateFolderRequest request,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
-        return folderService.createSubfolder(parentId, request.name(), role);
+        return folderService.createSubfolder(parentId, request.name(), role, studentNumber);
+    }
+
+    @PatchMapping("/{id}")
+    public FolderNodeResponse renameFolder(
+            @PathVariable Long id,
+            @Valid @RequestBody RenameFolderRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return folderService.renameFolder(id, request.name(), role, studentNumber);
+    }
+
+    @PostMapping("/{id}/move")
+    public FolderNodeResponse moveFolder(
+            @PathVariable Long id,
+            @Valid @RequestBody FolderTargetRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return folderService.moveFolder(id, request.targetParentId(), role, studentNumber);
+    }
+
+    @PostMapping("/{id}/copy")
+    public FolderNodeResponse copyFolder(
+            @PathVariable Long id,
+            @Valid @RequestBody FolderTargetRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) throws IOException {
+        return folderService.copyFolder(id, request.targetParentId(), role, studentNumber);
     }
 
     @DeleteMapping("/{id}")

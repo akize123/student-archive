@@ -4,7 +4,8 @@ public enum StudentDocumentCategory {
     REGISTRATION_FORM("Registration Forms", "SREG"),
     REINTEGRATION_FORM("Reintegration Forms", "SRIN"),
     APPLICATION_DOCUMENTS("Application Documents", "SAPP"),
-    EXAMINATION_DOCUMENTS("Exams", "SEXM");
+    EXAMINATION_DOCUMENTS("Exams", "SEXM"),
+    FINAL_YEAR_PROJECT("Final Year Project", "SFYP");
 
     private final String displayName;
     private final String folderCode;

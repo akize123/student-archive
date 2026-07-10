@@ -17,7 +17,10 @@ public class DashboardController {
     }
 
     @GetMapping
-    public DashboardResponse getDashboard(@RequestHeader(value = "X-User-Role", required = false) String role) {
-        return dashboardService.getDashboard(role);
+    public DashboardResponse getDashboard(
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return dashboardService.getDashboard(role, studentNumber);
     }
 }

@@ -2,6 +2,7 @@ package com.auca.archive.service;
 
 import com.auca.archive.dto.DocumentListItemResponse;
 import com.auca.archive.dto.StudentArchiveResponse;
+import com.auca.archive.dto.StudentLookupResponse;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.DocumentRepository;
@@ -14,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 public class StudentService {
@@ -21,17 +23,23 @@ public class StudentService {
     private final DocumentRepository documentRepository;
     private final FolderService folderService;
     private final ArchiveAccessService accessService;
+    private final StudentIdFormatService studentIdFormatService;
+    private final ArchiveTreeService archiveTreeService;
 
     public StudentService(
             StudentRepository studentRepository,
             DocumentRepository documentRepository,
             FolderService folderService,
-            ArchiveAccessService accessService
+            ArchiveAccessService accessService,
+            StudentIdFormatService studentIdFormatService,
+            ArchiveTreeService archiveTreeService
     ) {
         this.studentRepository = studentRepository;
         this.documentRepository = documentRepository;
         this.folderService = folderService;
         this.accessService = accessService;
+        this.studentIdFormatService = studentIdFormatService;
+        this.archiveTreeService = archiveTreeService;
     }
 
     public StudentEntity getStudentOrThrow(String studentNumber) {
@@ -70,6 +78,19 @@ public class StudentService {
         if (normalizedName == null) {
             throw new IllegalArgumentException("Student name is required for a new student");
         }
+
+        studentIdFormatService.requireRecognizedFormat(normalizedNumber);
+        if (!studentIdFormatService.isLegacyFormat(normalizedNumber)) {
+            studentIdFormatService.validateDepartmentMatch(normalizedNumber, normalizedDepartment);
+        }
+
+        if (normalizedDepartment == null) {
+            normalizedDepartment = studentIdFormatService.resolveDepartmentName(normalizedNumber).orElse(null);
+        }
+        if (normalizedFaculty == null) {
+            normalizedFaculty = studentIdFormatService.resolveFacultyName(normalizedNumber).orElse(null);
+        }
+
         if (normalizedFaculty == null || normalizedDepartment == null) {
             throw new IllegalArgumentException("Faculty and department are required for a new student");
         }
@@ -88,13 +109,18 @@ public class StudentService {
     }
 
     public StudentArchiveResponse getStudentArchive(String studentNumber, String rawRole) {
+        return getStudentArchive(studentNumber, rawRole, null);
+    }
+
+    public StudentArchiveResponse getStudentArchive(String studentNumber, String rawRole, String rawSessionStudentNumber) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        accessService.requireOwnStudentNumber(role, rawSessionStudentNumber, studentNumber);
         StudentEntity student = getStudentOrThrow(studentNumber);
         List<DocumentListItemResponse> documents = documentRepository
                 .findByStudentNumberOrderByIssueDateDesc(student.getStudentNumber())
                 .stream()
                 .filter(document -> !document.isArchivedForRemoval())
-                .filter(document -> folderService.isDocumentAccessible(document, role))
+                .filter(document -> folderService.isDocumentAccessible(document, role, rawSessionStudentNumber))
                 .map(this::toListItem)
                 .toList();
 
@@ -103,16 +129,25 @@ public class StudentService {
                 student.getFullName(),
                 student.getFaculty(),
                 student.getDepartment(),
+                archiveTreeService.findStudentFolderId(student).orElse(null),
                 documents.size(),
                 documents
         );
+    }
+
+    public StudentLookupResponse lookupStudent(String studentNumber, String rawRole, String rawSessionStudentNumber) {
+        String normalized = normalize(studentNumber);
+        if (studentRepository.findByStudentNumber(normalized).isEmpty()) {
+            return StudentLookupResponse.notFound(normalized);
+        }
+        return StudentLookupResponse.fromArchive(getStudentArchive(studentNumber, rawRole, rawSessionStudentNumber));
     }
 
     private String normalize(String studentNumber) {
         if (studentNumber == null || studentNumber.isBlank()) {
             throw new IllegalArgumentException("Student ID is required");
         }
-        return studentNumber.trim();
+        return studentNumber.trim().toUpperCase(Locale.ROOT);
     }
 
     private String normalizeName(String studentName) {
@@ -147,6 +182,7 @@ public class StudentService {
                 document.getFolderId() == null
                         ? "Student Documents"
                         : folderService.getFolderOrThrow(document.getFolderId()).getName(),
+                document.getFolderId(),
                 document.getStarred(),
                 document.getExamType(),
                 document.getAcademicYear(),
@@ -155,7 +191,10 @@ public class StudentService {
                 document.getMarks(),
                 document.getExamRoom(),
                 document.getArchivedAt(),
-                document.getArchivedBy()
+                document.getArchivedBy(),
+                document.getGithubUrl(),
+                document.getExternalLinks(),
+                document.getReviewNote()
         );
     }
 }

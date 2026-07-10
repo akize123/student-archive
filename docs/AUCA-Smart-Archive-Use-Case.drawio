@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" agent="Cursor" version="24.7.17" type="device">
+  <diagram id="auca-use-case-v3" name="Use Case Diagram">
+    <mxGraphModel dx="1000" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="950" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- System Boundary (narrow, tall — like StudentHub) -->
+        <mxCell id="boundary" value="AUCA Smart Archive" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6C8EBF;strokeWidth=2;fontSize=14;fontStyle=0;verticalAlign=top;spacingTop=4;align=center;" vertex="1" parent="1">
+          <mxGeometry x="130" y="30" width="690" height="830" as="geometry" />
+        </mxCell>
+
+        <!-- ===== LEFT ACTORS ===== -->
+        <mxCell id="actor-student" value="Student" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="130" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="actor-registrar" value="Registrar" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="35" y="620" width="30" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===== RIGHT ACTORS ===== -->
+        <mxCell id="actor-exam" value="Examination&#xa;Officer" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="885" y="120" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="actor-hod" value="HOD" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="885" y="360" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="actor-admin" value="Admin" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="885" y="580" width="30" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===== TOP LOGIN (shared, like StudentHub) ===== -->
+        <mxCell id="uc-login-top" value="Login" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="410" y="62" width="100" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ===== LEFT COLUMN use cases ===== -->
+        <mxCell id="uc-dashboard" value="View Dashboard" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="175" y="130" width="130" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-fyp" value="Upload Final Year Project" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="160" y="210" width="160" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-pdocs" value="View Personal Documents" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="160" y="290" width="160" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-pfolders" value="Browse Personal Folders" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="160" y="370" width="160" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-lookup" value="Lookup Student" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="175" y="500" width="130" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-reg-upload" value="Upload Registrar Documents" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="155" y="580" width="170" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-folder" value="Manage Folders" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="175" y="660" width="130" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ===== RIGHT COLUMN use cases ===== -->
+        <mxCell id="uc-exam" value="Upload Exam Papers" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="560" y="130" width="140" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-approval" value="Review Approvals" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="570" y="220" width="130" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-search" value="Search Documents" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="565" y="310" width="140" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-download" value="Download Documents" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="555" y="400" width="150" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-accounts" value="Manage Accounts" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="570" y="530" width="130" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="uc-monitor" value="Monitor System" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="570" y="610" width="130" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ===== BOTTOM LOGIN (like StudentHub bottom login) ===== -->
+        <mxCell id="uc-login-bottom" value="login" style="ellipse;whiteSpace=wrap;html=1;align=center;fillColor=#ffffff;strokeColor=#000000;" vertex="1" parent="1">
+          <mxGeometry x="410" y="770" width="100" height="46" as="geometry" />
+        </mxCell>
+
+        <!-- ===== STUDENT → left column (short horizontal lines) ===== -->
+        <mxCell id="ls1" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.2;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-student" target="uc-login-top"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ls2" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.35;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-student" target="uc-dashboard"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ls3" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-student" target="uc-fyp"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ls4" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.65;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-student" target="uc-pdocs"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ls5" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.8;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-student" target="uc-pfolders"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===== REGISTRAR → left column bottom + bottom login ===== -->
+        <mxCell id="lr1" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.15;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-registrar" target="uc-lookup"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="lr2" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.4;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-registrar" target="uc-reg-upload"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="lr3" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.65;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-registrar" target="uc-folder"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="lr4" style="endArrow=none;html=1;rounded=0;exitX=1;exitY=0.85;entryX=0;entryY=0.5;" edge="1" parent="1" source="actor-registrar" target="uc-login-bottom"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===== EXAM OFFICER → right column top ===== -->
+        <mxCell id="re1" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.25;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-exam" target="uc-exam"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="re2" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-exam" target="uc-search"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="re3" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.75;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-exam" target="uc-download"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===== HOD → right column middle ===== -->
+        <mxCell id="rh1" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.3;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-hod" target="uc-approval"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="rh2" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.6;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-hod" target="uc-search"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===== ADMIN → right column bottom + bottom login ===== -->
+        <mxCell id="ra1" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.2;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-admin" target="uc-accounts"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ra2" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.45;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-admin" target="uc-monitor"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ra3" style="endArrow=none;html=1;rounded=0;exitX=0;exitY=0.8;entryX=1;entryY=0.5;" edge="1" parent="1" source="actor-admin" target="uc-login-bottom"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- ===== INCLUDE / EXTEND (only 4 — like StudentHub) ===== -->
+        <mxCell id="inc1" value="&amp;lt;&amp;lt;include&amp;gt;&amp;gt;" style="dashed=1;endArrow=open;endFill=0;html=1;rounded=0;fontSize=10;exitX=0.5;exitY=0;entryX=0.5;entryY=1;" edge="1" parent="1" source="uc-dashboard" target="uc-login-top"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ext1" value="&amp;lt;&amp;lt;extend&amp;gt;&amp;gt;" style="dashed=1;endArrow=open;endFill=0;html=1;rounded=0;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="uc-fyp" target="uc-dashboard"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ext2" value="&amp;lt;&amp;lt;extend&amp;gt;&amp;gt;" style="dashed=1;endArrow=open;endFill=0;html=1;rounded=0;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="uc-lookup" target="uc-search"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="ext3" value="&amp;lt;&amp;lt;extend&amp;gt;&amp;gt;" style="dashed=1;endArrow=open;endFill=0;html=1;rounded=0;fontSize=10;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="uc-exam" target="uc-search"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -5,6 +5,8 @@ import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.ActivityEntryEntity;
+import com.auca.archive.model.DocumentEntity;
+import com.auca.archive.model.FolderEntity;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -27,6 +29,9 @@ public class ArchiveAccessService {
     public boolean matchesRoleFolderCode(String folderCode, UserRole role) {
         if (role == UserRole.ADMIN) {
             return true;
+        }
+        if (role == UserRole.STUDENT) {
+            return false;
         }
         if (role == null) {
             return true;
@@ -61,6 +66,8 @@ public class ArchiveAccessService {
             case REGISTRAR -> containsAny(haystack, "registrar", "registration", "enrollment", "transcript", "graduation", "admission");
             case EXAMINATION_OFFICER -> containsAny(haystack, "exam", "marks", "grading", "paper", "semester", "mid-sem", "final");
             case HOD -> containsAny(haystack, "hod", "department", "thesis", "approval", "faculty");
+            case LIBRARIAN -> containsAny(haystack, "library", "librarian", "project", "thesis", "final year", "fyp", "approval", "student");
+            case STUDENT -> containsAny(haystack, "student", "registration", "registrar", "project", "final year", "application", "reintegration");
         };
     }
 
@@ -70,10 +77,12 @@ public class ArchiveAccessService {
         }
 
         return switch (role) {
-            case ADMIN -> List.of("AUCA", "FAC", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD");
-            case REGISTRAR -> List.of("AUCA", "FAC", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD");
-            case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "SEXM", "FLD", "STD");
-            case HOD -> List.of("AUCA", "FAC", "SAPP", "FLD", "STD");
+            case ADMIN -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD", "SFYP");
+            case REGISTRAR -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD");
+            case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "AY", "SEM", "SEXM", "FLD", "STD");
+            case HOD -> List.of("AUCA", "FAC", "AY", "SEM", "SAPP", "FLD", "STD");
+            case LIBRARIAN -> List.of("AUCA", "FAC", "AY", "SEM", "STD", "SFYP", "FLD");
+            case STUDENT -> List.of("STD", "SFYP", "SREG", "SRIN", "SAPP");
         };
     }
 
@@ -91,6 +100,8 @@ public class ArchiveAccessService {
             );
             case EXAMINATION_OFFICER -> Set.of(StudentDocumentCategory.EXAMINATION_DOCUMENTS);
             case HOD -> Set.of(StudentDocumentCategory.APPLICATION_DOCUMENTS);
+            case LIBRARIAN -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT);
+            case STUDENT -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT);
         };
     }
 
@@ -102,6 +113,51 @@ public class ArchiveAccessService {
         if (role != UserRole.ADMIN) {
             throw new IllegalArgumentException("Only the system administrator can permanently delete archived files");
         }
+    }
+
+    public boolean isStudentDocument(DocumentEntity document, String studentNumber) {
+        if (document == null || studentNumber == null || studentNumber.isBlank()) {
+            return false;
+        }
+        return document.getStudentNumber() != null
+                && document.getStudentNumber().trim().equalsIgnoreCase(studentNumber.trim());
+    }
+
+    public boolean isStudentFolder(FolderEntity folder, String studentNumber) {
+        if (folder == null || studentNumber == null || studentNumber.isBlank()) {
+            return false;
+        }
+        String marker = studentFolderMarker(studentNumber);
+        String code = folder.getCode() == null ? "" : folder.getCode().toUpperCase(Locale.ROOT);
+        return code.contains(marker);
+    }
+
+    public String studentFolderMarker(String studentNumber) {
+        return "-STU-" + sanitizeStudentCode(studentNumber);
+    }
+
+    public void requireStudentAccount(UserRole role, String studentNumber) {
+        if (role == UserRole.STUDENT && (studentNumber == null || studentNumber.isBlank())) {
+            throw new IllegalArgumentException("This student account is not linked to a student ID");
+        }
+    }
+
+    public void requireOwnStudentNumber(UserRole role, String sessionStudentNumber, String requestedStudentNumber) {
+        if (role != UserRole.STUDENT) {
+            return;
+        }
+        requireStudentAccount(role, sessionStudentNumber);
+        if (requestedStudentNumber == null
+                || !requestedStudentNumber.trim().equalsIgnoreCase(sessionStudentNumber.trim())) {
+            throw new IllegalArgumentException("You can only access your own student records");
+        }
+    }
+
+    private String sanitizeStudentCode(String value) {
+        if (value == null || value.isBlank()) {
+            return "UNKNOWN";
+        }
+        return value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
     }
 
     private boolean containsAny(String haystack, String... terms) {

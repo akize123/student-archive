@@ -239,7 +239,11 @@ public class DocumentScanService {
 
         boolean hasStrongAucaMarker = matchedSignals.stream().anyMatch(signal -> signal.startsWith("AUCA reference"));
         boolean hasStudentMatch = matchedSignals.stream().anyMatch(signal -> signal.startsWith("Student"));
-        boolean verified = !text.isBlank() && (hasStrongAucaMarker || hasStudentMatch || score >= 4);
+        boolean isFinalYearProject = context != null
+                && "FINAL_YEAR_PROJECT".equalsIgnoreCase(String.valueOf(context.category()));
+        boolean verified = isFinalYearProject
+                ? !text.isBlank() && text.length() >= 20
+                : !text.isBlank() && (hasStrongAucaMarker || hasStudentMatch || score >= 4);
 
         return new ScanEvaluation(verified, List.copyOf(matchedSignals));
     }

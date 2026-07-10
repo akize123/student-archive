@@ -6,6 +6,7 @@ public enum DocumentType {
     PPTX,
     XLSX,
     IMAGE,
+    ZIP,
     OTHER
 }
 

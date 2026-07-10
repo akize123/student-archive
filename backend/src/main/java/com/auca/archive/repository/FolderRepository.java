@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface FolderRepository extends JpaRepository<FolderEntity, Long> {
     Optional<FolderEntity> findByCode(String code);
+
+    Optional<FolderEntity> findFirstByCodeContaining(String marker);
 }

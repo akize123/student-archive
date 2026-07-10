@@ -31,6 +31,18 @@ public class AccountService {
 
     @Transactional
     public AccountEntity ensureAccount(String username, String fullName, String rawPassword, UserRole role, String department) {
+        return ensureAccount(username, fullName, rawPassword, role, department, null);
+    }
+
+    @Transactional
+    public AccountEntity ensureAccount(
+            String username,
+            String fullName,
+            String rawPassword,
+            UserRole role,
+            String department,
+            String studentNumber
+    ) {
         String normalizedUsername = normalizeUsername(username);
         AccountEntity account = accountRepository.findByUsername(normalizedUsername).orElseGet(AccountEntity::new);
         account.setUsername(normalizedUsername);
@@ -38,6 +50,9 @@ public class AccountService {
         account.setRole(role);
         account.setDepartment(department.trim());
         account.setActive(Boolean.TRUE);
+        if (studentNumber != null && !studentNumber.isBlank()) {
+            account.setStudentNumber(studentNumber.trim());
+        }
         if (account.getCreatedAt() == null) {
             account.setCreatedAt(LocalDateTime.now());
         }
@@ -74,7 +89,8 @@ public class AccountService {
                 account.getDepartment(),
                 role.getDashboardTitle(),
                 role.getDashboardKey(),
-                adminService.resolvePrivilegeCodes(account)
+                adminService.resolvePrivilegeCodes(account),
+                account.getStudentNumber()
         );
     }
 

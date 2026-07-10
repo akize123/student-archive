@@ -4,7 +4,9 @@ public enum UserRole {
     ADMIN("System Administrator", "System Maintenance Dashboard", "ICT Office", "admin"),
     REGISTRAR("Registrar", "Registrar Dashboard", "Registrar Office", "registrar"),
     EXAMINATION_OFFICER("Examination Officer", "Examination Dashboard", "Examination Office", "examination-officer"),
-    HOD("HOD", "HOD Dashboard", "Department Office", "hod");
+    HOD("HOD", "HOD Dashboard", "Department Office", "hod"),
+    LIBRARIAN("Librarian", "Library Dashboard", "University Library", "librarian"),
+    STUDENT("Student", "Student Dashboard", "Student Workspace", "student");
 
     private final String displayName;
     private final String dashboardTitle;

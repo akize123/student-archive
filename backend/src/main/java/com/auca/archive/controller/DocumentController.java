@@ -47,9 +47,10 @@ public class DocumentController {
     public List<DocumentListItemResponse> search(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) StudentDocumentCategory category,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
-        return documentService.search(q, category, role);
+        return documentService.search(q, category, role, studentNumber);
     }
 
     @GetMapping("/archived")
@@ -82,13 +83,21 @@ public class DocumentController {
     }
 
     @GetMapping("/{id}")
-    public DocumentDetailResponse getDocument(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) {
-        return documentService.getDocument(id, role);
+    public DocumentDetailResponse getDocument(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return documentService.getDocument(id, role, studentNumber);
     }
 
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable Long id, @RequestHeader(value = "X-User-Role", required = false) String role) throws IOException {
-        Resource resource = documentService.download(id, role);
+    public ResponseEntity<Resource> download(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) throws IOException {
+        Resource resource = documentService.download(id, role, studentNumber);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
@@ -107,9 +116,11 @@ public class DocumentController {
     public DocumentDetailResponse upload(
             @Valid @RequestPart("metadata") UploadDocumentRequest metadata,
             @RequestPart("file") MultipartFile file,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestPart(value = "coverPhoto", required = false) MultipartFile coverPhoto,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) throws IOException {
-        return documentService.upload(metadata, file, role);
+        return documentService.upload(metadata, file, coverPhoto, role, studentNumber);
     }
 
     @PatchMapping("/{id}/status")
