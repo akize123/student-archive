@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import StudentFypWizard from './StudentFypWizard'
-import { DocumentIcon, DownloadIcon, FolderPlusIcon, UploadIcon } from './Icons'
+import { DocumentIcon, DownloadIcon, FolderPlusIcon } from './Icons'
 
 const registrarCategories = new Set([
   'REGISTRATION_FORM',
@@ -53,10 +52,8 @@ export default function StudentDashboard({
   onOpenDocument,
   onCreateFolder,
   onBrowse,
-  onNotify,
-  onRefresh
+  onEditFinalYearProject
 }) {
-  const [wizardOpen, setWizardOpen] = useState(false)
   const [projectTab, setProjectTab] = useState('pending')
 
   const storagePercent = dashboard.storageLimitBytes
@@ -102,21 +99,18 @@ export default function StudentDashboard({
           </nav>
           <h1>My archive</h1>
           <p>
-            Submit your final year project in 5 clear steps. The librarian must approve it before it appears in the shared archive.
+            Use the sidebar folders for Official Documents, Final Year Project, and Archive project.
+            Open Final Year Project to submit through the guided steps.
           </p>
           <span className="dash-meta">Student ID: {session.studentNumber}</span>
         </div>
         <div className="dash-header-actions">
           <button className="ghost-btn dash-action-btn" type="button" onClick={onCreateFolder}>
             <FolderPlusIcon className="icon" />
-            New folder
+            New subfolder
           </button>
           <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowse}>
             Browse
-          </button>
-          <button className="primary-btn dash-action-btn" type="button" onClick={() => setWizardOpen(true)}>
-            <UploadIcon className="icon" />
-            Submit project
           </button>
         </div>
       </header>
@@ -135,7 +129,7 @@ export default function StudentDashboard({
             ? 'Storage is almost full. Delete older project files before uploading again.'
             : storageState === 'warning'
               ? 'You are nearing your personal storage limit.'
-              : 'Upload a ZIP (PDF book inside) up to 5 MB. Pending projects stay private until librarian approval.'}
+              : 'Upload project ZIPs (max 1 MB) into Final Year Project. Pending submissions stay private until librarian approval.'}
         </p>
       </section>
 
@@ -143,7 +137,7 @@ export default function StudentDashboard({
         <article className="student-summary-card">
           <p className="eyebrow">From registrar</p>
           <strong>{receivedDocuments.length}</strong>
-          <span>Registration and application documents</span>
+          <span>Under Official Documents</span>
         </article>
         <article className="student-summary-card">
           <p className="eyebrow">Pending</p>
@@ -165,8 +159,8 @@ export default function StudentDashboard({
       <section className="student-documents-panel">
         <div className="student-panel-head">
           <div>
-            <p className="eyebrow">Received from registrar</p>
-            <h2>Official documents</h2>
+            <p className="eyebrow">Official Documents</p>
+            <h2>Received from registrar</h2>
           </div>
         </div>
         {receivedDocuments.length ? (
@@ -189,7 +183,7 @@ export default function StudentDashboard({
           </div>
         ) : (
           <p className="student-empty-copy">
-            No registrar documents yet. When the registrar uploads files to your student ID, they will appear here.
+            No registrar documents yet. When the registrar uploads files to your student ID, they appear under Official Documents.
           </p>
         )}
       </section>
@@ -197,7 +191,7 @@ export default function StudentDashboard({
       <section className="student-documents-panel">
         <div className="student-panel-head student-panel-head-split">
           <div>
-            <p className="eyebrow">My final year project</p>
+            <p className="eyebrow">Final Year Project</p>
             <h2>Submission status</h2>
           </div>
           <div className="student-project-tabs" role="tablist" aria-label="Project status">
@@ -248,35 +242,34 @@ export default function StudentDashboard({
                     ) : null}
                   </div>
                 </div>
-                <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
-                  <DownloadIcon className="icon" />
-                  Open
-                </button>
+                <div className="student-document-actions">
+                  <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
+                    <DownloadIcon className="icon" />
+                    View
+                  </button>
+                  {(projectTab === 'pending' || projectTab === 'rejected') ? (
+                    <button
+                      type="button"
+                      className="primary-btn"
+                      onClick={() => onEditFinalYearProject?.(document.id)}
+                    >
+                      Edit
+                    </button>
+                  ) : null}
+                </div>
               </article>
             ))}
           </div>
         ) : (
           <p className="student-empty-copy">
             {projectTab === 'pending'
-              ? 'No pending submissions. Use Submit project to start the 5-step upload.'
+              ? 'No pending submissions. Open Final Year Project in the sidebar to start the 5-step upload.'
               : projectTab === 'accepted'
-                ? 'No accepted projects yet. Approved submissions will appear here and in the shared archive.'
-                : 'No rejected projects. If a submission is rejected, librarian feedback will show here.'}
+                ? 'No accepted projects yet. Approved submissions will appear here and under Archive project.'
+                : 'No rejected projects. If a submission is rejected, librarian feedback will show here. You can edit and resubmit.'}
           </p>
         )}
       </section>
-
-      {wizardOpen ? (
-        <StudentFypWizard
-          session={session}
-          onClose={() => setWizardOpen(false)}
-          onNotify={onNotify}
-          onSubmitted={async () => {
-            setProjectTab('pending')
-            await onRefresh?.()
-          }}
-        />
-      ) : null}
     </div>
   )
 }

@@ -107,23 +107,31 @@ public class DashboardService {
                 storageLimitBytes,
                 folderService.getTree(rawRole, rawStudentNumber),
                 recentFiles,
-                approvalTaskRepository.findTop5ByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
+                approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
                         .stream()
                         .filter(task -> task.getDocumentId() != null)
                         .filter(task -> documentRepository.findById(task.getDocumentId())
                                 .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
                                 .orElse(false))
-                        .map(task -> new com.auca.archive.dto.ApprovalTaskResponse(
-                                task.getId(),
-                                task.getDocumentId(),
-                                task.getDocumentTitle(),
-                                task.getRequestedBy(),
-                                task.getRequestedAt(),
-                                task.getDueAt(),
-                                task.getNote(),
-                                task.getPriority(),
-                                task.getStatus().name()
-                        ))
+                        .map(task -> {
+                            DocumentEntity document = documentRepository.findById(task.getDocumentId()).orElse(null);
+                            return new com.auca.archive.dto.ApprovalTaskResponse(
+                                    task.getId(),
+                                    task.getDocumentId(),
+                                    task.getDocumentTitle(),
+                                    task.getRequestedBy(),
+                                    document == null ? null : document.getStudentNumber(),
+                                    document == null ? null : document.getDescription(),
+                                    document == null ? null : document.getGithubUrl(),
+                                    document == null ? null : document.getExternalLinks(),
+                                    document == null ? null : document.getFileName(),
+                                    task.getRequestedAt(),
+                                    task.getDueAt(),
+                                    task.getNote(),
+                                    task.getPriority(),
+                                    task.getStatus().name()
+                            );
+                        })
                         .toList(),
                 recentActivity
         );

@@ -21,7 +21,7 @@ public class AccountSchemaMigration implements CommandLineRunner {
         jdbcTemplate.execute("""
                 ALTER TABLE accounts
                 ADD CONSTRAINT accounts_user_role_check
-                CHECK (user_role IN ('ADMIN', 'REGISTRAR', 'EXAMINATION_OFFICER', 'HOD', 'STUDENT'))
+                CHECK (user_role IN ('ADMIN', 'REGISTRAR', 'EXAMINATION_OFFICER', 'HOD', 'LIBRARIAN', 'STUDENT'))
                 """);
     }
 }

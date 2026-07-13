@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -104,6 +105,20 @@ public class DocumentController {
                 .body(resource);
     }
 
+    @GetMapping("/{id}/cover")
+    public ResponseEntity<Resource> downloadCover(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) throws IOException {
+        Resource resource = documentService.downloadCover(id, role, studentNumber);
+        String contentType = documentService.resolveCoverContentType(resource.getFilename());
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                .contentType(MediaType.parseMediaType(contentType))
+                .body(resource);
+    }
+
     @PostMapping(value = "/scan", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public DocumentScanResponse scan(
             @RequestPart("file") MultipartFile file,
@@ -121,6 +136,28 @@ public class DocumentController {
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) throws IOException {
         return documentService.upload(metadata, file, coverPhoto, role, studentNumber);
+    }
+
+    @PutMapping(value = "/{id}/file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public DocumentDetailResponse replaceDocumentFile(
+            @PathVariable Long id,
+            @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName
+    ) throws IOException {
+        return documentService.replaceDocumentFile(id, file, role, actorName);
+    }
+
+    @PutMapping(value = "/{id}/final-year-project", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public DocumentDetailResponse updatePendingFinalYearProject(
+            @PathVariable Long id,
+            @Valid @RequestPart("metadata") UploadDocumentRequest metadata,
+            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestPart(value = "coverPhoto", required = false) MultipartFile coverPhoto,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) throws IOException {
+        return documentService.updatePendingFinalYearProject(id, metadata, file, coverPhoto, role, studentNumber);
     }
 
     @PatchMapping("/{id}/status")

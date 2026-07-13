@@ -109,10 +109,12 @@ public class FolderController {
     public ResponseEntity<byte[]> downloadFolder(
             @PathVariable Long id,
             @RequestParam(required = false) List<Long> documentIds,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestParam(required = false) List<Long> folderIds,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) throws IOException {
-        byte[] zipBytes = folderService.downloadAsZip(id, documentIds, role);
-        FolderDetailResponse folder = folderService.getFolderDetail(id, role);
+        byte[] zipBytes = folderService.downloadAsZip(id, documentIds, folderIds, role, studentNumber);
+        FolderDetailResponse folder = folderService.getFolderDetail(id, role, studentNumber);
         String safeName = folder.name().replaceAll("[^a-zA-Z0-9-_ ]", "_").trim().replaceAll("\\s+", "-");
         if (safeName.isBlank()) {
             safeName = "folder-" + id;
@@ -130,7 +132,7 @@ public class FolderController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Name", required = false) String actorName
     ) {
-        return folderService.shareFolder(id, request.targetRole(), role, actorName);
+        return folderService.shareFolder(id, request.targetRole(), request.permission(), role, actorName);
     }
 
     @GetMapping("/{id}/has-contents")

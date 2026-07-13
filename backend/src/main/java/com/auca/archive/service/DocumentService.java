@@ -23,6 +23,7 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -33,6 +34,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -47,6 +49,7 @@ public class DocumentService {
     private static final float A4_HEIGHT = 842f;
     private static final float LETTER_WIDTH = 612f;
     private static final float LETTER_HEIGHT = 792f;
+    private static final long FYP_ZIP_MAX_BYTES = 1024L * 1024L;
 
     private final DocumentRepository documentRepository;
     private final FolderService folderService;
@@ -57,6 +60,7 @@ public class DocumentService {
     private final FileEncryptionService fileEncryptionService;
     private final ActivityService activityService;
     private final ApprovalTaskRepository approvalTaskRepository;
+    private final ProjectLinkValidator projectLinkValidator;
     private final DocumentElasticsearchService documentElasticsearchService;
     private final StudentStorageService studentStorageService;
     private final Path storageRoot;
@@ -74,6 +78,7 @@ public class DocumentService {
             FileEncryptionService fileEncryptionService,
             ActivityService activityService,
             ApprovalTaskRepository approvalTaskRepository,
+            ProjectLinkValidator projectLinkValidator,
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             DocumentElasticsearchService documentElasticsearchService,
             StudentStorageService studentStorageService,
@@ -91,6 +96,7 @@ public class DocumentService {
         this.fileEncryptionService = fileEncryptionService;
         this.activityService = activityService;
         this.approvalTaskRepository = approvalTaskRepository;
+        this.projectLinkValidator = projectLinkValidator;
         this.documentElasticsearchService = documentElasticsearchService;
         this.studentStorageService = studentStorageService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
@@ -219,6 +225,46 @@ public class DocumentService {
         };
     }
 
+    public Resource downloadCover(Long id) throws IOException {
+        return downloadCover(id, null, null);
+    }
+
+    public Resource downloadCover(Long id, String rawRole, String rawStudentNumber) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
+        DocumentEntity document = documentRepository.findById(id)
+                .filter(entity -> !entity.isArchivedForRemoval())
+                .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        if (document.getCoverPhotoPath() == null || document.getCoverPhotoPath().isBlank()) {
+            throw new IllegalArgumentException("Document has no cover photo");
+        }
+        Path path = Path.of(document.getCoverPhotoPath());
+        if (!Files.exists(path)) {
+            throw new IllegalArgumentException("Cover photo is unavailable");
+        }
+        byte[] bytes = Files.readAllBytes(path);
+        String filename = path.getFileName() == null ? "cover.jpg" : path.getFileName().toString();
+        return new ByteArrayResource(bytes) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        };
+    }
+
+    public String resolveCoverContentType(String filename) {
+        String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return MediaType.IMAGE_PNG_VALUE;
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        return MediaType.IMAGE_JPEG_VALUE;
+    }
+
     @Transactional
     public DocumentDetailResponse upload(UploadDocumentRequest request, MultipartFile file) throws IOException {
         return upload(request, file, null);
@@ -298,8 +344,8 @@ public class DocumentService {
         entity.setUploadedBy(request.uploadedBy().trim());
         entity.setDescription(trimToNull(request.description()));
         entity.setTags(trimToNull(request.tags()));
-        entity.setGithubUrl(trimToNull(request.githubUrl()));
-        entity.setExternalLinks(trimToNull(request.externalLinks()));
+        entity.setGithubUrl(projectLinkValidator.normalizeGithubUrl(request.githubUrl()));
+        entity.setExternalLinks(projectLinkValidator.normalizeExternalLinks(request.externalLinks()));
         entity.setCoverPhotoPath(coverPhotoStoredPath);
         entity.setExamType(examPaperType == null ? null : examPaperType.name());
         entity.setAcademicYear(trimToNull(request.academicYear()));
@@ -318,14 +364,17 @@ public class DocumentService {
         entity.setPageCount(request.pageCount() == null || request.pageCount() < 1 ? 1 : request.pageCount());
         entity.setIssueDate(request.issueDate() == null ? java.time.LocalDate.now() : request.issueDate());
         entity.setStarred(Boolean.FALSE);
-        entity.setStatus(DocumentStatus.PENDING);
+        boolean studentFypSubmission = role == UserRole.STUDENT
+                && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT;
+        // Registrar and other office uploads enter the archive immediately (no pending gate).
+        entity.setStatus(studentFypSubmission ? DocumentStatus.PENDING : DocumentStatus.APPROVED);
         entity.setType(isStudentProjectZip(request, file) ? DocumentType.ZIP : DocumentType.PDF);
         entity.setCategory(request.category());
         entity.setCreatedAt(LocalDateTime.now());
         entity.setModifiedAt(LocalDateTime.now());
 
         DocumentEntity saved = documentRepository.save(entity);
-        if (saved.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+        if (studentFypSubmission) {
             createLibrarianApprovalTask(saved);
             activityService.recordAction(
                     "Submitted final year project \"" + saved.getTitle() + "\" for librarian approval",
@@ -334,8 +383,160 @@ public class DocumentService {
             );
         } else {
             syncSearchIndex(saved);
+            activityService.recordAction(
+                    "Uploaded \"" + saved.getTitle() + "\"",
+                    saved.getUploadedBy() == null || saved.getUploadedBy().isBlank()
+                            ? (role == null ? "Archive user" : role.name())
+                            : saved.getUploadedBy(),
+                    ActivityCategory.UPLOAD
+            );
         }
         return toDetail(saved);
+    }
+
+    @Transactional
+    public DocumentDetailResponse updatePendingFinalYearProject(
+            Long id,
+            UploadDocumentRequest request,
+            MultipartFile file,
+            MultipartFile coverPhoto,
+            String rawRole,
+            String rawStudentNumber
+    ) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String sessionStudentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, sessionStudentNumber);
+        if (role != UserRole.STUDENT) {
+            throw new IllegalArgumentException("Only students can edit pending final year project submissions");
+        }
+
+        DocumentEntity entity = documentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        if (!accessService.isStudentDocument(entity, sessionStudentNumber)) {
+            throw new IllegalArgumentException("Document not found: " + id);
+        }
+        if (entity.getCategory() != StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            throw new IllegalArgumentException("Only final year project submissions can be edited here");
+        }
+        if (entity.getStatus() != DocumentStatus.PENDING && entity.getStatus() != DocumentStatus.REJECTED) {
+            throw new IllegalArgumentException("Only pending or rejected submissions can be edited");
+        }
+
+        if (request.category() != null && request.category() != StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            throw new IllegalArgumentException("Category cannot be changed for a final year project");
+        }
+
+        String title = trimToNull(request.projectTitle());
+        if (title == null) {
+            title = trimToNull(request.title());
+        }
+        if (title == null) {
+            throw new IllegalArgumentException("Project title is required");
+        }
+
+        entity.setTitle(title);
+        entity.setDescription(trimToNull(request.description()));
+        entity.setGithubUrl(projectLinkValidator.normalizeGithubUrl(request.githubUrl()));
+        entity.setExternalLinks(projectLinkValidator.normalizeExternalLinks(request.externalLinks()));
+        entity.setDepartment(trimToNull(request.department()) == null ? entity.getDepartment() : request.department().trim());
+        entity.setModifiedAt(LocalDateTime.now());
+        entity.setStatus(DocumentStatus.PENDING);
+        entity.setReviewNote(null);
+
+        Path studentRoot = Path.of(entity.getFilePath()).getParent();
+        if (studentRoot == null) {
+            studentRoot = storageRoot;
+        }
+        Files.createDirectories(studentRoot);
+
+        if (file != null && !file.isEmpty()) {
+            byte[] fileBytes = file.getBytes();
+            validateUpload(request == null
+                    ? new UploadDocumentRequest(
+                    title,
+                    entity.getStudentNumber(),
+                    entity.getOwnerName(),
+                    null,
+                    entity.getDepartment(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    entity.getUploadedBy(),
+                    StudentDocumentCategory.FINAL_YEAR_PROJECT,
+                    1,
+                    entity.getIssueDate(),
+                    entity.getDescription(),
+                    entity.getTags(),
+                    entity.getGithubUrl(),
+                    entity.getExternalLinks(),
+                    title
+            )
+                    : request, file, fileBytes, role);
+            if (fileBytes.length > FYP_ZIP_MAX_BYTES) {
+                throw new IllegalArgumentException("Final year project ZIP must be 1 MB or smaller");
+            }
+            long delta = file.getSize() - (entity.getSizeBytes() == null ? 0L : entity.getSizeBytes());
+            if (delta > 0) {
+                studentStorageService.requireQuota(sessionStudentNumber, delta);
+            }
+            String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
+                    ? "project.zip"
+                    : file.getOriginalFilename();
+            String storedName = UUID.randomUUID() + "_" + sanitizeFileName(originalName);
+            Path target = studentRoot.resolve(storedName);
+            FileEncryptionService.EncryptedPayload encrypted = fileEncryptionService.encrypt(fileBytes);
+            Files.write(target, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            deleteQuietly(entity.getFilePath());
+            entity.setFileName(originalName);
+            entity.setFilePath(target.toString());
+            entity.setEncrypted(fileEncryptionService.isEnabled());
+            entity.setEncryptionIv(encrypted.ivBase64());
+            entity.setMimeType(file.getContentType() == null || file.getContentType().isBlank()
+                    ? "application/zip"
+                    : file.getContentType());
+            entity.setSizeBytes(file.getSize());
+            entity.setType(DocumentType.ZIP);
+        }
+
+        if (coverPhoto != null && !coverPhoto.isEmpty()) {
+            String coverPhotoStoredPath = storeCoverPhoto(coverPhoto, studentRoot);
+            deleteQuietly(entity.getCoverPhotoPath());
+            entity.setCoverPhotoPath(coverPhotoStoredPath);
+        }
+
+        DocumentEntity saved = documentRepository.save(entity);
+        List<ApprovalTaskEntity> pendingTasks = approvalTaskRepository.findByDocumentIdAndStatus(saved.getId(), ApprovalStatus.PENDING);
+        if (pendingTasks.isEmpty()) {
+            createLibrarianApprovalTask(saved);
+        } else {
+            for (ApprovalTaskEntity task : pendingTasks) {
+                task.setDocumentTitle(saved.getTitle());
+                task.setRequestedAt(LocalDateTime.now());
+                task.setDueAt(LocalDateTime.now().plusDays(7));
+                task.setNote("Updated by student and awaiting librarian review");
+                approvalTaskRepository.save(task);
+            }
+        }
+        activityService.recordAction(
+                "Updated final year project \"" + saved.getTitle() + "\" (pending librarian approval)",
+                saved.getOwnerName(),
+                ActivityCategory.UPLOAD
+        );
+        return toDetail(saved);
+    }
+
+    private void deleteQuietly(String pathValue) {
+        if (pathValue == null || pathValue.isBlank()) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(Path.of(pathValue));
+        } catch (IOException ignored) {
+            // Best-effort cleanup of replaced files.
+        }
     }
 
     private List<DocumentEntity> searchDocumentsFromStore(String trimmed, StudentDocumentCategory category) {
@@ -403,6 +604,15 @@ public class DocumentService {
             entity.setReviewNote(reviewNote.trim());
         }
         entity.setModifiedAt(LocalDateTime.now());
+
+        if (entity.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            if (status == DocumentStatus.APPROVED) {
+                placeApprovedFinalYearProject(entity);
+            } else if (status == DocumentStatus.REJECTED) {
+                placeRejectedFinalYearProject(entity);
+            }
+        }
+
         DocumentEntity saved = documentRepository.save(entity);
         if (status == DocumentStatus.APPROVED) {
             syncSearchIndex(saved);
@@ -414,9 +624,103 @@ public class DocumentService {
         return toDetail(saved);
     }
 
+    private void placeApprovedFinalYearProject(DocumentEntity entity) {
+        StudentEntity student = studentService.getStudentOrThrow(entity.getStudentNumber());
+        FolderEntity profileFolder = archiveTreeService.createAcceptedProjectProfile(
+                student,
+                entity.getTitle(),
+                entity.getId()
+        );
+        entity.setFolderId(profileFolder.getId());
+        archiveTreeService.ensureLibrarianReviewFolders();
+    }
+
+    private void placeRejectedFinalYearProject(DocumentEntity entity) {
+        StudentEntity student = studentService.getStudentOrThrow(entity.getStudentNumber());
+        FolderEntity rejectedFolder = archiveTreeService.placeRejectedProject(
+                student,
+                entity.getTitle(),
+                entity.getId()
+        );
+        entity.setFolderId(rejectedFolder.getId());
+    }
+
     @Transactional
     public void deleteDocument(Long id, String rawRole) {
         archiveDocument(id, rawRole);
+    }
+
+    @Transactional
+    public DocumentDetailResponse replaceDocumentFile(
+            Long id,
+            MultipartFile file,
+            String rawRole,
+            String actorName
+    ) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        if (role == UserRole.STUDENT) {
+            throw new IllegalArgumentException("Students cannot replace staff archive documents here");
+        }
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Replacement file is required");
+        }
+        DocumentEntity entity = documentRepository.findById(id)
+                .filter(document -> !document.isArchivedForRemoval())
+                .filter(document -> folderService.isDocumentAccessible(document, role, null))
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        folderService.requireDocumentShareAtLeast(entity, role, com.auca.archive.domain.SharePermission.EDIT);
+
+        byte[] fileBytes = file.getBytes();
+        if (fileBytes.length < 1) {
+            throw new IllegalArgumentException("Replacement file is empty");
+        }
+
+        String originalName = file.getOriginalFilename() == null ? "document.pdf" : file.getOriginalFilename();
+        Path previousPath = entity.getFilePath() == null || entity.getFilePath().isBlank()
+                ? null
+                : Path.of(entity.getFilePath());
+        Path targetDirectory = previousPath != null && previousPath.getParent() != null
+                ? previousPath.getParent()
+                : storageRoot.resolve("replaced");
+        Files.createDirectories(targetDirectory);
+
+        FileEncryptionService.EncryptedPayload encrypted = fileEncryptionService.encrypt(fileBytes);
+        String storedName = UUID.randomUUID() + "_" + sanitizeFileName(originalName);
+        Path targetPath = targetDirectory.resolve(storedName);
+        Files.write(targetPath, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+        entity.setFileName(sanitizeFileName(originalName));
+        entity.setFilePath(targetPath.toString());
+        entity.setMimeType(file.getContentType() == null ? "application/octet-stream" : file.getContentType());
+        entity.setSizeBytes((long) fileBytes.length);
+        entity.setEncrypted(fileEncryptionService.isEnabled());
+        entity.setEncryptionIv(encrypted.ivBase64());
+        entity.setModifiedAt(LocalDateTime.now());
+        if (actorName != null && !actorName.isBlank()) {
+            entity.setUploadedBy(actorName);
+        }
+        if (originalName.toLowerCase(Locale.ROOT).endsWith(".zip")
+                || String.valueOf(file.getContentType()).toLowerCase(Locale.ROOT).contains("zip")) {
+            entity.setType(DocumentType.ZIP);
+        } else if (originalName.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            entity.setType(DocumentType.PDF);
+        }
+
+        DocumentEntity saved = documentRepository.save(entity);
+        if (previousPath != null) {
+            try {
+                Files.deleteIfExists(previousPath);
+            } catch (IOException ignored) {
+                // Best-effort cleanup of replaced files.
+            }
+        }
+        syncSearchIndex(saved);
+        activityService.recordAction(
+                "Replaced file for \"" + saved.getTitle() + "\"",
+                actorName == null || actorName.isBlank() ? role.name() : actorName,
+                ActivityCategory.UPLOAD
+        );
+        return toDetail(saved);
     }
 
     @Transactional
@@ -500,6 +804,9 @@ public class DocumentService {
             if (trimToNull(request.projectTitle()) == null && trimToNull(request.title()) == null) {
                 throw new IllegalArgumentException("Project title is required");
             }
+            if (fileBytes.length > FYP_ZIP_MAX_BYTES) {
+                throw new IllegalArgumentException("Final year project ZIP must be 1 MB or smaller");
+            }
             return;
         }
 
@@ -549,14 +856,28 @@ public class DocumentService {
         String originalName = coverPhoto.getOriginalFilename() == null ? "cover.jpg" : coverPhoto.getOriginalFilename();
         String lower = originalName.toLowerCase();
         if (!(lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp"))) {
-            throw new IllegalArgumentException("Cover photo must be a JPG, PNG, or WEBP image");
+            throw new IllegalArgumentException("Face photo must be a JPG, PNG, or WEBP image");
         }
         if (coverPhoto.getSize() > 2 * 1024 * 1024L) {
-            throw new IllegalArgumentException("Cover photo must be 2 MB or smaller");
+            throw new IllegalArgumentException("Face photo must be 2 MB or smaller");
+        }
+        byte[] bytes = coverPhoto.getBytes();
+        try (java.io.ByteArrayInputStream input = new java.io.ByteArrayInputStream(bytes)) {
+            java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(input);
+            if (image == null) {
+                throw new IllegalArgumentException("Face photo could not be read. Upload a clear photo of your face.");
+            }
+            if (image.getWidth() < 180 || image.getHeight() < 180) {
+                throw new IllegalArgumentException("Face photo is too small. Use at least 180x180 pixels.");
+            }
+            // Reject extremely wide landscape banners that are unlikely to be a portrait face photo.
+            if (image.getWidth() > image.getHeight() * 1.6) {
+                throw new IllegalArgumentException("Upload a portrait face photo, not a wide landscape image.");
+            }
         }
         String storedName = UUID.randomUUID() + "_cover_" + sanitizeFileName(originalName);
         Path target = studentRoot.resolve(storedName);
-        Files.write(target, coverPhoto.getBytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.write(target, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         return target.toString();
     }
 
@@ -669,7 +990,9 @@ public class DocumentService {
                 document.getArchivedBy(),
                 document.getGithubUrl(),
                 document.getExternalLinks(),
-                document.getReviewNote()
+                document.getReviewNote(),
+                document.getDescription(),
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
         );
     }
 
@@ -706,6 +1029,9 @@ public class DocumentService {
                 document.getGithubUrl(),
                 document.getExternalLinks(),
                 document.getReviewNote(),
+                document.getCoverPhotoPath() == null || document.getCoverPhotoPath().isBlank()
+                        ? null
+                        : "/api/documents/" + document.getId() + "/cover",
                 "/api/documents/" + document.getId() + "/download"
         );
     }

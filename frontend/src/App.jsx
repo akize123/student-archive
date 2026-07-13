@@ -1,15 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getArchivedDocuments, getDashboard, getFolder, getStudentArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, restoreDocument, scanDocument, searchDocuments, shareFolder, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import AdminOfficeView, { buildAdminOffices } from './components/AdminOfficeView'
 import StudentDashboard from './components/StudentDashboard'
+import StudentFypWizard from './components/StudentFypWizard'
+import ProjectCoverPhoto from './components/ProjectCoverPhoto'
 import BrandLogo from './components/BrandLogo'
 import {
   ACADEMIC_YEARS,
   applyStudentIdDefaults,
   normalizeStudentId,
   semesterOptionsForAcademicYear,
+  STAFF_FOLDER_NAME_HINT,
   STUDENT_ID_FORMATS_HINT,
+  validateStaffFolderName,
   validateStudentIdDepartmentMatch,
   validateStudentIdForNewEntry
 } from './studentId'
@@ -36,7 +40,8 @@ import {
   HomeIcon,
   MailIcon,
   LockIcon,
-  ChevronDownIcon
+  ChevronDownIcon,
+  BellIcon
 } from './components/Icons'
 
 const demoDashboard = {
@@ -165,18 +170,21 @@ const demoDashboard = {
 const quickAccess = [
   { label: 'Recent', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' }
 ]
 
 const staffQuickAccess = [
   { label: 'Recent', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' },
   { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
 ]
 
 const adminQuickAccess = [
   { label: 'System Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' },
   { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
 ]
@@ -240,7 +248,7 @@ const studentFacultyOptions = [
   {
     value: 'Faculty of Business Administration',
     label: 'Faculty of Business Administration',
-    departments: ['Accounting', 'Management', 'Finance', 'Information Management']
+    departments: ['Accounting', 'Management', 'Finance']
   },
   {
     value: 'Faculty of Information Technology',
@@ -285,28 +293,21 @@ const emptyDashboard = {
 
 const AUTH_SESSION_KEY = 'auca-archive-session'
 
-const shareDestinationsByRole = {
-  REGISTRAR: [
-    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
-    { value: 'HOD', label: 'Head of Department' }
-  ],
-  EXAMINATION_OFFICER: [
-    { value: 'REGISTRAR', label: 'Registrar' },
-    { value: 'HOD', label: 'Head of Department' }
-  ],
-  HOD: [
-    { value: 'REGISTRAR', label: 'Registrar' },
-    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' }
-  ],
-  ADMIN: [
-    { value: 'REGISTRAR', label: 'Registrar' },
-    { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
-    { value: 'HOD', label: 'Head of Department' }
-  ]
-}
+const SHARE_DESTINATIONS = [
+  { value: 'EXAMINATION_OFFICER', label: 'Examination Office' },
+  { value: 'HOD', label: 'Head of Department' },
+  { value: 'LIBRARIAN', label: 'Librarian' },
+  { value: 'STUDENT', label: 'Student' }
+]
+
+const SHARE_PERMISSIONS = [
+  { value: 'READ_ONLY', label: 'Read only', hint: 'View and download only' },
+  { value: 'WRITE', label: 'Write', hint: 'Upload files and create folders' },
+  { value: 'EDIT', label: 'Edit', hint: 'Replace, rename, and modify items' }
+]
 
 function getShareDestinations(role) {
-  return shareDestinationsByRole[role] || []
+  return SHARE_DESTINATIONS.filter((destination) => destination.value !== role)
 }
 
 function activityCategoryLabel(category) {
@@ -348,6 +349,23 @@ function filterTreeNodes(nodes, query) {
   }
 
   return walk(nodes)
+}
+
+function stripLibrarianReviewFolders(nodes) {
+  return (nodes || []).flatMap((node) => {
+    const code = String(node.code || '').toUpperCase()
+    const name = String(node.name || '').trim().toLowerCase()
+    if (code === 'LIB-FYP' || code.startsWith('LIB-FYP') || name === 'library fyp reviews') {
+      return []
+    }
+    if (code.includes('-SHARED') || code === 'SHARED' || name === 'shared documents') {
+      return []
+    }
+    return [{
+      ...node,
+      children: stripLibrarianReviewFolders(node.children || [])
+    }]
+  })
 }
 
 const roleDashboardConfig = {
@@ -414,10 +432,35 @@ function loadStoredSession() {
   }
 }
 
+function findStudentDefaultFolders(nodes) {
+  const official = (nodes || []).find((node) => {
+    const code = String(node.code || '').toUpperCase()
+    const name = String(node.name || '')
+    return code.endsWith('-SOFF') || name === 'Official Documents'
+  }) || null
+  const projects = (nodes || []).find((node) => {
+    const code = String(node.code || '').toUpperCase()
+    const name = String(node.name || '')
+    return code.endsWith('-SMY') || name === 'Final Year Project' || name === 'My Projects'
+  }) || null
+  const archive = (nodes || []).find((node) => {
+    const code = String(node.code || '').toUpperCase()
+    const name = String(node.name || '').toLowerCase()
+    return code.endsWith('-SARC') || name === 'archive project'
+  }) || null
+  return { official, projects, archive }
+}
+
 function findStudentPersonalFolderParent(nodes, studentNumber) {
+  const { projects, official } = findStudentDefaultFolders(nodes)
+  if (projects) {
+    return projects
+  }
+  if (official) {
+    return official
+  }
   const marker = String(studentNumber || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
   let studentRoot = null
-  let projectFolder = null
 
   function walk(list) {
     for (const node of list || []) {
@@ -426,9 +469,6 @@ function findStudentPersonalFolderParent(nodes, studentNumber) {
       if (marker && code.includes(`-STU-${marker}`) && name === String(studentNumber)) {
         studentRoot = node
       }
-      if (code.endsWith('-SFYP') || name === 'Final Year Project') {
-        projectFolder = node
-      }
       if (node.children?.length) {
         walk(node.children)
       }
@@ -436,25 +476,91 @@ function findStudentPersonalFolderParent(nodes, studentNumber) {
   }
 
   walk(nodes)
-  return projectFolder || studentRoot
+  return studentRoot
 }
 
-function canStudentCreateInFolder(folder, studentNumber) {
-  if (!folder || !studentNumber) {
+function canStudentCreateInFolder(folder) {
+  if (!folder) {
     return false
   }
   const code = String(folder.code || '').toUpperCase()
-  const marker = String(studentNumber).replace(/[^A-Za-z0-9]/g, '').toUpperCase()
-  if (['-SREG', '-SRIN', '-SAPP', '-SEXM'].some((suffix) => code.endsWith(suffix))) {
+  if (code.includes('-SARC') || code.includes('LIB-FYP')) {
     return false
   }
-  return code.includes(`-STU-${marker}`) || code.endsWith('-SFYP') || code.includes('-MY-')
+  return code.includes('-SOFF') || code.includes('-SMY')
+}
+
+function isStudentFinalYearProjectFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  const name = String(folder.name || '').trim().toLowerCase()
+  return code.endsWith('-SMY') || name === 'final year project' || name === 'my projects'
+}
+
+function isStudentOfficialDocumentsFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  const name = String(folder.name || '').trim().toLowerCase()
+  return code.includes('-SOFF') || name === 'official documents'
+}
+
+function canStudentUploadInFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  if (code.includes('-SARC') || code.includes('LIB-FYP') || code.includes('-SMY')) {
+    return false
+  }
+  return isStudentOfficialDocumentsFolder(folder)
+}
+
+function isArchiveProjectRootFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  const name = String(folder.name || '').trim().toLowerCase()
+  return code.endsWith('-SARC') || name === 'archive project'
+}
+
+function isProjectProfileFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  return code.includes('-SARC-PRF-') || /(?:^|-)PRF-/.test(code)
+}
+
+function splitExternalLinks(value) {
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function formatShortDate(value) {
+  if (!value) return '-'
+  return new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit'
+  }).format(new Date(value))
 }
 
 const NON_ADMIN_STAFF_ROLES = ['REGISTRAR', 'EXAMINATION_OFFICER', 'HOD', 'LIBRARIAN']
+const OFFICE_ARCHIVE_ROLES = ['REGISTRAR', 'EXAMINATION_OFFICER', 'HOD']
 
 function isNonAdminStaffRole(userRole) {
   return NON_ADMIN_STAFF_ROLES.includes(userRole)
+}
+
+function isOfficeArchiveRole(userRole) {
+  return OFFICE_ARCHIVE_ROLES.includes(userRole)
 }
 
 function isFacultyFolder(folder) {
@@ -465,6 +571,16 @@ function isFacultyFolder(folder) {
 function isDepartmentFolder(folder) {
   const code = String(folder?.code || '').toUpperCase()
   return /^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$/.test(code)
+}
+
+function isAcademicYearFolder(folder) {
+  const code = String(folder?.code || '').toUpperCase()
+  return /-AY-\d{8}$/.test(code)
+}
+
+function isSemesterOrDeeperFolder(folder) {
+  const code = String(folder?.code || '').toUpperCase()
+  return code.includes('-SEM-')
 }
 
 function isProtectedArchiveStructureFolder(folder) {
@@ -487,10 +603,18 @@ function canStaffCreateArchiveSubfolder(parentFolder, userRole) {
   if (userRole === 'ADMIN') {
     return true
   }
+  // Registrar, Examination Office, and HOD manage documents from semester level downward.
+  if (isOfficeArchiveRole(userRole)) {
+    return isSemesterOrDeeperFolder(parentFolder)
+  }
   if (isNonAdminStaffRole(userRole)) {
     return !isDepartmentFolder(parentFolder)
   }
   return true
+}
+
+function isOfficeStructureBrowseOnly(folder, userRole) {
+  return isOfficeArchiveRole(userRole) && !isSemesterOrDeeperFolder(folder)
 }
 
 function findFolderNode(nodes, folderId) {
@@ -507,7 +631,7 @@ function findFolderNode(nodes, folderId) {
 }
 
 function canManageFolder(folder, userRole, studentNumber) {
-  if (!folder || folder.parentId == null) {
+  if (!folder || folder.parentId == null || folder.locked) {
     return false
   }
   if (isProtectedArchiveStructureFolder(folder)) {
@@ -515,10 +639,10 @@ function canManageFolder(folder, userRole, studentNumber) {
   }
   if (userRole === 'STUDENT') {
     const code = String(folder.code || '').toUpperCase()
-    if (['-SREG', '-SRIN', '-SAPP', '-SEXM'].some((suffix) => code.endsWith(suffix))) {
+    if (code.endsWith('-SOFF') || code.endsWith('-SMY')) {
       return false
     }
-    return code.includes('-MY-')
+    return code.includes('-MY-') && (code.includes('-SOFF') || code.includes('-SMY'))
   }
   return true
 }
@@ -528,7 +652,7 @@ function canPasteIntoFolder(folder, userRole, studentNumber) {
     return false
   }
   if (userRole === 'STUDENT') {
-    return canStudentCreateInFolder(folder, studentNumber)
+    return canStudentCreateInFolder(folder)
   }
   return true
 }
@@ -627,6 +751,196 @@ function formatFolderLocation(nodes, folderId) {
   return path.join(' / ')
 }
 
+function findFolderAncestors(nodes, folderId, trail = []) {
+  for (const node of nodes || []) {
+    const nextTrail = [...trail, node]
+    if (Number(node.id) === Number(folderId)) {
+      return nextTrail
+    }
+    const nested = findFolderAncestors(node.children, folderId, nextTrail)
+    if (nested) {
+      return nested
+    }
+  }
+  return null
+}
+
+function isStudentWorkspaceFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  return code.includes('-STU-')
+}
+
+/** Pick the best navigable container for a match (project / student / semester / folder). */
+function resolveSearchProjectContainer(folderId, archiveTree, fallbackName = 'Archive location') {
+  const ancestors = findFolderAncestors(archiveTree, folderId)
+  if (!ancestors?.length) {
+    return {
+      id: folderId,
+      name: fallbackName,
+      code: '',
+      location: fallbackName
+    }
+  }
+
+  const pick = (predicate) => {
+    for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+      if (predicate(ancestors[index])) {
+        return ancestors[index]
+      }
+    }
+    return null
+  }
+
+  const container = pick(isProjectProfileFolder)
+    || pick(isArchiveProjectRootFolder)
+    || pick(isStudentFinalYearProjectFolder)
+    || pick(isStudentOfficialDocumentsFolder)
+    || pick(isStudentWorkspaceFolder)
+    || pick(isSemesterOrDeeperFolder)
+    || pick(isDepartmentFolder)
+    || ancestors[ancestors.length - 1]
+
+  return {
+    id: container.id,
+    name: container.name,
+    code: container.code || '',
+    location: formatFolderLocation(archiveTree, container.id) || container.name
+  }
+}
+
+/**
+ * Registrar search: collapse document/folder hits into whole archive locations
+ * so one click opens the containing project/folder.
+ */
+function groupRegistrarSearchAsProjects(documents, folderMatches, archiveTree) {
+  const projects = new Map()
+
+  function ensureProject(container, seed = {}) {
+    const key = String(container.id)
+    if (!projects.has(key)) {
+      projects.set(key, {
+        id: `project-${container.id}`,
+        kind: 'project',
+        title: container.name,
+        fileName: container.code || 'Archive location',
+        folderId: container.id,
+        folderName: container.name,
+        location: container.location,
+        department: container.location,
+        studentNumber: seed.studentNumber || '',
+        ownerName: seed.ownerName || '',
+        category: 'PROJECT',
+        modifiedAt: seed.modifiedAt || null,
+        matchCount: 0,
+        matchedLabels: []
+      })
+    }
+    return projects.get(key)
+  }
+
+  for (const folderRow of folderMatches || []) {
+    if (!folderRow?.folderId) {
+      continue
+    }
+    const container = resolveSearchProjectContainer(folderRow.folderId, archiveTree, folderRow.title)
+    const project = ensureProject(container)
+    project.matchCount += 1
+    if (folderRow.title && !project.matchedLabels.includes(folderRow.title)) {
+      project.matchedLabels.push(folderRow.title)
+    }
+  }
+
+  for (const document of documents || []) {
+    if (!document?.folderId && !document?.studentNumber) {
+      continue
+    }
+    const studentFolder = document.studentNumber
+      ? findStudentFolderInTree(archiveTree, document.studentNumber)
+      : null
+    const targetFolderId = document.folderId || studentFolder?.id
+    if (!targetFolderId) {
+      continue
+    }
+    const container = resolveSearchProjectContainer(
+      targetFolderId,
+      archiveTree,
+      document.folderName || document.title || 'Archive location'
+    )
+    const project = ensureProject(container, {
+      studentNumber: document.studentNumber,
+      ownerName: document.ownerName,
+      modifiedAt: document.modifiedAt
+    })
+    project.matchCount += 1
+    if (!project.studentNumber && document.studentNumber) {
+      project.studentNumber = document.studentNumber
+    }
+    if (!project.ownerName && document.ownerName) {
+      project.ownerName = document.ownerName
+    }
+    if (document.modifiedAt && (!project.modifiedAt || String(document.modifiedAt) > String(project.modifiedAt))) {
+      project.modifiedAt = document.modifiedAt
+    }
+    const label = document.title || document.fileName
+    if (label && !project.matchedLabels.includes(label)) {
+      project.matchedLabels.push(label)
+    }
+  }
+
+  return [...projects.values()].map((project) => {
+    const preview = project.matchedLabels.slice(0, 2).join(' · ')
+    const extra = project.matchedLabels.length > 2
+      ? ` (+${project.matchedLabels.length - 2} more)`
+      : ''
+    return {
+      ...project,
+      fileName: project.matchCount === 1
+        ? (preview || '1 match inside this location')
+        : `${project.matchCount} matches${preview ? `: ${preview}${extra}` : ''}`
+    }
+  })
+}
+
+/**
+ * Registrar search: matching documents first (best match on top),
+ * then archive locations for quick navigation.
+ */
+function buildRegistrarSearchResults(documents, folderMatches, archiveTree, query) {
+  const trimmed = String(query || '').trim().toLowerCase()
+  const rankedDocuments = enrichResultsWithLocation(documents || [], archiveTree)
+    .map((document) => {
+      const fileName = String(document.fileName || '').toLowerCase()
+      const title = String(document.title || '').toLowerCase()
+      const studentNumber = String(document.studentNumber || '').toLowerCase()
+      let score = 10
+      if (fileName === trimmed || title === trimmed) {
+        score = 100
+      } else if (fileName.includes(trimmed) || title.includes(trimmed)) {
+        score = 85
+      } else if (studentNumber === trimmed) {
+        score = 70
+      } else if (studentNumber.includes(trimmed)) {
+        score = 55
+      }
+      return {
+        ...document,
+        kind: 'document',
+        _score: score
+      }
+    })
+    .sort((left, right) => right._score - left._score || String(right.modifiedAt || '').localeCompare(String(left.modifiedAt || '')))
+    .map(({ _score, ...document }) => document)
+
+  const locations = groupRegistrarSearchAsProjects(documents, folderMatches, archiveTree)
+  const documentFolderIds = new Set(rankedDocuments.map((document) => document.folderId).filter(Boolean))
+  const extraLocations = locations.filter((location) => !documentFolderIds.has(location.folderId))
+
+  return [...rankedDocuments, ...extraLocations]
+}
+
 function searchArchiveTreeMatches(nodes, query, trail = []) {
   const trimmed = String(query || '').trim().toLowerCase()
   if (!trimmed) {
@@ -675,6 +989,7 @@ function enrichResultsWithLocation(results, archiveTree) {
 }
 
 const QUICK_ACCESS_OPEN_KEY = 'auca-quick-access-open'
+const ACTIVITY_SEEN_KEY_PREFIX = 'auca-activity-seen-'
 
 function loadQuickAccessOpen() {
   if (typeof window === 'undefined') {
@@ -689,6 +1004,44 @@ function loadQuickAccessOpen() {
   } catch {
     return true
   }
+}
+
+function activitySeenStorageKey(username) {
+  return `${ACTIVITY_SEEN_KEY_PREFIX}${String(username || 'anon').trim().toLowerCase()}`
+}
+
+function loadActivitySeenAt(username) {
+  if (typeof window === 'undefined' || !username) {
+    return null
+  }
+  try {
+    const raw = window.localStorage.getItem(activitySeenStorageKey(username))
+    return raw || null
+  } catch {
+    return null
+  }
+}
+
+function saveActivitySeenAt(username, iso) {
+  if (typeof window === 'undefined' || !username || !iso) {
+    return
+  }
+  try {
+    window.localStorage.setItem(activitySeenStorageKey(username), iso)
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.)
+  }
+}
+
+function latestActivityTimestamp(entries) {
+  let latest = 0
+  for (const entry of entries || []) {
+    const time = entry?.createdAt ? new Date(entry.createdAt).getTime() : 0
+    if (Number.isFinite(time) && time > latest) {
+      latest = time
+    }
+  }
+  return latest
 }
 
 function getRoleDashboardConfig(role) {
@@ -896,7 +1249,7 @@ function collectExpandedPath(nodes, activeFolderId, expanded = new Set()) {
   return expanded
 }
 
-function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFolderContextMenu, expandedIds, onToggleExpand }) {
+function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFolderContextMenu, expandedIds, onToggleExpand, allowDeleteFolder = true }) {
   return (
     <ul className="tree-list" role="tree">
       {nodes.map((node) => {
@@ -904,7 +1257,9 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
         const isExpanded = expandedIds.has(node.id)
         const isSelected = node.id === activeFolderId
         const isAncestor = isAncestorOfActive(node, activeFolderId)
-        const canDelete = node.parentId != null && !isProtectedArchiveStructureFolder(node)
+        const canDelete = allowDeleteFolder
+          && node.parentId != null
+          && !isProtectedArchiveStructureFolder(node)
 
         return (
           <li key={node.id} className="tree-item" role="treeitem" aria-expanded={hasChildren ? isExpanded : undefined}>
@@ -962,6 +1317,7 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
                   onFolderContextMenu={onFolderContextMenu}
                   expandedIds={expandedIds}
                   onToggleExpand={onToggleExpand}
+                  allowDeleteFolder={allowDeleteFolder}
                 />
               </div>
             ) : null}
@@ -969,6 +1325,84 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
         )
       })}
     </ul>
+  )
+}
+
+function StudentDefaultFoldersNav({ nodes, activeFolderId, onOpenFolder, onNotify }) {
+  const defaults = findStudentDefaultFolders(nodes)
+  const folders = [
+    {
+      key: 'official',
+      label: 'Official Documents',
+      hint: 'From registrar & exams',
+      node: defaults.official
+    },
+    {
+      key: 'projects',
+      label: 'Final Year Project',
+      hint: 'Submit and edit pending work',
+      node: defaults.projects
+    },
+    {
+      key: 'archive',
+      label: 'Archive project',
+      hint: 'Accepted project profiles',
+      node: defaults.archive
+    }
+  ]
+
+  return (
+    <div className="sidebar-section student-folders-nav">
+      <div className="section-head">
+        <p className="eyebrow">My folders</p>
+      </div>
+      <div className="student-folders-nav-list">
+        {folders.map((folder) => {
+          const isActive = Boolean(folder.node?.id && Number(activeFolderId) === Number(folder.node.id))
+          const childCount = folder.node?.itemCount ?? 0
+          return (
+            <div key={folder.key} className={`student-folder-nav-item ${isActive ? 'active' : ''}`}>
+              <button
+                type="button"
+                className="student-folder-nav-button"
+                onClick={() => {
+                  if (folder.node?.id) {
+                    onOpenFolder?.(folder.node.id)
+                  } else {
+                    onNotify?.(`${folder.label} is still being prepared. Refresh the page or open My archive.`)
+                  }
+                }}
+              >
+                <span className="student-folder-nav-icon" aria-hidden="true">
+                  <FolderIcon className="icon" />
+                  <LockIcon className="icon lock" />
+                </span>
+                <span className="student-folder-nav-copy">
+                  <strong>{folder.label}</strong>
+                  <em>{folder.hint}</em>
+                </span>
+                <span className="student-folder-nav-count">{childCount}</span>
+              </button>
+              {folder.node?.children?.length ? (
+                <div className="student-folder-nav-children">
+                  {folder.node.children.map((child) => (
+                    <button
+                      key={child.id}
+                      type="button"
+                      className={`student-folder-nav-child ${Number(activeFolderId) === Number(child.id) ? 'active' : ''}`}
+                      onClick={() => onOpenFolder?.(child.id)}
+                    >
+                      <FolderIcon className="icon" />
+                      <span>{child.name}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -980,10 +1414,12 @@ function ArchiveTreePanel({
   onFolderContextMenu,
   onAddFolder,
   allowAddFolder = true,
+  allowDeleteFolder = true,
   treeFilter,
   onTreeFilterChange,
   treeFilterOpen,
-  onToggleTreeFilter
+  onToggleTreeFilter,
+  title = 'Archive Tree'
 }) {
   const [expandedIds, setExpandedIds] = useState(() => collectDefaultExpandedIds(nodes))
   const visibleNodes = filterTreeNodes(nodes, treeFilter)
@@ -1021,12 +1457,12 @@ function ArchiveTreePanel({
   return (
     <div className="sidebar-section archive-tree">
       <div className="section-head archive-tree-head">
-        <p className="eyebrow">Archive Tree</p>
+        <p className="eyebrow">{title}</p>
         <div className="section-actions">
           {allowAddFolder ? (
-          <button type="button" className="ghost-icon" aria-label="Add folder" onClick={onAddFolder}>
-            <FolderPlusIcon className="icon" />
-          </button>
+            <button type="button" className="ghost-icon" aria-label="Add folder" onClick={onAddFolder}>
+              <FolderPlusIcon className="icon" />
+            </button>
           ) : null}
           <button
             type="button"
@@ -1058,6 +1494,7 @@ function ArchiveTreePanel({
           onFolderContextMenu={onFolderContextMenu}
           expandedIds={expandedIds}
           onToggleExpand={onToggleExpand}
+          allowDeleteFolder={allowDeleteFolder}
         />
       </div>
     </div>
@@ -1190,6 +1627,7 @@ function ConfirmDialog({
   selectOptions,
   selectValue,
   onSelectChange,
+  hideConfirmButton = false,
   onConfirm,
   onCancel,
   busy
@@ -1234,9 +1672,14 @@ function ConfirmDialog({
         {selectLabel ? (
           <label className="confirm-input-label">
             <span>{selectLabel}</span>
-            <select value={selectValue || ''} onChange={(event) => onSelectChange?.(event.target.value)} autoFocus={!inputLabel}>
+            <select
+              value={selectValue || ''}
+              onChange={(event) => onSelectChange?.(event.target.value)}
+              autoFocus={!inputLabel}
+              disabled={busy}
+            >
               {(selectOptions || []).map((option) => (
-                <option key={option.value} value={option.value}>
+                <option key={option.value || 'empty'} value={option.value} disabled={option.disabled}>
                   {option.label}
                 </option>
               ))}
@@ -1247,14 +1690,16 @@ function ConfirmDialog({
           <button type="button" className="ghost-btn" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </button>
-          <button
-            type="button"
-            className={tone === 'danger' ? 'danger-btn' : 'primary-btn'}
-            onClick={() => onConfirm?.(inputLabel ? inputValue : selectLabel ? selectValue : undefined)}
-            disabled={busy || (inputLabel ? !String(inputValue || '').trim() : false) || (selectLabel ? !String(selectValue || '').trim() : false)}
-          >
-            {busy ? 'Working...' : confirmLabel}
-          </button>
+          {hideConfirmButton ? null : (
+            <button
+              type="button"
+              className={tone === 'danger' ? 'danger-btn' : 'primary-btn'}
+              onClick={() => onConfirm?.(inputLabel ? inputValue : selectLabel ? selectValue : undefined)}
+              disabled={busy || (inputLabel ? !String(inputValue || '').trim() : false) || (selectLabel ? !String(selectValue || '').trim() : false)}
+            >
+              {busy ? 'Working...' : confirmLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1312,9 +1757,16 @@ function FolderContextMenu({
   )
 }
 
-function ExplorerStatusBadge({ status }) {
+function ExplorerStatusBadge({ status, userRole }) {
   const normalized = String(status || '').toUpperCase()
-  const label = normalized || 'UNKNOWN'
+  // Registrar uploads go straight into the archive — do not show pending/approved chips.
+  if (userRole === 'REGISTRAR') {
+    return null
+  }
+  if (!normalized || normalized === 'APPROVED') {
+    return null
+  }
+  const label = normalized
   return <span className={`explorer-status ${normalized.toLowerCase()}`}>{label}</span>
 }
 
@@ -1326,6 +1778,7 @@ function FolderView({
   studentNumber,
   onOpenFolder,
   onUpload,
+  onSubmitFinalYearProject,
   onRefresh,
   onFolderContextMenu,
   onGoBack,
@@ -1351,12 +1804,38 @@ function FolderView({
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareTargetRole, setShareTargetRole] = useState('')
+  const [sharePermission, setSharePermission] = useState('READ_ONLY')
   const [shareBusy, setShareBusy] = useState(false)
   const shareDestinations = getShareDestinations(userRole)
   const isStudent = userRole === 'STUDENT'
+  // Registrar / Exam / HOD: browse shell above semester; document tools from semester down.
+  // Department level also unlocks Download + Share so content can be mirrored across departments.
+  const isStructureBrowseOnly = isOfficeStructureBrowseOnly(folder, userRole) && !isDepartmentFolder(folder)
+  const showDepartmentShareTools = isOfficeArchiveRole(userRole) && isDepartmentFolder(folder)
   const canCreateFolder = isStudent
-    ? canStudentCreateInFolder(folder, studentNumber)
-    : canStaffCreateArchiveSubfolder(folder, userRole)
+    ? canStudentCreateInFolder(folder)
+    : !isStructureBrowseOnly && !showDepartmentShareTools && canStaffCreateArchiveSubfolder(folder, userRole)
+  const showFypSubmit = isStudent && isStudentFinalYearProjectFolder(folder)
+  const canUpload = isStudent
+    ? canStudentUploadInFolder(folder)
+    : isOfficeArchiveRole(userRole)
+      ? isSemesterOrDeeperFolder(folder)
+      : !isProtectedArchiveStructureFolder(folder)
+  const canDownload = isStudent
+    ? true
+    : isOfficeArchiveRole(userRole)
+      ? (isSemesterOrDeeperFolder(folder) || isDepartmentFolder(folder))
+      : !isProtectedArchiveStructureFolder(folder)
+  const canShare = !isStudent && (
+    isOfficeArchiveRole(userRole)
+      ? (isSemesterOrDeeperFolder(folder) || isDepartmentFolder(folder))
+      : !isProtectedArchiveStructureFolder(folder)
+  )
+  const canReplace = !isStudent && isSemesterOrDeeperFolder(folder)
+  const canFilterDocuments = isOfficeArchiveRole(userRole)
+    ? isSemesterOrDeeperFolder(folder)
+    : !isStudent
+  const replaceInputRef = useRef(null)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
@@ -1523,7 +2002,18 @@ function FolderView({
   })
 
   const breadcrumbs = folder.breadcrumbs || []
-  const isEmpty = !visibleChildren.length && !visibleDocuments.length
+  const showArchiveGallery = isArchiveProjectRootFolder(folder)
+  const showProfileHeader = isProjectProfileFolder(folder)
+  const profileDocument = showProfileHeader
+    ? documents.find((document) => String(document.category || '').toUpperCase() === 'FINAL_YEAR_PROJECT') || documents[0] || null
+    : null
+  const documentsByFolderId = new Map(
+    documents.map((document) => [Number(document.folderId), document])
+  )
+  const visibleDocumentsForGrid = showArchiveGallery ? [] : visibleDocuments
+  const isEmpty = showArchiveGallery
+    ? !visibleChildren.length
+    : !visibleChildren.length && !visibleDocumentsForGrid.length
   const selectedDocuments = getSelectedDocuments(documents)
   const selectedFolders = getSelectedFolders(children)
   const selectionCount = selectedFolderIds.size + selectedDocumentIds.size
@@ -1535,17 +2025,24 @@ function FolderView({
       title: 'Create new folder',
       message: isStudent
         ? `Create a personal folder inside "${folder.name}" for your project files?`
-        : `Create a subfolder inside "${folder.name}"?`,
+        : `Create a subfolder inside "${folder.name}". Name format: ${STAFF_FOLDER_NAME_HINT}.`,
       confirmLabel: 'Create folder',
       inputLabel: 'Folder name',
-      inputPlaceholder: 'Enter folder name',
+      inputPlaceholder: isStudent ? 'Enter folder name' : 'e.g. 20251SENG041',
       onConfirm: async (folderName) => {
         const trimmedName = String(folderName || '').trim()
         if (!trimmedName) {
           throw new Error('Please enter a folder name.')
         }
-        await createSubfolder(folder.id, trimmedName)
-        onNotify?.(`Folder "${trimmedName}" created.`)
+        if (!isStudent) {
+          const namingError = validateStaffFolderName(trimmedName)
+          if (namingError) {
+            throw new Error(namingError)
+          }
+        }
+        const finalName = isStudent ? trimmedName : normalizeStudentId(trimmedName)
+        await createSubfolder(folder.id, finalName)
+        onNotify?.(`Folder "${finalName}" created.`)
         await onDataChange?.()
       }
     })
@@ -1562,32 +2059,63 @@ function FolderView({
     })
   }
 
+  function handleOpenSelectedFolder() {
+    const targets = getSelectedFolders(children)
+    if (targets.length === 1) {
+      onOpenFolder?.(targets[0].id)
+      return
+    }
+    if (targets.length > 1) {
+      onNotify?.('Select one folder to open, or double-click a department to browse it.')
+      return
+    }
+    if (children.length === 1) {
+      onOpenFolder?.(children[0].id)
+      return
+    }
+    onNotify?.(
+      isFacultyFolder(folder)
+        ? 'Select a department folder, then click Open — or double-click it to browse.'
+        : isDepartmentFolder(folder)
+          ? 'Select an academic year, then click Open — or double-click it to browse.'
+          : isAcademicYearFolder(folder)
+            ? 'Select a semester folder, then click Open — or double-click it to manage documents.'
+            : 'Select a folder below, then click Open — or double-click it to browse deeper.'
+    )
+  }
+
   function handleDownloadClick() {
-    const targets = selectedDocuments
-    if (!targets.length) {
-      if (!documents.length) {
-        onNotify?.('There are no documents to download in this folder.')
-        return
-      }
+    const selectedDocs = selectedDocumentIds.size
+      ? documents.filter((document) => selectedDocumentIds.has(document.id))
+      : []
+    const selectedFolderList = selectedFolderIds.size
+      ? children.filter((child) => selectedFolderIds.has(child.id))
+      : []
+
+    if (!selectedDocs.length && !selectedFolderList.length) {
       openConfirm({
-        title: 'Download folder',
-        message: `Download all ${documents.length} document${documents.length === 1 ? '' : 's'} in "${folder.name}" as a ZIP file?`,
+        title: 'Download folder ZIP',
+        message: `Download "${folder.name}" as a ZIP file (including files in subfolders)? You can unzip it on your computer to open the files.`,
         confirmLabel: 'Download ZIP',
         onConfirm: async () => {
           await downloadFolderZip(folder.id)
-          onNotify?.(`Downloaded ${documents.length} document${documents.length === 1 ? '' : 's'} as ZIP.`)
+          onNotify?.(`Downloaded "${folder.name}.zip". Unzip the file to browse its contents.`)
         }
       })
       return
     }
 
     openConfirm({
-      title: 'Download selection',
-      message: `Download ${targets.length} selected document${targets.length === 1 ? '' : 's'} as a ZIP file?`,
+      title: 'Download selection as ZIP',
+      message: `Download ${selectedDocs.length} document${selectedDocs.length === 1 ? '' : 's'}${selectedFolderList.length ? ` and ${selectedFolderList.length} folder${selectedFolderList.length === 1 ? '' : 's'}` : ''} as a ZIP file?`,
       confirmLabel: 'Download ZIP',
       onConfirm: async () => {
-        await downloadFolderZip(folder.id, targets.map((document) => document.id))
-        onNotify?.(`Downloaded ${targets.length} document${targets.length === 1 ? '' : 's'} as ZIP.`)
+        await downloadFolderZip(
+          folder.id,
+          selectedDocs.map((document) => document.id),
+          selectedFolderList.map((child) => child.id)
+        )
+        onNotify?.('Download started. Unzip the ZIP file to open the files inside.')
       }
     })
   }
@@ -1597,73 +2125,82 @@ function FolderView({
       onNotify?.('No share destinations are available for your role.')
       return
     }
+    if (!selectedFolderIds.size && !selectedDocumentIds.size) {
+      onNotify?.('Select one or more folders or files to share.')
+      return
+    }
     setShareTargetRole(shareDestinations[0]?.value || '')
+    setSharePermission('READ_ONLY')
     setShareOpen(true)
   }
 
   async function handleShareConfirm() {
     if (!shareTargetRole) {
-      onNotify?.('Choose a role to share with.')
+      onNotify?.('Choose who to share with.')
+      return
+    }
+    if (!sharePermission) {
+      onNotify?.('Choose a permission level.')
+      return
+    }
+    const folderIds = [...selectedFolderIds]
+    const documentIds = [...selectedDocumentIds]
+    if (!folderIds.length && !documentIds.length) {
+      onNotify?.('Select one or more folders or files to share.')
       return
     }
     setShareBusy(true)
     try {
-      const result = await shareFolder(folder.id, shareTargetRole)
-      const shareUrl = typeof window !== 'undefined'
-        ? `${window.location.origin}${window.location.pathname}${result.shareUrl || `#/folders/${folder.id}`}`
-        : result.shareUrl
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl)
-      }
+      const result = await shareItems({
+        targetRole: shareTargetRole,
+        permission: sharePermission,
+        folderIds,
+        documentIds
+      })
       setShareOpen(false)
-      onNotify?.(result.message || `Shared with ${result.targetRoleLabel}. Link copied to clipboard.`)
+      setSelectedFolderIds(new Set())
+      setSelectedDocumentIds(new Set())
+      onNotify?.(result.message || `Shared with ${result.targetRoleLabel}.`)
       await onDataChange?.()
     } catch (err) {
-      onNotify?.(err.message || 'Unable to share this folder.')
+      onNotify?.(err.message || 'Unable to share the selected items.')
     } finally {
       setShareBusy(false)
     }
   }
 
-  function handleDeleteClick() {
-    if (!selectionCount) {
-      onNotify?.('Select folders or documents to delete.')
+  function handleReplaceClick() {
+    const selected = documents.filter((document) => selectedDocumentIds.has(document.id))
+    if (selected.length !== 1) {
+      onNotify?.('Select exactly one document to replace its file.')
       return
     }
+    replaceInputRef.current?.click()
+  }
 
+  async function handleReplaceFileSelected(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    const selected = documents.filter((document) => selectedDocumentIds.has(document.id))
+    if (!file || selected.length !== 1) {
+      return
+    }
+    const documentItem = selected[0]
     openConfirm({
-      title: 'Move to archive',
-      message: `Move ${selectedDocumentIds.size} document${selectedDocumentIds.size === 1 ? '' : 's'}${selectedFolderIds.size ? ` and ${selectedFolderIds.size} folder${selectedFolderIds.size === 1 ? '' : 's'}` : ''} to archive? Files stay stored until an administrator confirms permanent deletion.`,
-      confirmLabel: 'Move to archive',
-      tone: 'danger',
+      title: 'Replace document file',
+      message: `Replace the file for "${documentItem.fileName || documentItem.title}" with "${file.name}"? The document record stays in this folder.`,
+      confirmLabel: 'Replace file',
       onConfirm: async () => {
-        for (const document of selectedDocuments.filter((item) => selectedDocumentIds.has(item.id))) {
-          await deleteDocument(document.id)
-        }
-        for (const child of selectedFolders) {
-          if (isProtectedArchiveStructureFolder(child)) {
-            throw new Error('Faculty and department folders are part of the system structure and cannot be deleted.')
-          }
-          await deleteFolder(child.id)
-        }
-        setSelectedFolderIds(new Set())
+        await replaceDocumentFile(documentItem.id, file)
+        onNotify?.(`Replaced file for "${documentItem.title || documentItem.fileName}".`)
         setSelectedDocumentIds(new Set())
-        onNotify?.('Selected items moved to archive.')
-        onArchivedChange?.()
         await onDataChange?.()
       }
     })
   }
 
   function handleFilterClick() {
-    openConfirm({
-      title: 'Filter folder view',
-      message: 'Choose what to show in this folder. You can change the filter below after confirming.',
-      confirmLabel: 'Show filters',
-      onConfirm: async () => {
-        setFilterOpen(true)
-      }
-    })
+    setFilterOpen((current) => !current)
   }
 
   function handleSortClick() {
@@ -1703,14 +2240,21 @@ function FolderView({
           <div className="modal share-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
             <div className="modal-head">
               <div>
-                <p className="eyebrow">Share folder</p>
-                <h2>{folder.name}</h2>
+                <p className="eyebrow">Share</p>
+                <h2>
+                  {selectionCount === 1
+                    ? 'Share selected item'
+                    : `Share ${selectionCount} selected items`}
+                </h2>
               </div>
               <button type="button" className="ghost-icon" onClick={() => setShareOpen(false)} disabled={shareBusy}>
                 <XIcon className="icon" />
               </button>
             </div>
-            <p className="share-modal-lead">Choose who should receive access to this folder in their workspace.</p>
+            <p className="share-modal-lead">
+              Choose who should receive these items. They will appear under Shared with me with the permission you set.
+            </p>
+            <p className="share-section-label">Share with</p>
             <div className="share-role-options">
               {shareDestinations.map((destination) => (
                 <label key={destination.value} className={`share-role-option ${shareTargetRole === destination.value ? 'active' : ''}`}>
@@ -1725,10 +2269,28 @@ function FolderView({
                 </label>
               ))}
             </div>
+            <p className="share-section-label">Permission</p>
+            <div className="share-role-options">
+              {SHARE_PERMISSIONS.map((option) => (
+                <label key={option.value} className={`share-role-option ${sharePermission === option.value ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="share-permission"
+                    value={option.value}
+                    checked={sharePermission === option.value}
+                    onChange={() => setSharePermission(option.value)}
+                  />
+                  <span>
+                    <strong>{option.label}</strong>
+                    <em className="share-permission-hint">{option.hint}</em>
+                  </span>
+                </label>
+              ))}
+            </div>
             <div className="modal-actions">
               <button type="button" className="ghost-btn" onClick={() => setShareOpen(false)} disabled={shareBusy}>Cancel</button>
-              <button type="button" className="primary-btn" onClick={handleShareConfirm} disabled={shareBusy || !shareTargetRole}>
-                {shareBusy ? 'Sharing...' : 'Share and copy link'}
+              <button type="button" className="primary-btn" onClick={handleShareConfirm} disabled={shareBusy || !shareTargetRole || !sharePermission}>
+                {shareBusy ? 'Sharing...' : 'Share'}
               </button>
             </div>
           </div>
@@ -1745,9 +2307,6 @@ function FolderView({
           </button>
           <button type="button" className="explorer-icon-btn" onClick={onGoUp} disabled={!canGoUp} aria-label="Up">
             <ArrowUpIcon className="icon" />
-          </button>
-          <button type="button" className="explorer-icon-btn" onClick={onRefresh} aria-label="Refresh">
-            <RefreshIcon className="icon" />
           </button>
         </div>
         <div className="explorer-breadcrumbs">
@@ -1775,44 +2334,105 @@ function FolderView({
 
       <div className="explorer-toolbar">
         <div className="explorer-toolbar-actions">
-          {canCreateFolder ? (
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleNewFolderClick}>
-            <FolderPlusIcon className="icon" />
-            New folder
-          </button>
-          ) : null}
-          <button type="button" className="primary-btn explorer-tool-btn" onClick={handleUploadClick}>
-            <UploadIcon className="icon" />
-            Upload
-          </button>
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDownloadClick}>
-            <DownloadIcon className="icon" />
-            Download
-          </button>
-          {!isStudent ? (
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleShareClick}>
-            <ShareIcon className="icon" />
-            Share
-          </button>
-          ) : null}
-          {!isStudent ? (
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDeleteClick}>
-            <TrashIcon className="icon" />
-            Delete
-          </button>
-          ) : null}
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleFilterClick}>
-            <FilterIcon className="icon" />
-            Filter
-          </button>
-          <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleSortClick}>
-            {sortLabel}
-          </button>
+          {isStructureBrowseOnly ? (
+            <>
+              <button type="button" className="primary-btn explorer-tool-btn" onClick={handleOpenSelectedFolder}>
+                <FolderIcon className="icon" />
+                Open
+              </button>
+              <button type="button" className="ghost-btn explorer-tool-btn" onClick={onRefresh}>
+                <RefreshIcon className="icon" />
+                Refresh
+              </button>
+            </>
+          ) : showDepartmentShareTools ? (
+            <>
+              <button type="button" className="primary-btn explorer-tool-btn" onClick={handleOpenSelectedFolder}>
+                <FolderIcon className="icon" />
+                Open
+              </button>
+              {canDownload ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDownloadClick}>
+                  <DownloadIcon className="icon" />
+                  Download
+                </button>
+              ) : null}
+              {canShare ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleShareClick}>
+                  <ShareIcon className="icon" />
+                  Share
+                </button>
+              ) : null}
+              <button type="button" className="ghost-btn explorer-tool-btn" onClick={onRefresh}>
+                <RefreshIcon className="icon" />
+                Refresh
+              </button>
+            </>
+          ) : (
+            <>
+              {canCreateFolder ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleNewFolderClick}>
+                  <FolderPlusIcon className="icon" />
+                  New folder
+                </button>
+              ) : null}
+              {showFypSubmit ? (
+                <button type="button" className="primary-btn explorer-tool-btn" onClick={() => onSubmitFinalYearProject?.()}>
+                  <UploadIcon className="icon" />
+                  Submit final year project
+                </button>
+              ) : canUpload ? (
+                <button type="button" className="primary-btn explorer-tool-btn" onClick={handleUploadClick}>
+                  <UploadIcon className="icon" />
+                  Upload
+                </button>
+              ) : null}
+              {canDownload ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDownloadClick}>
+                  <DownloadIcon className="icon" />
+                  Download
+                </button>
+              ) : null}
+              {canShare ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleShareClick}>
+                  <ShareIcon className="icon" />
+                  Share
+                </button>
+              ) : null}
+              {canReplace ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleReplaceClick}>
+                  <UploadIcon className="icon" />
+                  Replace
+                </button>
+              ) : null}
+              {canFilterDocuments ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleFilterClick}>
+                  <FilterIcon className="icon" />
+                  Filter{filterOpen ? ' ✓' : ''}
+                </button>
+              ) : null}
+              <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleSortClick}>
+                {sortLabel}
+              </button>
+              <button type="button" className="ghost-btn explorer-tool-btn" onClick={onRefresh}>
+                <RefreshIcon className="icon" />
+                Refresh
+              </button>
+              <input
+                ref={replaceInputRef}
+                type="file"
+                hidden
+                onChange={handleReplaceFileSelected}
+              />
+            </>
+          )}
         </div>
         <div className="explorer-view-toggle">
-          <button type="button" className="explorer-icon-btn" onClick={onOpenSearch} aria-label="Search archive">
-            <SearchIcon className="icon" />
-          </button>
+          {!isStructureBrowseOnly && !showDepartmentShareTools ? (
+            <button type="button" className="explorer-icon-btn" onClick={onOpenSearch} aria-label="Search archive">
+              <SearchIcon className="icon" />
+            </button>
+          ) : null}
           <button
             type="button"
             className={`explorer-icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
@@ -1838,8 +2458,12 @@ function FolderView({
             { value: 'all', label: 'All items' },
             { value: 'folders', label: 'Folders only' },
             { value: 'documents', label: 'Documents only' },
-            { value: 'approved', label: 'Approved' },
-            { value: 'pending', label: 'Pending' }
+            ...(userRole === 'REGISTRAR'
+              ? []
+              : [
+                { value: 'approved', label: 'Approved' },
+                { value: 'pending', label: 'Pending' }
+              ])
           ].map((option) => (
             <button
               key={option.value}
@@ -1858,14 +2482,74 @@ function FolderView({
 
       {selectionCount ? (
         <p className="explorer-selection-note">{selectionCount} item{selectionCount === 1 ? '' : 's'} selected</p>
+      ) : isStructureBrowseOnly ? (
+        <p className="explorer-hint">
+          {isFacultyFolder(folder)
+            ? 'Open a department, then an academic year and semester to manage documents.'
+            : isDepartmentFolder(folder)
+              ? 'Open an academic year, then a semester folder to upload, share, or manage documents.'
+              : isAcademicYearFolder(folder)
+                ? 'Open a semester folder to unlock New folder, Upload, Download, Share, Replace, and Filter.'
+                : 'Browse into a semester folder to manage documents.'}
+        </p>
+      ) : showArchiveGallery ? (
+        <p className="explorer-hint">
+          Approved final year projects appear here as profiles. Open a profile to view details, links, and the project ZIP.
+        </p>
+      ) : showProfileHeader ? (
+        <p className="explorer-hint">
+          This is an accepted project profile created after librarian approval.
+        </p>
       ) : visibleDocuments.length ? (
         <p className="explorer-hint">
           Click a document to open it. Right-click folders to rename, copy, move, or paste. <kbd>Ctrl</kbd>+click to select items for download or delete.
         </p>
       ) : null}
 
+      {showProfileHeader && profileDocument ? (
+        <section className="project-profile-panel" aria-label="Accepted project profile">
+          <ProjectCoverPhoto
+            documentId={profileDocument.id}
+            hasCoverPhoto={Boolean(profileDocument.hasCoverPhoto)}
+            alt={`${profileDocument.ownerName || profileDocument.title || 'Student'} face photo`}
+            className="project-profile-photo"
+          />
+          <div className="project-profile-copy">
+            <p className="eyebrow">Accepted project profile</p>
+            <h2>{profileDocument.title || folder.name}</h2>
+            <p className="project-profile-meta">
+              {[profileDocument.ownerName, profileDocument.studentNumber, profileDocument.department]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+            {profileDocument.description ? (
+              <p className="project-profile-description">{profileDocument.description}</p>
+            ) : null}
+            <div className="project-profile-links">
+              {profileDocument.githubUrl ? (
+                <a href={profileDocument.githubUrl} target="_blank" rel="noreferrer">
+                  GitHub repository
+                </a>
+              ) : null}
+              {splitExternalLinks(profileDocument.externalLinks).map((link) => (
+                <a key={link} href={link} target="_blank" rel="noreferrer">
+                  {link}
+                </a>
+              ))}
+            </div>
+            <div className="project-profile-actions">
+              <button type="button" className="primary-btn" onClick={() => handleOpenDocument(profileDocument)}>
+                <DownloadIcon className="icon" />
+                Open project ZIP
+              </button>
+              <span className="project-profile-status">Accepted · {formatShortDate(profileDocument.modifiedAt)}</span>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <div
-        className={`explorer-content ${viewMode === 'list' ? 'list-view' : 'grid-view'}`}
+        className={`explorer-content ${viewMode === 'list' ? 'list-view' : 'grid-view'} ${showArchiveGallery ? 'project-profile-gallery' : ''}`}
         onContextMenu={(event) => {
           if (!onFolderContextMenu || !folder) {
             return
@@ -1879,29 +2563,66 @@ function FolderView({
           })
         }}
       >
-        {visibleChildren.map((child) => (
-          <button
-            key={child.id}
-            type="button"
-            className={`explorer-item explorer-folder ${selectedFolderIds.has(child.id) ? 'selected' : ''}`}
-            onClick={() => toggleFolderSelection(child.id)}
-            onDoubleClick={() => onOpenFolder?.(child.id)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              onFolderContextMenu?.(event, child)
-            }}
-          >
-            <div className="explorer-item-icon folder">
-              <FolderIcon className="icon" />
-            </div>
-            <div className="explorer-item-copy">
-              <strong>{child.name}</strong>
-              <span>{child.itemCount ?? 0} items</span>
-            </div>
-          </button>
-        ))}
+        {showArchiveGallery
+          ? visibleChildren.map((child) => {
+            const project = documentsByFolderId.get(Number(child.id))
+            return (
+              <button
+                key={child.id}
+                type="button"
+                className={`project-profile-card ${selectedFolderIds.has(child.id) ? 'selected' : ''}`}
+                onClick={() => onOpenFolder?.(child.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  onFolderContextMenu?.(event, child)
+                }}
+              >
+                <ProjectCoverPhoto
+                  documentId={project?.id}
+                  hasCoverPhoto={Boolean(project?.hasCoverPhoto)}
+                  alt={`${project?.ownerName || child.name} face photo`}
+                  className="project-profile-card-photo"
+                />
+                <div className="project-profile-card-copy">
+                  <strong>{project?.title || child.name}</strong>
+                  <span>
+                    {[project?.ownerName, project?.studentNumber].filter(Boolean).join(' · ') || 'Accepted project'}
+                  </span>
+                  {project?.description ? (
+                    <em>{project.description.length > 110 ? `${project.description.slice(0, 110)}…` : project.description}</em>
+                  ) : (
+                    <em>Open profile to view project details and files.</em>
+                  )}
+                  <span className="project-profile-card-meta">
+                    Accepted · {formatShortDate(project?.modifiedAt)} · {formatBytes(project?.sizeBytes)}
+                  </span>
+                </div>
+              </button>
+            )
+          })
+          : visibleChildren.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              className={`explorer-item explorer-folder ${selectedFolderIds.has(child.id) ? 'selected' : ''}`}
+              onClick={() => toggleFolderSelection(child.id)}
+              onDoubleClick={() => onOpenFolder?.(child.id)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onFolderContextMenu?.(event, child)
+              }}
+            >
+              <div className="explorer-item-icon folder">
+                <FolderIcon className="icon" />
+              </div>
+              <div className="explorer-item-copy">
+                <strong>{child.name}</strong>
+                <span>{child.itemCount ?? 0} items</span>
+              </div>
+            </button>
+          ))}
 
-        {visibleDocuments.map((document) => (
+        {visibleDocumentsForGrid.map((document) => (
           <div
             key={document.id}
             role="button"
@@ -1911,7 +2632,7 @@ function FolderView({
             onKeyDown={(event) => handleDocumentKeyDown(event, document)}
             title="Click to open. Ctrl+click to select."
           >
-            <ExplorerStatusBadge status={document.status} />
+            <ExplorerStatusBadge status={document.status} userRole={userRole} />
             <div className="explorer-item-icon file">
               <DocumentIcon className="icon" />
             </div>
@@ -1926,7 +2647,21 @@ function FolderView({
           <div className="explorer-empty">
             <FolderIcon className="icon folder" />
             <strong>{filterType === 'all' ? 'This folder is empty' : 'No items match this filter'}</strong>
-            <span>Upload a document or create a subfolder to get started.</span>
+            <span>
+              {showFypSubmit
+                ? 'Use Submit final year project to start the guided 5-step upload.'
+                : showArchiveGallery || showProfileHeader
+                  ? 'Accepted project profiles will appear here after librarian approval.'
+                  : canUpload
+                    ? 'Upload a document or create a subfolder to get started.'
+                    : 'Accepted project profiles will appear here after librarian approval.'}
+            </span>
+            {showFypSubmit ? (
+              <button type="button" className="primary-btn" onClick={() => onSubmitFinalYearProject?.()}>
+                <UploadIcon className="icon" />
+                Submit final year project
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -1942,23 +2677,41 @@ function looksLikeStudentId(query) {
   return /[\d]/.test(trimmed) && /^[\w./-]+$/.test(trimmed)
 }
 
-function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onOpenFolder, onClear }) {
+function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onOpenFolder, onClear, mode = 'documents' }) {
   if (!query) {
     return null
+  }
+
+  const isProjectMode = mode === 'projects' || mode === 'registrar'
+  const isRegistrarMode = mode === 'registrar'
+  const documentResults = (results || []).filter((row) => row.kind !== 'folder' && row.kind !== 'project')
+  const locationResults = (results || []).filter((row) => row.kind === 'folder' || row.kind === 'project')
+  const resultCount = results?.length || 0
+  const documentCount = documentResults.length
+
+  let summary = `${resultCount} match${resultCount === 1 ? '' : 'es'} for "${query}" across the archive`
+  if (busy) {
+    summary = 'Searching across departments...'
+  } else if (studentProfile) {
+    summary = `${studentProfile.documentCount} document${studentProfile.documentCount === 1 ? '' : 's'} for ${studentProfile.studentName || studentProfile.studentNumber}`
+  } else if (isRegistrarMode) {
+    if (documentCount > 0) {
+      summary = `${documentCount} document${documentCount === 1 ? '' : 's'} matched "${query}" — open the file above, or jump to its folder`
+    } else if (locationResults.length > 0) {
+      summary = `No document matched "${query}", but ${locationResults.length} related location${locationResults.length === 1 ? '' : 's'} were found`
+    } else {
+      summary = `No document or folder matched "${query}"`
+    }
+  } else if (isProjectMode) {
+    summary = `${resultCount} location${resultCount === 1 ? '' : 's'} match "${query}" — open one to jump there`
   }
 
   return (
     <section className="dash-panel global-search-panel">
       <div className="dash-panel-head">
         <div>
-          <h2>Archive search</h2>
-          <p>
-            {busy
-              ? 'Searching across departments...'
-              : studentProfile
-                ? `${studentProfile.documentCount} document${studentProfile.documentCount === 1 ? '' : 's'} for ${studentProfile.studentName || studentProfile.studentNumber}`
-                : `${results?.length || 0} match${results?.length === 1 ? '' : 'es'} for "${query}" across the archive`}
-          </p>
+          <h2>{isRegistrarMode ? 'Archive search' : (isProjectMode ? 'Go to archive location' : 'Archive search')}</h2>
+          <p>{summary}</p>
         </div>
         {onClear ? (
           <button type="button" className="ghost-btn" onClick={onClear}>
@@ -1970,11 +2723,11 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
         <table className="dash-table">
           <thead>
             <tr>
-              <th>Item</th>
+              <th>{isRegistrarMode ? 'Result' : (isProjectMode ? 'Location' : 'Item')}</th>
               <th>Student</th>
-              <th>Category</th>
+              <th>Type</th>
               <th>Location</th>
-              <th>Modified</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -1983,72 +2736,114 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                 <td colSpan="5" className="empty-state">Searching...</td>
               </tr>
             ) : results?.length ? (
-              results.map((fileRow) => (
-                <tr
-                  key={fileRow.id}
-                  className="document-row"
-                  onClick={() => {
-                    if (fileRow.folderId) {
-                      onOpenFolder?.(fileRow.folderId)
-                    } else if (fileRow.kind !== 'folder') {
-                      onOpenDocument?.(fileRow.id)
-                    }
-                  }}
-                  title={fileRow.folderId ? 'Open archive location' : 'Open document'}
-                >
-                  <td>
-                    <div className="file-cell">
-                      {fileRow.kind === 'folder' ? (
-                        <FolderIcon className="icon folder" />
-                      ) : (
-                        <DocumentIcon className="icon doc" />
-                      )}
-                      <div>
-                        <strong>{fileRow.title}</strong>
-                        <span>{fileRow.fileName}</span>
+              results.map((fileRow) => {
+                const isDocument = fileRow.kind !== 'folder' && fileRow.kind !== 'project'
+                return (
+                  <tr
+                    key={fileRow.id}
+                    className={`document-row ${isDocument ? 'search-hit-document' : ''}`}
+                    onClick={() => {
+                      if (isDocument) {
+                        onOpenDocument?.(fileRow.id)
+                      } else if (fileRow.folderId) {
+                        onOpenFolder?.(fileRow.folderId)
+                      }
+                    }}
+                    title={isDocument ? 'Open document' : 'Open archive location'}
+                  >
+                    <td>
+                      <div className="file-cell">
+                        {isDocument ? (
+                          <DocumentIcon className="icon doc" />
+                        ) : (
+                          <FolderIcon className="icon folder" />
+                        )}
+                        <div>
+                          <strong>{fileRow.title}</strong>
+                          <span>{fileRow.fileName}</span>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>
-                    {fileRow.studentNumber ? (
-                      <>
-                        <button
-                          type="button"
-                          className="lookup-link-btn"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (studentProfile?.folderId) {
-                              onOpenFolder?.(studentProfile.folderId)
-                            } else if (fileRow.folderId) {
+                    </td>
+                    <td>
+                      {fileRow.studentNumber ? (
+                        <>
+                          <button
+                            type="button"
+                            className="lookup-link-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (studentProfile?.folderId) {
+                                onOpenFolder?.(studentProfile.folderId)
+                              } else if (fileRow.folderId) {
+                                onOpenFolder?.(fileRow.folderId)
+                              }
+                            }}
+                            title="Open archive location"
+                          >
+                            <strong>{fileRow.studentNumber}</strong>
+                          </button>
+                          <span className="muted-cell">{fileRow.ownerName || '-'}</span>
+                        </>
+                      ) : (
+                        <span className="muted-cell">
+                          {isDocument ? (fileRow.ownerName || '-') : 'Archive location'}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <span className="document-chip">
+                        {fileRow.kind === 'project'
+                          ? 'Folder'
+                          : fileRow.kind === 'folder'
+                            ? 'Folder'
+                            : getCategoryMeta(fileRow.category).label}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="search-location-path" title={fileRow.location || fileRow.department || ''}>
+                        {fileRow.location || fileRow.department || '-'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="archive-row-actions">
+                        {isDocument ? (
+                          <button
+                            type="button"
+                            className="dash-text-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onOpenDocument?.(fileRow.id)
+                            }}
+                          >
+                            Open file
+                          </button>
+                        ) : null}
+                        {fileRow.folderId ? (
+                          <button
+                            type="button"
+                            className="dash-text-btn"
+                            onClick={(event) => {
+                              event.stopPropagation()
                               onOpenFolder?.(fileRow.folderId)
-                            }
-                          }}
-                          title="Open archive location"
-                        >
-                          <strong>{fileRow.studentNumber}</strong>
-                        </button>
-                        <span className="muted-cell">{fileRow.ownerName || '-'}</span>
-                      </>
-                    ) : (
-                      <span className="muted-cell">{fileRow.kind === 'folder' ? 'Folder' : (fileRow.ownerName || '-')}</span>
-                    )}
-                  </td>
-                  <td>
-                    <span className="document-chip">
-                      {fileRow.kind === 'folder' ? 'Folder' : getCategoryMeta(fileRow.category).label}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="search-location-path" title={fileRow.location || fileRow.department || ''}>
-                      {fileRow.location || fileRow.department || '-'}
-                    </span>
-                  </td>
-                  <td>{fileRow.kind === 'folder' ? '-' : formatDateTime(fileRow.modifiedAt || fileRow.issueDate)}</td>
-                </tr>
-              ))
+                            }}
+                          >
+                            {isDocument ? 'Open folder' : 'Open'}
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })
             ) : (
               <tr>
-                <td colSpan="5" className="empty-state">No matching folders or documents found under departments.</td>
+                <td colSpan="5" className="empty-state">
+                  {isRegistrarMode
+                    ? `No document matched "${query}". Try a full file name, student ID, or folder name.`
+                    : isProjectMode
+                      ? 'No matching archive locations found. Try a student ID, folder name, or file title.'
+                      : 'No matching folders or documents found under departments.'}
+                </td>
               </tr>
             )}
           </tbody>
@@ -2070,6 +2865,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const mainSearchInputRef = useRef(null)
   const deferredQuery = useDeferredValue(searchQuery.trim())
+  const [settledSearchQuery, setSettledSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState(null)
   const [searchBusy, setSearchBusy] = useState(false)
   const [studentSearchProfile, setStudentSearchProfile] = useState(null)
@@ -2077,11 +2873,16 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [studentFypWizardOpen, setStudentFypWizardOpen] = useState(false)
+  const [studentFypEditId, setStudentFypEditId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [scanBusy, setScanBusy] = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const [scanError, setScanError] = useState('')
   const [dashboardView, setDashboardView] = useState('default')
+  const [sharedItems, setSharedItems] = useState([])
+  const [sharedBusy, setSharedBusy] = useState(false)
+  const [sharedCount, setSharedCount] = useState(0)
   const [treeFilterOpen, setTreeFilterOpen] = useState(false)
   const [treeFilter, setTreeFilter] = useState('')
   const [quickAccessOpen, setQuickAccessOpen] = useState(loadQuickAccessOpen)
@@ -2143,6 +2944,9 @@ function App() {
   const [studentLookupError, setStudentLookupError] = useState('')
   const [studentLookupInfo, setStudentLookupInfo] = useState('')
   const [studentEntryMode, setStudentEntryMode] = useState('idle')
+  const [approvalReviewTask, setApprovalReviewTask] = useState(null)
+  const [approvalReviewNote, setApprovalReviewNote] = useState('')
+  const [approvalReviewBusy, setApprovalReviewBusy] = useState(false)
   const [activities, setActivities] = useState([])
   const [activitiesBusy, setActivitiesBusy] = useState(false)
   const [route, setRoute] = useState(getRouteFromHash)
@@ -2417,6 +3221,39 @@ function App() {
   }, [session, selectedCategory, dashboardView, dashboard])
 
   useEffect(() => {
+    if (!session) {
+      setSharedItems([])
+      setSharedCount(0)
+      return
+    }
+
+    let active = true
+    async function loadShared() {
+      try {
+        const [items, countPayload] = await Promise.all([
+          getSharedWithMe(),
+          getSharedWithMeCount()
+        ])
+        if (!active) {
+          return
+        }
+        setSharedItems(Array.isArray(items) ? items : [])
+        setSharedCount(Number(countPayload?.count) || (Array.isArray(items) ? items.length : 0))
+      } catch {
+        if (active) {
+          setSharedItems([])
+          setSharedCount(0)
+        }
+      }
+    }
+
+    loadShared()
+    return () => {
+      active = false
+    }
+  }, [session, dashboardView])
+
+  useEffect(() => {
     if (!session || session.role !== 'ADMIN') {
       setAdminOffices([])
       setSelectedAdminOffice(null)
@@ -2499,13 +3336,42 @@ function App() {
       setSearchResults(null)
       setStudentSearchProfile(null)
       setSearchBusy(false)
+      setSettledSearchQuery('')
       return
     }
 
-    if (!deferredQuery) {
+    const liveQuery = searchQuery.trim()
+    if (!liveQuery) {
+      setSettledSearchQuery('')
       setSearchResults(null)
       setStudentSearchProfile(null)
       setSearchBusy(false)
+      return
+    }
+
+    // Wait until typing settles so the best document match appears once the query is complete.
+    setSearchBusy(true)
+    setSearchResults(null)
+    const timer = window.setTimeout(() => {
+      setSettledSearchQuery(liveQuery)
+    }, 450)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery, session])
+
+  useEffect(() => {
+    if (!session) {
+      setSearchResults(null)
+      setStudentSearchProfile(null)
+      setSearchBusy(false)
+      return
+    }
+
+    if (!settledSearchQuery) {
+      if (!searchQuery.trim()) {
+        setSearchResults(null)
+        setStudentSearchProfile(null)
+        setSearchBusy(false)
+      }
       return
     }
 
@@ -2514,11 +3380,12 @@ function App() {
       setSearchBusy(true)
       try {
         const archiveTree = dashboard?.archiveTree || []
-        const folderMatches = searchArchiveTreeMatches(archiveTree, deferredQuery)
+        const folderMatches = searchArchiveTreeMatches(archiveTree, settledSearchQuery)
+        const registrarMode = session.role === 'REGISTRAR'
 
-        if (looksLikeStudentId(deferredQuery)) {
+        if (looksLikeStudentId(settledSearchQuery)) {
           try {
-            const archive = await lookupStudent(deferredQuery)
+            const archive = await lookupStudent(settledSearchQuery)
             if (active && archive.found) {
               setStudentSearchProfile({
                 studentNumber: archive.studentNumber,
@@ -2529,7 +3396,24 @@ function App() {
                 folderId: archive.folderId
               })
               const docs = enrichResultsWithLocation(archive.documents || [], archiveTree)
-              setSearchResults([...folderMatches, ...docs])
+              if (registrarMode) {
+                const studentFolderMatch = archive.folderId
+                  ? [{
+                    id: `folder-${archive.folderId}`,
+                    kind: 'folder',
+                    title: archive.studentName || archive.studentNumber,
+                    fileName: archive.studentNumber,
+                    folderId: archive.folderId,
+                    location: formatFolderLocation(archiveTree, archive.folderId) || archive.department || '',
+                    studentNumber: archive.studentNumber,
+                    ownerName: archive.studentName || '',
+                    category: 'FOLDER'
+                  }]
+                  : folderMatches
+                setSearchResults(buildRegistrarSearchResults(docs, studentFolderMatch, archiveTree, settledSearchQuery))
+              } else {
+                setSearchResults([...folderMatches, ...docs])
+              }
             } else if (active) {
               setStudentSearchProfile(null)
             }
@@ -2545,17 +3429,26 @@ function App() {
           setStudentSearchProfile(null)
         }
 
-        const data = await searchDocuments(deferredQuery)
+        const data = await searchDocuments(settledSearchQuery)
         if (active) {
           const docs = enrichResultsWithLocation(data, archiveTree)
-          const seenFolderIds = new Set(docs.map((row) => row.folderId).filter(Boolean))
-          const uniqueFolders = folderMatches.filter((row) => !seenFolderIds.has(row.folderId))
-          setSearchResults([...uniqueFolders, ...docs])
+          if (registrarMode) {
+            setSearchResults(buildRegistrarSearchResults(docs, folderMatches, archiveTree, settledSearchQuery))
+          } else {
+            const seenFolderIds = new Set(docs.map((row) => row.folderId).filter(Boolean))
+            const uniqueFolders = folderMatches.filter((row) => !seenFolderIds.has(row.folderId))
+            setSearchResults([...uniqueFolders, ...docs])
+          }
         }
       } catch {
         if (active) {
           const archiveTree = dashboard?.archiveTree || []
-          setSearchResults(searchArchiveTreeMatches(archiveTree, deferredQuery))
+          const folderMatches = searchArchiveTreeMatches(archiveTree, settledSearchQuery)
+          setSearchResults(
+            session.role === 'REGISTRAR'
+              ? buildRegistrarSearchResults([], folderMatches, archiveTree, settledSearchQuery)
+              : folderMatches
+          )
           setStudentSearchProfile(null)
         }
       } finally {
@@ -2568,7 +3461,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [deferredQuery, session, dashboard])
+  }, [settledSearchQuery, session, dashboard])
 
   function toggleQuickAccess() {
     setQuickAccessOpen((current) => {
@@ -2676,9 +3569,11 @@ function App() {
     ? getCategoryMeta(selectedCategory)
     : null
   const archiveList = archiveRevision >= 0 ? archiveItems : []
-  const dashboardActivities = (activities.length ? activities : (data.departmentActivity || []))
+  const rawActivities = (activities.length ? activities : (data.departmentActivity || []))
+    .filter((entry) => session.role !== 'HOD' || (!String(entry.actor || '').toLowerCase().includes('librarian') && !String(entry.message || '').toLowerCase().includes('librarian')))
+  const dashboardActivities = rawActivities
     .filter((entry) => dashboardView !== 'recent' || isWithinDays(entry.createdAt, 7))
-  const recentActivityCount = (activities.length ? activities : (data.departmentActivity || []))
+  const recentActivityCount = rawActivities
     .filter((entry) => isWithinDays(entry.createdAt, 7)).length
   const storagePercent = data.storageLimitBytes
     ? Math.min(100, (data.storageUsedBytes / data.storageLimitBytes) * 100)
@@ -2688,10 +3583,13 @@ function App() {
   const isRegistrar = session.role === 'REGISTRAR'
   const isHod = session.role === 'HOD'
   const isLibrarian = session.role === 'LIBRARIAN'
+  const isAdmin = session.role === 'ADMIN'
   const hideHeaderBrowse = isRegistrar || isExamOfficer || isHod || isLibrarian
   const isStaffUser = !isStudent
   const isFolderRoute = route.view === 'folder'
-  const showStaffDashboardSearch = isStaffUser && !isFolderRoute
+  const showStaffDashboardSearch = isRegistrar && !isFolderRoute
+  const hideFolderSearch = isOfficeArchiveRole(session.role) && !isSemesterOrDeeperFolder(folderDetail)
+  const staffArchiveTree = stripLibrarianReviewFolders(data.archiveTree || [])
   const activeFolderId = isFolderRoute ? route.folderId : null
   const folderNav = folderNavRef.current
   const canGoBackFolder = folderNav.index > 0
@@ -2706,28 +3604,29 @@ function App() {
     ? buildExamTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
     : getCategoryMeta(form.category).label
 
-  async function handleDecision(taskId, decision) {
+  async function handleDecision(taskId, decision, reviewNote = '') {
     try {
-      let note = decision === 'approve' ? 'Approved by librarian' : ''
-      if (decision === 'reject') {
-        const feedback = window.prompt('Enter feedback for the student (required for rejection):')
-        if (feedback == null) {
-          return
-        }
-        note = String(feedback || '').trim()
-        if (!note) {
-          showNotice('Rejection feedback is required.')
-          return
-        }
+      setApprovalReviewBusy(true)
+      let note = String(reviewNote || '').trim()
+      if (decision === 'approve' && !note) {
+        note = 'Approved by librarian'
+      }
+      if (decision === 'reject' && !note) {
+        showNotice('Rejection feedback is required.')
+        return
       }
       await decideApproval(taskId, decision, note)
       showNotice(decision === 'approve'
-        ? 'Project approved. It is now visible in the shared archive.'
-        : 'Project rejected. Feedback was sent to the student.')
+        ? 'Project approved. It was moved to the student Archive project and appears in Library Accepted.'
+        : 'Project rejected. It was moved to Library Rejected (hidden from the student folder tree).')
+      setApprovalReviewTask(null)
+      setApprovalReviewNote('')
       const fresh = await getDashboard()
       setDashboard(fresh)
     } catch (err) {
       showNotice(err.message)
+    } finally {
+      setApprovalReviewBusy(false)
     }
   }
 
@@ -2814,6 +3713,20 @@ function App() {
     navigateToHash('')
   }
 
+  async function refreshSharedWithMe() {
+    try {
+      const [items, countPayload] = await Promise.all([
+        getSharedWithMe(),
+        getSharedWithMeCount()
+      ])
+      setSharedItems(Array.isArray(items) ? items : [])
+      setSharedCount(Number(countPayload?.count) || (Array.isArray(items) ? items.length : 0))
+    } catch {
+      setSharedItems([])
+      setSharedCount(0)
+    }
+  }
+
   async function refreshDashboardView() {
     setSearchQuery('')
     setStudentLookupQuery('')
@@ -2829,6 +3742,7 @@ function App() {
         const activityData = await getActivities(null, topic || undefined)
         setActivities(activityData)
       }
+      await refreshSharedWithMe()
       showNotice('Dashboard refreshed.')
     } catch (err) {
       showNotice(err.message || 'Unable to refresh dashboard.')
@@ -2910,28 +3824,33 @@ function App() {
     let parentName = folderDetail?.name || 'Archive'
 
     if (isStudent) {
-      const personalParent = findStudentPersonalFolderParent(data.archiveTree || [], session.studentNumber)
-      const activeFolderAllowed = folderDetail && canStudentCreateInFolder(folderDetail, session.studentNumber)
+      const defaults = findStudentDefaultFolders(data.archiveTree || [])
+      const activeFolderAllowed = folderDetail && canStudentCreateInFolder(folderDetail)
       if (activeFolderAllowed) {
         parentId = folderDetail.id
         parentName = folderDetail.name
-      } else if (personalParent?.id && personalParent.id > 0) {
-        parentId = personalParent.id
-        parentName = personalParent.name
+      } else if (defaults.projects?.id) {
+        parentId = defaults.projects.id
+        parentName = defaults.projects.name
+      } else if (defaults.official?.id) {
+        parentId = defaults.official.id
+        parentName = defaults.official.name
       }
     } else {
       const parentNode = folderDetail?.id === activeFolderId
         ? folderDetail
         : (activeFolderId ? findFolderNode(data.archiveTree || [], activeFolderId) : null)
       if (!parentNode) {
-        showNotice('Select a department, academic year, or semester folder in the archive tree first.')
+        showNotice('Select a semester folder in the archive tree first.')
         return
       }
       if (!canStaffCreateArchiveSubfolder(parentNode, session.role)) {
-        if (isDepartmentFolder(parentNode) && !isAdmin) {
-          showNotice('Only administrators can create folders directly under a department. Open an academic year or semester folder instead.')
+        if (isOfficeArchiveRole(session.role) && !isSemesterOrDeeperFolder(parentNode)) {
+          showNotice('Open a semester folder first. Document tools unlock from semester level downward.')
+        } else if (isDepartmentFolder(parentNode) && !isAdmin) {
+          showNotice('Only administrators can create folders directly under a department. Open a semester folder instead.')
         } else if (isFacultyFolder(parentNode)) {
-          showNotice('Folders cannot be created under a faculty. Open a department or lower folder instead.')
+          showNotice('Folders cannot be created under a faculty. Open a department, year, then semester instead.')
         } else {
           showNotice('Select a valid folder to create a subfolder.')
         }
@@ -2943,7 +3862,7 @@ function App() {
 
     if (!parentId || parentId < 1) {
       showNotice(isStudent
-        ? 'Open your Final Year Project folder first, or upload a project document to create your workspace.'
+        ? 'Open Official Documents or Final Year Project first, then create a subfolder inside one of them.'
         : 'No archive folder is available yet.')
       return
     }
@@ -2952,23 +3871,30 @@ function App() {
     setAppConfirm({
       title: 'Create new folder',
       message: isStudent
-        ? `Create a personal folder inside "${parentName}" for your final year project files.`
-        : `Create a subfolder inside "${parentName}".`,
+        ? `Create a subfolder inside "${parentName}". The default folders themselves cannot be renamed or deleted.`
+        : `Create a subfolder inside "${parentName}". Name format: ${STAFF_FOLDER_NAME_HINT}.`,
       confirmLabel: 'Create folder',
       inputLabel: 'Folder name',
-      inputPlaceholder: 'Enter folder name',
+      inputPlaceholder: isStudent ? 'Enter folder name' : 'e.g. 20251SENG041',
       onConfirm: async (folderName) => {
         const trimmedName = String(folderName || '').trim()
         if (!trimmedName) {
           throw new Error('Please enter a folder name.')
         }
-        await createSubfolder(parentId, trimmedName)
+        if (!isStudent) {
+          const namingError = validateStaffFolderName(trimmedName)
+          if (namingError) {
+            throw new Error(namingError)
+          }
+        }
+        const finalName = isStudent ? trimmedName : normalizeStudentId(trimmedName)
+        await createSubfolder(parentId, finalName)
         if (isFolderRoute) {
           await reloadFolder()
         }
         const fresh = await getDashboard()
         setDashboard(fresh)
-        showNotice(`Folder "${trimmedName}" created.`)
+        showNotice(`Folder "${finalName}" created.`)
       }
     })
   }
@@ -3046,6 +3972,7 @@ function App() {
     const blockedIds = collectDescendantFolderIds(data.archiveTree || [], folder.id)
     const destinations = flattenFolderNodes(data.archiveTree || [])
       .filter((candidate) => !blockedIds.has(candidate.id) && candidate.id !== folder.parentId)
+      .filter((candidate) => canPasteIntoFolder(candidate, session.role, session.studentNumber))
 
     if (!destinations.length) {
       showNotice('No destination folders are available for this move.')
@@ -3053,25 +3980,34 @@ function App() {
     }
 
     setAppConfirmInput('')
-    setAppConfirmSelect(String(destinations[0].id))
+    setAppConfirmSelect('')
     setAppConfirm({
       title: 'Move folder',
-      message: `Choose where to move "${folder.name}".`,
+      message: `Select where to move "${folder.name}". It will be moved there immediately.`,
       confirmLabel: 'Move here',
       selectLabel: 'Destination folder',
-      selectOptions: destinations.map((destination) => ({
-        value: String(destination.id),
-        label: destination.path
-      })),
+      hideConfirmButton: true,
+      autoConfirmOnSelect: true,
+      selectOptions: [
+        { value: '', label: 'Choose destination folder...', disabled: true },
+        ...destinations.map((destination) => ({
+          value: String(destination.id),
+          label: destination.path
+        }))
+      ],
       onConfirm: async (targetId) => {
         const destinationId = Number(targetId)
+        if (!destinationId) {
+          throw new Error('Choose a destination folder.')
+        }
+        const destination = destinations.find((item) => Number(item.id) === destinationId)
         await moveFolder(folder.id, destinationId)
         setFolderClipboard(null)
         if (activeFolderId === folder.id) {
           openFolder(destinationId)
         }
         await refreshExplorerData()
-        showNotice(`Folder "${folder.name}" moved.`)
+        showNotice(`Moved "${folder.name}" into "${destination?.name || 'the selected folder'}".`)
       }
     })
   }
@@ -3082,6 +4018,12 @@ function App() {
     }
 
     const { mode, folderId, folderName } = folderClipboard
+    const blockedIds = collectDescendantFolderIds(data.archiveTree || [], folderId)
+    if (blockedIds.has(targetFolder.id)) {
+      showNotice('A folder cannot be moved or pasted into itself or one of its subfolders.')
+      return
+    }
+
     if (mode === 'copy') {
       await copyFolder(folderId, targetFolder.id)
       showNotice(`Pasted a copy of "${folderName}" into "${targetFolder.name}".`)
@@ -3123,6 +4065,27 @@ function App() {
       navigateToDashboard()
       return
     }
+    if (action === 'shared') {
+      setDashboardView('shared')
+      setSelectedAdminOffice(null)
+      setSelectedCategory('')
+      setSearchQuery('')
+      setStudentSearchProfile(null)
+      setSearchResults(null)
+      setSharedBusy(true)
+      getSharedWithMe()
+        .then((items) => {
+          setSharedItems(Array.isArray(items) ? items : [])
+          setSharedCount(Array.isArray(items) ? items.length : 0)
+        })
+        .catch(() => {
+          setSharedItems([])
+          setSharedCount(0)
+        })
+        .finally(() => setSharedBusy(false))
+      navigateToDashboard()
+      return
+    }
     if (action === 'browse') {
       setSelectedAdminOffice(null)
       const firstFolder = (dashboard ?? emptyDashboard).archiveTree?.[0]
@@ -3143,7 +4106,6 @@ function App() {
     navigateToDashboard()
   }
 
-  const isAdmin = session.role === 'ADMIN'
   const sidebarQuickAccess = isAdmin
     ? adminQuickAccess
     : isStudent
@@ -3151,7 +4113,7 @@ function App() {
       : staffQuickAccess
   const treeAddParent = folderDetail?.id === activeFolderId
     ? folderDetail
-    : (activeFolderId ? findFolderNode(data.archiveTree || [], activeFolderId) : null)
+    : (activeFolderId ? findFolderNode(staffArchiveTree, activeFolderId) : null)
   const allowTreeAddFolder = isStudent
     ? true
     : canStaffCreateArchiveSubfolder(treeAddParent, session.role)
@@ -3203,6 +4165,7 @@ function App() {
     } catch {
       // Keep the current folder view if dashboard refresh fails.
     }
+    await refreshSharedWithMe()
   }
 
   function goBackFolder() {
@@ -3346,19 +4309,54 @@ function App() {
           </div>
 
           {isStaffUser ? (
-          <div className={`sidebar-section sidebar-quick-access ${quickAccessOpen ? 'is-open' : 'is-collapsed'}`}>
-            <button
-              type="button"
-              className="quick-access-toggle"
-              aria-expanded={quickAccessOpen}
-              onClick={toggleQuickAccess}
-            >
-              <span className="eyebrow">Quick Access</span>
-              <span className={`quick-access-chevron ${quickAccessOpen ? 'is-open' : ''}`} aria-hidden="true">
-                <ChevronDownIcon className="icon" />
-              </span>
-            </button>
-            <div className={`quick-access-panel ${quickAccessOpen ? 'is-open' : ''}`}>
+            <div className={`sidebar-section sidebar-quick-access ${quickAccessOpen ? 'is-open' : 'is-collapsed'}`}>
+              <button
+                type="button"
+                className="quick-access-toggle"
+                aria-expanded={quickAccessOpen}
+                onClick={toggleQuickAccess}
+              >
+                <span className="eyebrow">Quick Access</span>
+                <span className={`quick-access-chevron ${quickAccessOpen ? 'is-open' : ''}`} aria-hidden="true">
+                  <ChevronDownIcon className="icon" />
+                </span>
+              </button>
+              <div className={`quick-access-panel ${quickAccessOpen ? 'is-open' : ''}`}>
+                <div className="quick-access-links">
+                  {sidebarQuickAccess.map((item) => {
+                    const Icon = item.icon
+                    const isActive = !isFolderRoute && (
+                      (item.action === 'dashboard' && dashboardView === 'default')
+                      || (item.action === 'recent' && dashboardView === 'recent')
+                      || (item.action === 'archive' && dashboardView === 'archive')
+                      || (item.action === 'shared' && dashboardView === 'shared')
+                    ) || (item.action === 'browse' && isFolderRoute)
+                    const badgeCount = item.action === 'archive'
+                      ? archiveList.length
+                      : item.action === 'recent'
+                        ? recentActivityCount
+                        : item.action === 'shared'
+                          ? sharedCount
+                          : null
+                    return (
+                      <button
+                        key={item.label}
+                        className={`quick-link ${isActive ? 'active' : ''}`}
+                        type="button"
+                        onClick={() => handleQuickAccess(item.action)}
+                      >
+                        <Icon className="icon" />
+                        <span>{item.label}</span>
+                        {badgeCount ? <strong>{badgeCount}</strong> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="sidebar-section sidebar-quick-access is-open student-quick-access">
+              <p className="eyebrow quick-access-label">Quick Access</p>
               <div className="quick-access-links">
                 {sidebarQuickAccess.map((item) => {
                   const Icon = item.icon
@@ -3366,12 +4364,8 @@ function App() {
                     (item.action === 'dashboard' && dashboardView === 'default')
                     || (item.action === 'recent' && dashboardView === 'recent')
                     || (item.action === 'archive' && dashboardView === 'archive')
+                    || (item.action === 'shared' && dashboardView === 'shared')
                   ) || (item.action === 'browse' && isFolderRoute)
-                  const badgeCount = item.action === 'archive'
-                    ? archiveList.length
-                    : item.action === 'recent'
-                      ? recentActivityCount
-                      : null
                   return (
                     <button
                       key={item.label}
@@ -3381,38 +4375,12 @@ function App() {
                     >
                       <Icon className="icon" />
                       <span>{item.label}</span>
-                      {badgeCount ? <strong>{badgeCount}</strong> : null}
+                      {item.action === 'shared' && sharedCount ? <strong>{sharedCount}</strong> : null}
                     </button>
                   )
                 })}
               </div>
             </div>
-          </div>
-          ) : (
-          <div className="sidebar-section sidebar-quick-access is-open student-quick-access">
-            <p className="eyebrow quick-access-label">Quick Access</p>
-            <div className="quick-access-links">
-              {sidebarQuickAccess.map((item) => {
-                const Icon = item.icon
-                const isActive = !isFolderRoute && (
-                  (item.action === 'dashboard' && dashboardView === 'default')
-                  || (item.action === 'recent' && dashboardView === 'recent')
-                  || (item.action === 'archive' && dashboardView === 'archive')
-                ) || (item.action === 'browse' && isFolderRoute)
-                return (
-                  <button
-                    key={item.label}
-                    className={`quick-link ${isActive ? 'active' : ''}`}
-                    type="button"
-                    onClick={() => handleQuickAccess(item.action)}
-                  >
-                    <Icon className="icon" />
-                    <span>{item.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
           )}
 
           {isAdmin ? (
@@ -3443,20 +4411,30 @@ function App() {
             </div>
           ) : null}
 
-          {!isAdmin ? (
-          <ArchiveTreePanel
-            nodes={data.archiveTree || []}
-            activeFolderId={activeFolderId}
-            onOpenFolder={openFolder}
-            onDeleteFolder={isStudent ? null : handleTreeDeleteFolder}
-            onFolderContextMenu={handleFolderContextMenu}
-            onAddFolder={handleTreeAddFolder}
-            allowAddFolder={allowTreeAddFolder}
-            treeFilter={treeFilter}
-            onTreeFilterChange={setTreeFilter}
-            treeFilterOpen={treeFilterOpen}
-            onToggleTreeFilter={() => setTreeFilterOpen((current) => !current)}
-          />
+          {!isAdmin && isStudent ? (
+            <StudentDefaultFoldersNav
+              nodes={data.archiveTree || []}
+              activeFolderId={activeFolderId}
+              onOpenFolder={openFolder}
+              onNotify={showNotice}
+            />
+          ) : null}
+
+          {!isAdmin && !isStudent ? (
+            <ArchiveTreePanel
+              nodes={staffArchiveTree}
+              activeFolderId={activeFolderId}
+              onOpenFolder={openFolder}
+              onDeleteFolder={handleTreeDeleteFolder}
+              onFolderContextMenu={handleFolderContextMenu}
+              onAddFolder={handleTreeAddFolder}
+              allowAddFolder={allowTreeAddFolder}
+              allowDeleteFolder={session.role !== 'REGISTRAR'}
+              treeFilter={treeFilter}
+              onTreeFilterChange={setTreeFilter}
+              treeFilterOpen={treeFilterOpen}
+              onToggleTreeFilter={() => setTreeFilterOpen((current) => !current)}
+            />
           ) : null}
 
           <div className="sidebar-bottom">
@@ -3492,36 +4470,37 @@ function App() {
               {notice}
             </div>
           ) : null}
-          {isFolderRoute ? (
-          <div className="main-search-bar">
-            <label className="main-search-field">
-              <SearchIcon className="icon search" />
-              <input
-                ref={mainSearchInputRef}
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by letter, number, student ID, folder, or file across departments..."
-                aria-label="Archive search across departments"
-              />
-              {searchQuery ? (
-                <button
-                  type="button"
-                  className="ghost-icon main-search-clear"
-                  aria-label="Clear search"
-                  onClick={() => setSearchQuery('')}
-                >
-                  <XIcon className="icon tiny" />
-                </button>
-              ) : null}
-            </label>
-          </div>
+          {isFolderRoute && !hideFolderSearch ? (
+            <div className="main-search-bar">
+              <label className="main-search-field">
+                <SearchIcon className="icon search" />
+                <input
+                  ref={mainSearchInputRef}
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Search by letter, number, student ID, folder, or file across departments..."
+                  aria-label="Archive search across departments"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="ghost-icon main-search-clear"
+                    aria-label="Clear search"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    <XIcon className="icon tiny" />
+                  </button>
+                ) : null}
+              </label>
+            </div>
           ) : null}
-          {deferredQuery && isFolderRoute ? (
+          {deferredQuery && isFolderRoute && !hideFolderSearch ? (
             <GlobalSearchResults
-              query={deferredQuery}
-              busy={searchBusy}
+              query={settledSearchQuery || deferredQuery}
+              busy={searchBusy || (Boolean(searchQuery.trim()) && searchQuery.trim() !== settledSearchQuery)}
               results={searchResults}
               studentProfile={studentSearchProfile}
+              mode={session.role === 'REGISTRAR' ? 'registrar' : 'documents'}
               onClear={() => setSearchQuery('')}
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
               onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
@@ -3536,6 +4515,10 @@ function App() {
               studentNumber={session.studentNumber}
               onOpenFolder={openFolder}
               onUpload={() => setModalOpen(true)}
+              onSubmitFinalYearProject={() => {
+                setStudentFypEditId(null)
+                setStudentFypWizardOpen(true)
+              }}
               onRefresh={reloadFolder}
               onFolderContextMenu={handleFolderContextMenu}
               onGoBack={goBackFolder}
@@ -3616,422 +4599,475 @@ function App() {
               session={session}
               dashboard={data}
               onNotify={showNotice}
-              onRefresh={async () => {
-                const fresh = await getDashboard()
-                setDashboard(fresh)
-              }}
               onCreateFolder={handleTreeAddFolder}
+              onEditFinalYearProject={(documentId) => {
+                setStudentFypEditId(documentId)
+                setStudentFypWizardOpen(true)
+              }}
               onBrowse={() => {
-                const personalParent = findStudentPersonalFolderParent(data.archiveTree || [], session.studentNumber)
-                if (personalParent?.id && personalParent.id > 0) {
-                  openFolder(personalParent.id)
+                const defaults = findStudentDefaultFolders(data.archiveTree || [])
+                const target = defaults.projects || defaults.official
+                if (target?.id) {
+                  openFolder(target.id)
                 } else {
-                  showNotice('Submit a project first, or open your workspace after the first upload.')
+                  showNotice('Your Official Documents and Final Year Project folders will appear after the workspace is ready.')
                 }
               }}
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
             />
           ) : (
             <div className="dashboard-workspace">
-          <header className="dash-header dash-header-staff">
-            <div className="dash-header-copy">
-              <nav className="dash-crumbs" aria-label="Breadcrumb">
-                <span>Archive</span>
-                <ChevronRightIcon className="icon small" />
-                <span>Recent activity</span>
-                <ChevronRightIcon className="icon small" />
-                <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
-              </nav>
-              <h1>{dashboardLabel}</h1>
-              <span className="dash-meta">
-                {formatLongDate(new Date())}
-                {data.lastSignIn ? ` · Signed in ${data.lastSignIn}` : ''}
-              </span>
-            </div>
-            <div className="dash-header-actions">
-              {!hideHeaderBrowse ? (
-              <button
-                className="ghost-btn dash-action-btn"
-                type="button"
-                onClick={() => {
-                  const firstFolder = (data.archiveTree || [])[0]
-                  if (firstFolder) {
-                    openFolder(firstFolder.id)
-                  }
-                }}
-              >
-                <ArrowRightIcon className="icon" />
-                Browse
-              </button>
+              <header className="dash-header dash-header-staff">
+                <div className="dash-header-copy">
+                  <nav className="dash-crumbs" aria-label="Breadcrumb">
+                    <span>Archive</span>
+                    <ChevronRightIcon className="icon small" />
+                    <span>Recent activity</span>
+                    <ChevronRightIcon className="icon small" />
+                    <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
+                  </nav>
+                  <h1>{dashboardLabel}</h1>
+                </div>
+                <div className="dash-header-meta-center" aria-label="Session details">
+                  <span className="dash-meta">
+                    <span className="dash-meta-date">{formatLongDate(new Date())}</span>
+                    {data.lastSignIn ? (
+                      <>
+                        <span className="dash-meta-sep" aria-hidden="true" />
+                        <span className="dash-meta-signin">Signed in {data.lastSignIn}</span>
+                      </>
+                    ) : null}
+                  </span>
+                </div>
+                <div className="dash-header-actions">
+                  {!hideHeaderBrowse ? (
+                    <button
+                      className="ghost-btn dash-action-btn"
+                      type="button"
+                      onClick={() => {
+                        const firstFolder = (data.archiveTree || [])[0]
+                        if (firstFolder) {
+                          openFolder(firstFolder.id)
+                        }
+                      }}
+                    >
+                      <ArrowRightIcon className="icon" />
+                      Browse
+                    </button>
+                  ) : null}
+                  {!isRegistrar && !isHod ? (
+                    <button className="primary-btn dash-action-btn" type="button" onClick={() => setModalOpen(true)}>
+                      <UploadIcon className="icon" />
+                      Upload
+                    </button>
+                  ) : null}
+                </div>
+              </header>
+
+              {showStaffDashboardSearch ? (
+                <div className="dash-below-header-search">
+                  <label className="main-search-field">
+                    <SearchIcon className="icon search" />
+                    <input
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder="Type a file name or ID — matching documents appear when you finish typing..."
+                      aria-label="Search archive documents and locations"
+                    />
+                    {searchQuery ? (
+                      <button
+                        type="button"
+                        className="ghost-icon main-search-clear"
+                        aria-label="Clear search"
+                        onClick={() => setSearchQuery('')}
+                      >
+                        <XIcon className="icon tiny" />
+                      </button>
+                    ) : null}
+                  </label>
+                </div>
               ) : null}
-              <button className="primary-btn dash-action-btn" type="button" onClick={() => setModalOpen(true)}>
-                <UploadIcon className="icon" />
-                Upload
-              </button>
-            </div>
-          </header>
 
-          {showStaffDashboardSearch ? (
-            <div className="dash-below-header-search">
-              <label className="main-search-field">
-                <SearchIcon className="icon search" />
-                <input
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search by letter, number, student ID, folder, or file across departments..."
-                  aria-label="Archive search across departments"
+              {showStaffDashboardSearch && deferredQuery ? (
+                <GlobalSearchResults
+                  query={settledSearchQuery || deferredQuery}
+                  busy={searchBusy || (Boolean(searchQuery.trim()) && searchQuery.trim() !== settledSearchQuery)}
+                  results={searchResults}
+                  studentProfile={studentSearchProfile}
+                  mode="registrar"
+                  onClear={() => setSearchQuery('')}
+                  onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+                  onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                 />
-                {searchQuery ? (
+              ) : null}
+
+              {visibleDocumentCategories.length && !isRegistrar ? (
+                <nav className="dash-filters" aria-label="Activity areas">
                   <button
                     type="button"
-                    className="ghost-icon main-search-clear"
-                    aria-label="Clear search"
-                    onClick={() => setSearchQuery('')}
-                  >
-                    <XIcon className="icon tiny" />
-                  </button>
-                ) : null}
-              </label>
-            </div>
-          ) : null}
-
-          {showStaffDashboardSearch && deferredQuery ? (
-            <GlobalSearchResults
-              query={deferredQuery}
-              busy={searchBusy}
-              results={searchResults}
-              studentProfile={studentSearchProfile}
-              onClear={() => setSearchQuery('')}
-              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
-              onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
-            />
-          ) : null}
-
-          {visibleDocumentCategories.length ? (
-            <nav className="dash-filters" aria-label="Activity areas">
-              <button
-                type="button"
-                className={`dash-filter ${!selectedCategory ? 'active' : ''}`}
-                onClick={() => {
-                  setDashboardView('default')
-                  setSelectedCategory('')
-                }}
-              >
-                All activity
-              </button>
-              {visibleDocumentCategories.map((category) => {
-                const active = selectedCategory === category.value
-                return (
-                  <button
-                    key={category.value}
-                    type="button"
-                    className={`dash-filter ${active ? 'active' : ''}`}
+                    className={`dash-filter ${!selectedCategory ? 'active' : ''}`}
                     onClick={() => {
                       setDashboardView('default')
-                      setSelectedCategory(active ? '' : category.value)
+                      setSelectedCategory('')
                     }}
-                    title={category.summary}
                   >
-                    {category.label}
+                    All activity
                   </button>
-                )
-              })}
-            </nav>
-          ) : null}
+                  {visibleDocumentCategories.map((category) => {
+                    const active = selectedCategory === category.value
+                    return (
+                      <button
+                        key={category.value}
+                        type="button"
+                        className={`dash-filter ${active ? 'active' : ''}`}
+                        onClick={() => {
+                          setDashboardView('default')
+                          setSelectedCategory(active ? '' : category.value)
+                        }}
+                        title={category.summary}
+                      >
+                        {category.label}
+                      </button>
+                    )
+                  })}
+                </nav>
+              ) : null}
 
-          <section className="dash-metrics">
-            <StatCard label="Uploaded this week" value={data.recentlyUploaded} caption="new files" accent="upload" />
-            <StatCard label="Pending approvals" value={data.pendingApprovals} caption="in your queue" accent="approvals" />
-            <StatCard label="Department files" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
-            <StatCard label="Storage" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
-          </section>
+              <section className={`dash-metrics ${isRegistrar ? 'dash-metrics-registrar' : ''}`}>
+                <StatCard label="Uploaded this week" value={data.recentlyUploaded} caption="new files" accent="upload" />
+                {!isRegistrar ? (
+                  <StatCard label="Pending approvals" value={data.pendingApprovals} caption="in your queue" accent="approvals" />
+                ) : null}
+                <StatCard label="Department files" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
+                <StatCard label="Storage" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
+              </section>
 
-          <section className="dash-grid">
-            <div className="dash-panel dash-panel-main">
-              <div className="dash-panel-head">
-                <div>
-                  <h2>
-                    {dashboardView === 'archive'
-                      ? 'Removed archive'
-                      : dashboardView === 'recent'
-                        ? 'Recent activity'
-                        : 'Department activity'}
-                  </h2>
-                  <p>
-                    {dashboardView === 'archive'
-                      ? session.role === 'ADMIN'
-                        ? 'Files awaiting permanent deletion confirmation. Only administrators can confirm removal.'
-                        : `Files moved to archive by ${roleConfig.roleLabel || 'your role'}. An administrator must confirm permanent deletion.`
-                      : dashboardView === 'recent'
-                        ? 'Actions recorded in the last 7 days.'
-                        : selectedCategoryMeta
-                          ? `Recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
-                          : 'Recent actions across your department workspace.'}
-                  </p>
-                </div>
-                <div className="dash-panel-actions">
-                <button
-                  type="button"
-                  className="dash-text-btn"
-                  onClick={refreshDashboardView}
-                >
-                  Refresh <ArrowRightIcon className="icon" />
-                </button>
-                </div>
-              </div>
+              <section className="dash-grid">
+                <div className="dash-panel dash-panel-main">
+                  <div className="dash-panel-head">
+                    <div>
+                      <h2>
+                        {dashboardView === 'archive'
+                          ? 'Removed archive'
+                          : dashboardView === 'shared'
+                            ? 'Shared with me'
+                            : dashboardView === 'recent'
+                              ? 'Recent activity'
+                              : 'Department activity'}
+                      </h2>
+                      <p>
+                        {dashboardView === 'archive'
+                          ? session.role === 'ADMIN'
+                            ? 'Files awaiting permanent deletion confirmation. Only administrators can confirm removal.'
+                            : `Files moved to archive by ${roleConfig.roleLabel || 'your role'}. An administrator must confirm permanent deletion.`
+                          : dashboardView === 'shared'
+                            ? 'Folders and files shared with your role. Open an item to view it with the granted permission.'
+                            : dashboardView === 'recent'
+                              ? 'Actions recorded in the last 7 days.'
+                              : selectedCategoryMeta
+                                ? `Recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
+                                : 'Recent actions across your department workspace.'}
+                      </p>
+                    </div>
+                    <div className="dash-panel-actions">
+                      <button
+                        type="button"
+                        className="dash-text-btn"
+                        onClick={refreshDashboardView}
+                      >
+                        Refresh <ArrowRightIcon className="icon" />
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="table-shell dash-table-shell">
-                <table className="dash-table">
-                  <thead>
-                    <tr>
-                      {dashboardView === 'archive' ? (
-                        <>
-                          <th>Document</th>
-                          <th>Student</th>
-                          <th>Category</th>
-                          <th>Archived</th>
-                          <th>Role</th>
-                          <th>{session.role === 'ADMIN' ? 'Actions' : 'Status'}</th>
-                        </>
-                      ) : (
-                        <>
-                          <th>Action</th>
-                          <th>Performed by</th>
-                          <th>Type</th>
-                          <th>Date</th>
-                        </>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dashboardView === 'archive' ? (
-                      archiveBusy ? (
+                  <div className="table-shell dash-table-shell">
+                    <table className="dash-table">
+                      <thead>
                         <tr>
-                          <td colSpan="6" className="empty-state">Loading archive...</td>
+                          {dashboardView === 'archive' ? (
+                            <>
+                              <th>Document</th>
+                              <th>Student</th>
+                              <th>Category</th>
+                              <th>Archived</th>
+                              <th>Role</th>
+                              <th>{session.role === 'ADMIN' ? 'Actions' : 'Status'}</th>
+                            </>
+                          ) : dashboardView === 'shared' ? (
+                            <>
+                              <th>Item</th>
+                              <th>Type</th>
+                              <th>Permission</th>
+                              <th>Shared by</th>
+                              <th>Date</th>
+                              <th>Open</th>
+                            </>
+                          ) : (
+                            <>
+                              <th>Action</th>
+                              <th>Performed by</th>
+                              <th>Type</th>
+                              <th>Date</th>
+                            </>
+                          )}
                         </tr>
-                      ) : archiveList.length ? (
-                        archiveList.map((fileRow) => (
-                          <tr key={`archive-${fileRow.id}-${fileRow.archivedAt}`}>
-                            <td>
-                              <div className="file-cell">
-                                <DocumentIcon className="icon doc" />
-                                <div>
-                                  <strong>{fileRow.title}</strong>
-                                  <span>{fileRow.fileName}</span>
-                                </div>
-                              </div>
-                            </td>
-                            <td>
-                              <strong>{fileRow.studentNumber || '-'}</strong>
-                              <span className="muted-cell">{fileRow.ownerName || 'Student'}</span>
-                            </td>
-                            <td>
-                              <span className="document-chip">
-                                {getCategoryMeta(fileRow.category).label}
-                              </span>
-                            </td>
-                            <td>{formatDateTime(fileRow.archivedAt)}</td>
-                            <td>{fileRow.archivedBy || '-'}</td>
-                            <td>
-                              <div className="archive-row-actions">
-                                <button type="button" className="dash-text-btn" onClick={() => handleRestoreArchived(fileRow.id)}>
-                                  Restore
-                                </button>
-                                {session.role === 'ADMIN' ? (
-                                  <button type="button" className="dash-text-btn danger-text" onClick={() => handlePermanentDelete(fileRow.id)}>
-                                    Delete permanently
+                      </thead>
+                      <tbody>
+                        {dashboardView === 'archive' ? (
+                          archiveBusy ? (
+                            <tr>
+                              <td colSpan="6" className="empty-state">Loading archive...</td>
+                            </tr>
+                          ) : archiveList.length ? (
+                            archiveList.map((fileRow) => (
+                              <tr key={`archive-${fileRow.id}-${fileRow.archivedAt}`}>
+                                <td>
+                                  <div className="file-cell">
+                                    <DocumentIcon className="icon doc" />
+                                    <div>
+                                      <strong>{fileRow.title}</strong>
+                                      <span>{fileRow.fileName}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>
+                                  <strong>{fileRow.studentNumber || '-'}</strong>
+                                  <span className="muted-cell">{fileRow.ownerName || 'Student'}</span>
+                                </td>
+                                <td>
+                                  <span className="document-chip">
+                                    {getCategoryMeta(fileRow.category).label}
+                                  </span>
+                                </td>
+                                <td>{formatDateTime(fileRow.archivedAt)}</td>
+                                <td>{fileRow.archivedBy || '-'}</td>
+                                <td>
+                                  <div className="archive-row-actions">
+                                    <button type="button" className="dash-text-btn" onClick={() => handleRestoreArchived(fileRow.id)}>
+                                      Restore
+                                    </button>
+                                    {session.role === 'ADMIN' ? (
+                                      <button type="button" className="dash-text-btn danger-text" onClick={() => handlePermanentDelete(fileRow.id)}>
+                                        Delete permanently
+                                      </button>
+                                    ) : (
+                                      <span className="status rejected">AWAITING ADMIN</span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan="6" className="empty-state">
+                                Archive is empty. Removed files from your role will appear here.
+                              </td>
+                            </tr>
+                          )
+                        ) : dashboardView === 'shared' ? (
+                          sharedBusy ? (
+                            <tr>
+                              <td colSpan="6" className="empty-state">Loading shared items...</td>
+                            </tr>
+                          ) : sharedItems.length ? (
+                            sharedItems.map((item) => (
+                              <tr key={`shared-${item.shareId}`}>
+                                <td>
+                                  <div className="file-cell">
+                                    {item.itemType === 'FOLDER' ? (
+                                      <FolderIcon className="icon" />
+                                    ) : (
+                                      <DocumentIcon className="icon doc" />
+                                    )}
+                                    <div>
+                                      <strong>{item.name}</strong>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td>{item.itemType === 'FOLDER' ? 'Folder' : 'File'}</td>
+                                <td>
+                                  <span className="document-chip">{item.permissionLabel || item.permission}</span>
+                                </td>
+                                <td>{item.sharedBy || '-'}</td>
+                                <td>{formatDateTime(item.sharedAt)}</td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="dash-text-btn"
+                                    onClick={() => {
+                                      if (item.itemType === 'DOCUMENT' && item.documentId) {
+                                        openDocument(item.documentId).catch((err) => {
+                                          showNotice(err.message || 'Unable to open document.')
+                                        })
+                                        return
+                                      }
+                                      if (item.folderId) {
+                                        openFolder(item.folderId)
+                                      } else {
+                                        showNotice('This shared item is no longer available.')
+                                      }
+                                    }}
+                                  >
+                                    Open
                                   </button>
-                                ) : (
-                                  <span className="status rejected">AWAITING ADMIN</span>
-                                )}
-                              </div>
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan="6" className="empty-state">
+                                Nothing has been shared with you yet.
+                              </td>
+                            </tr>
+                          )
+                        ) : loading || activitiesBusy ? (
+                          <tr>
+                            <td colSpan="4" className="empty-state">Loading activity...</td>
+                          </tr>
+                        ) : dashboardActivities.length ? (
+                          dashboardActivities.filter((entry) => session.role !== 'HOD' || (!String(entry.actor || '').toLowerCase().includes('librarian') && !String(entry.message || '').toLowerCase().includes('librarian'))).map((entry) => (
+                            <tr key={entry.id}>
+                              <td>
+                                <div className="file-cell">
+                                  <ActivityDot category={entry.category} />
+                                  <div>
+                                    <strong>{entry.message}</strong>
+                                  </div>
+                                </div>
+                              </td>
+                              <td>{entry.actor}</td>
+                              <td>
+                                <span className="document-chip">{activityCategoryLabel(entry.category)}</span>
+                              </td>
+                              <td>{formatDateTime(entry.createdAt)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="4" className="empty-state">
+                              {dashboardView === 'recent'
+                                ? 'No activity recorded in the last 7 days.'
+                                : selectedCategoryMeta
+                                  ? `No recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
+                                  : 'No activity recorded yet.'}
                             </td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="6" className="empty-state">
-                            Archive is empty. Removed files from your role will appear here.
-                          </td>
-                        </tr>
-                      )
-                    ) : loading || activitiesBusy ? (
-                      <tr>
-                        <td colSpan="4" className="empty-state">Loading activity...</td>
-                      </tr>
-                    ) : dashboardActivities.length ? (
-                      dashboardActivities.map((entry) => (
-                        <tr key={entry.id}>
-                          <td>
-                            <div className="file-cell">
-                              <ActivityDot category={entry.category} />
-                              <div>
-                                <strong>{entry.message}</strong>
-                              </div>
-                            </div>
-                          </td>
-                          <td>{entry.actor}</td>
-                          <td>
-                            <span className="document-chip">{activityCategoryLabel(entry.category)}</span>
-                          </td>
-                          <td>{formatDateTime(entry.createdAt)}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan="4" className="empty-state">
-                          {dashboardView === 'recent'
-                            ? 'No activity recorded in the last 7 days.'
-                            : selectedCategoryMeta
-                              ? `No recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
-                              : 'No activity recorded yet.'}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <aside className="dash-panel dash-panel-side">
-              <div className="dash-panel-head dash-panel-head-inline">
-                <h2>Approvals</h2>
-                <span className="dash-count">{data.awaitingApproval?.length || 0}</span>
-              </div>
-
-              <div className="dash-approval-list">
-                {(data.awaitingApproval || []).length ? (data.awaitingApproval || []).map((task) => (
-                  <div key={task.id} className="dash-approval-item">
-                    <div className="approval-copy">
-                      <div className="approval-title">
-                        <DocumentIcon className="icon doc" />
-                        <strong>{task.documentTitle}</strong>
-                      </div>
-                      <span>{task.requestedBy}</span>
-                      <p>{task.note}</p>
-                    </div>
-                    <div className="approval-meta">
-                      <span className={`priority ${String(task.priority || '').toLowerCase()}`}>{task.priority}</span>
-                      <div className="approval-actions">
-                        <button type="button" className="tiny-btn approve" onClick={() => handleDecision(task.id, 'approve')}>
-                          <CheckIcon className="icon" /> Approve
-                        </button>
-                        <button type="button" className="tiny-btn reject" onClick={() => handleDecision(task.id, 'reject')}>
-                          <XIcon className="icon" /> Reject
-                        </button>
-                      </div>
-                    </div>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
-                )) : (
-                  <p className="dash-side-empty">Nothing waiting for approval.</p>
-                )}
-              </div>
+                </div>
 
-              <div className="dash-side-block">
-                <div className="dash-panel-head dash-panel-head-inline">
-                  <h3>Student lookup</h3>
-                  <span className="dash-count">{studentLookupResult?.documentCount || 0}</span>
-                </div>
-                <p className="dash-side-note">Search by student ID ({STUDENT_ID_FORMATS_HINT}) to view their full archive.</p>
-                <div className="lookup-form">
-                  <input
-                    value={studentLookupQuery}
-                    onChange={(event) => {
-                      setStudentLookupQuery(event.target.value)
-                      setStudentLookupError('')
-                      setStudentLookupInfo('')
-                    }}
-                    placeholder="e.g. 20251SEN001 or 25876"
-                  />
-                  <button
-                    type="button"
-                    className="primary-btn lookup-button"
-                    onClick={() => lookupStudentArchive(studentLookupQuery)}
-                    disabled={studentLookupBusy}
-                  >
-                    {studentLookupBusy ? 'Searching...' : 'Search student'}
-                  </button>
-                </div>
-                {studentLookupError ? <div className="lookup-error">{studentLookupError}</div> : null}
-                {!studentLookupError && studentLookupInfo ? <div className="lookup-info">{studentLookupInfo}</div> : null}
-                {studentLookupResult ? (
-                  <div className="lookup-result">
-                    <button
-                      type="button"
-                      className="lookup-summary lookup-summary-link"
-                      onClick={() => handleOpenArchiveFolder(studentLookupResult.folderId, studentLookupResult.studentNumber)}
-                      title="Open student archive folder"
-                    >
-                      <strong>{studentLookupResult.studentName}</strong>
-                      <span>{studentLookupResult.studentNumber}</span>
-                      <span>{studentLookupResult.documentCount} documents</span>
-                      <span className="lookup-open-folder">Open folder</span>
-                    </button>
-                    <div className="lookup-documents">
-                      {(studentLookupResult.documents || []).slice(0, 3).map((document) => (
-                        <button
-                          key={document.id}
-                          type="button"
-                          className="lookup-doc-item lookup-doc-item-link"
-                          onClick={() => handleOpenArchiveFolder(document.folderId || studentLookupResult.folderId, studentLookupResult.studentNumber)}
-                          title={`Open folder: ${document.folderName || 'Archive'}`}
-                        >
-                          <DocumentIcon className="icon doc" />
-                          <div>
-                            <strong>{document.title}</strong>
-                            <span>
-                              {getCategoryMeta(document.category).label} - {formatDate(document.issueDate)} - {document.pageCount || '-'} pages
-                            </span>
-                            <span className="muted-cell">{document.folderName || 'Open archive folder'}</span>
-                            {document.examType ? (
-                              <span className="muted-cell">
-                                {[
-                                  getExamPaperTypeMeta(document.examType).label,
-                                  document.course,
-                                  document.academicYear,
-                                  document.semester,
-                                  document.marks != null ? `${document.marks}/${getExamPaperTypeMeta(document.examType).maxMarks}` : null,
-                                  document.examRoom
-                                ].filter(Boolean).join(' | ')}
-                              </span>
-                            ) : null}
+                <aside className="dash-panel dash-panel-side">
+                  <div className="dash-panel-head dash-panel-head-inline">
+                    <h2>Approvals</h2>
+                    <span className="dash-count">{data.awaitingApproval?.length || 0}</span>
+                  </div>
+
+                  <div className="dash-approval-list">
+                    {(data.awaitingApproval || []).length ? (data.awaitingApproval || []).map((task) => (
+                      <div key={task.id} className="dash-approval-item">
+                        <div className="approval-copy">
+                          <div className="approval-title">
+                            <DocumentIcon className="icon doc" />
+                            <strong>{task.documentTitle}</strong>
                           </div>
-                        </button>
-                      ))}
-                      {(studentLookupResult.documents || []).length > 3 ? (
+                          <span>{task.requestedBy}{task.studentNumber ? ` · ${task.studentNumber}` : ''}</span>
+                          <p>{task.note || 'Awaiting review'}</p>
+                        </div>
+                        <div className="approval-meta">
+                          <span className={`priority ${String(task.priority || '').toLowerCase()}`}>{task.priority}</span>
+                          <div className="approval-actions">
+                            {isLibrarian ? (
+                              <button
+                                type="button"
+                                className="tiny-btn"
+                                onClick={() => {
+                                  setApprovalReviewTask(task)
+                                  setApprovalReviewNote('')
+                                }}
+                              >
+                                Review
+                              </button>
+                            ) : (
+                              <>
+                                <button type="button" className="tiny-btn approve" onClick={() => handleDecision(task.id, 'approve')}>
+                                  <CheckIcon className="icon" /> Approve
+                                </button>
+                                <button type="button" className="tiny-btn reject" onClick={() => handleDecision(task.id, 'reject')}>
+                                  <XIcon className="icon" /> Reject
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )) : (
+                      <p className="dash-side-empty">Nothing waiting for approval.</p>
+                    )}
+                  </div>
+
+                  <div className="dash-side-block">
+                    <div className="dash-panel-head dash-panel-head-inline">
+                      <h3>Student lookup</h3>
+                      <span className="dash-count">{studentLookupResult?.documentCount || 0}</span>
+                    </div>
+                    <div className="lookup-form">
+                      <input
+                        value={studentLookupQuery}
+                        onChange={(event) => {
+                          setStudentLookupQuery(event.target.value)
+                          setStudentLookupError('')
+                          setStudentLookupInfo('')
+                        }}
+                        placeholder="Student ID"
+                      />
+                      <button
+                        type="button"
+                        className="primary-btn lookup-button"
+                        onClick={() => lookupStudentArchive(studentLookupQuery)}
+                        disabled={studentLookupBusy}
+                      >
+                        {studentLookupBusy ? 'Searching...' : 'Search student'}
+                      </button>
+                    </div>
+                    {studentLookupError ? <div className="lookup-error">{studentLookupError}</div> : null}
+                    {!studentLookupError && studentLookupInfo ? <div className="lookup-info">{studentLookupInfo}</div> : null}
+                    {studentLookupResult ? (
+                      <div className="lookup-result">
                         <button
                           type="button"
-                          className="lookup-more lookup-more-link"
+                          className="lookup-summary lookup-summary-link"
                           onClick={() => handleOpenArchiveFolder(studentLookupResult.folderId, studentLookupResult.studentNumber)}
+                          title="Open student archive folder"
                         >
-                          + {(studentLookupResult.documents || []).length - 3} more documents · Open folder
+                          <strong>{studentLookupResult.studentName}</strong>
+                          <span>{studentLookupResult.studentNumber}</span>
+                          <span>{studentLookupResult.documentCount} documents</span>
+                          <span className="lookup-open-folder">Open folder</span>
                         </button>
-                      ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="dash-side-block dash-side-block-muted">
+                    <h3>Recent activity</h3>
+                    <div className="dash-activity-list">
+                      {(data.departmentActivity || []).map((entry) => (
+                        <div key={entry.id} className="dash-activity-row">
+                          <ActivityDot category={entry.category} />
+                          <div>
+                            <strong>{entry.message}</strong>
+                            <span>{entry.actor} - {formatDate(entry.createdAt)}</span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ) : (
-                  <p className="lookup-empty">Search a student ID to reveal their archive.</p>
-                )}
-              </div>
+                </aside>
+              </section>
 
-              <div className="dash-side-block dash-side-block-muted">
-                <h3>Recent activity</h3>
-                <div className="dash-activity-list">
-                  {(data.departmentActivity || []).map((entry) => (
-                    <div key={entry.id} className="dash-activity-row">
-                      <ActivityDot category={entry.category} />
-                      <div>
-                        <strong>{entry.message}</strong>
-                        <span>{entry.actor} - {formatDate(entry.createdAt)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </aside>
-          </section>
-
-          {error ? <div className="banner warning">{error}</div> : null}
+              {error ? <div className="banner warning">{error}</div> : null}
             </div>
           )}
         </main>
@@ -4065,11 +5101,54 @@ function App() {
         selectLabel={appConfirm?.selectLabel}
         selectOptions={appConfirm?.selectOptions}
         selectValue={appConfirmSelect}
-        onSelectChange={setAppConfirmSelect}
+        hideConfirmButton={Boolean(appConfirm?.hideConfirmButton)}
+        onSelectChange={(value) => {
+          setAppConfirmSelect(value)
+          if (!appConfirm?.autoConfirmOnSelect || !value || appConfirmBusy) {
+            return
+          }
+          setAppConfirmBusy(true)
+          Promise.resolve()
+            .then(() => appConfirm.onConfirm?.(value))
+            .then(() => {
+              setAppConfirm(null)
+              setAppConfirmInput('')
+              setAppConfirmSelect('')
+            })
+            .catch((err) => {
+              showNotice(err.message || 'Unable to move folder.')
+            })
+            .finally(() => {
+              setAppConfirmBusy(false)
+            })
+        }}
         onConfirm={runAppConfirmAction}
         onCancel={closeAppConfirm}
         busy={appConfirmBusy}
       />
+
+      {isStudent && studentFypWizardOpen ? (
+        <StudentFypWizard
+          session={session}
+          existingDocumentId={studentFypEditId}
+          onClose={() => {
+            setStudentFypWizardOpen(false)
+            setStudentFypEditId(null)
+          }}
+          onNotify={showNotice}
+          onSubmitted={async () => {
+            setStudentFypWizardOpen(false)
+            setStudentFypEditId(null)
+            await refreshExplorerData?.()
+            try {
+              const fresh = await getDashboard()
+              setDashboard(fresh)
+            } catch {
+              // Dashboard refresh is best-effort after submit.
+            }
+          }}
+        />
+      ) : null}
 
       {modalOpen ? (
         <div className="modal-backdrop" onClick={() => setModalOpen(false)} role="presentation">
@@ -4205,48 +5284,48 @@ function App() {
 
               <div className="form-grid">
                 {!isStudent ? (
-                <label className="lookup-field">
-                  <span>Student ID</span>
-                  <div className="lookup-input-row">
-                    <input
-                      value={form.studentNumber}
-                      onChange={(event) => {
-                        const next = applyStudentIdDefaults(form, event.target.value)
-                        setForm(next)
-                        setStudentLookupError('')
-                        setStudentLookupInfo('')
-                        setStudentLookupResult(null)
-                        setStudentEntryMode('idle')
-                      }}
-                      placeholder="e.g. 20251SEN001 or 25876"
-                    />
-                    <button
-                      type="button"
-                      className="ghost-btn lookup-action"
-                      onClick={() => lookupStudentArchive(form.studentNumber, { populateForm: true })}
-                      disabled={studentLookupBusy}
-                    >
-                      {studentLookupBusy ? 'Checking...' : 'Search student'}
-                    </button>
-                  </div>
-                  {studentLookupResult?.studentNumber === String(form.studentNumber || '').trim() ? (
-                    <small className="lookup-hint">
-                      Found {studentLookupResult.studentName} with {studentLookupResult.documentCount} stored documents.
-                    </small>
-                  ) : null}
-                  {studentLookupError && form.studentNumber.trim() ? <small className="lookup-hint error">{studentLookupError}</small> : null}
-                  {studentLookupInfo && form.studentNumber.trim() ? <small className="lookup-hint info">{studentLookupInfo}</small> : null}
-                </label>
+                  <label className="lookup-field">
+                    <span>Student ID</span>
+                    <div className="lookup-input-row">
+                      <input
+                        value={form.studentNumber}
+                        onChange={(event) => {
+                          const next = applyStudentIdDefaults(form, event.target.value)
+                          setForm(next)
+                          setStudentLookupError('')
+                          setStudentLookupInfo('')
+                          setStudentLookupResult(null)
+                          setStudentEntryMode('idle')
+                        }}
+                        placeholder="e.g. 20251SEN001 or 25876"
+                      />
+                      <button
+                        type="button"
+                        className="ghost-btn lookup-action"
+                        onClick={() => lookupStudentArchive(form.studentNumber, { populateForm: true })}
+                        disabled={studentLookupBusy}
+                      >
+                        {studentLookupBusy ? 'Checking...' : 'Search student'}
+                      </button>
+                    </div>
+                    {studentLookupResult?.studentNumber === String(form.studentNumber || '').trim() ? (
+                      <small className="lookup-hint">
+                        Found {studentLookupResult.studentName} with {studentLookupResult.documentCount} stored documents.
+                      </small>
+                    ) : null}
+                    {studentLookupError && form.studentNumber.trim() ? <small className="lookup-hint error">{studentLookupError}</small> : null}
+                    {studentLookupInfo && form.studentNumber.trim() ? <small className="lookup-hint info">{studentLookupInfo}</small> : null}
+                  </label>
                 ) : null}
                 {!isStudent ? (
-                <label>
-                  <span>Student name</span>
-                  <input
-                    value={form.studentName}
-                    onChange={(event) => setForm({ ...form, studentName: event.target.value })}
-                    placeholder="Will be linked to the student ID"
-                  />
-                </label>
+                  <label>
+                    <span>Student name</span>
+                    <input
+                      value={form.studentName}
+                      onChange={(event) => setForm({ ...form, studentName: event.target.value })}
+                      placeholder="Will be linked to the student ID"
+                    />
+                  </label>
                 ) : null}
                 {documentTypeLocked ? (
                   <div className="title-banner locked-category">
@@ -4551,6 +5630,88 @@ function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {approvalReviewTask ? (
+        <div className="modal-backdrop" onClick={approvalReviewBusy ? undefined : () => setApprovalReviewTask(null)} role="presentation">
+          <div
+            className="modal student-fyp-wizard"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="librarian-review-title"
+          >
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow">Librarian review</p>
+                <h2 id="librarian-review-title">{approvalReviewTask.documentTitle}</h2>
+                <p>
+                  {approvalReviewTask.requestedBy}
+                  {approvalReviewTask.studentNumber ? ` · ${approvalReviewTask.studentNumber}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ghost-icon"
+                onClick={() => setApprovalReviewTask(null)}
+                disabled={approvalReviewBusy}
+                aria-label="Close"
+              >
+                <XIcon className="icon" />
+              </button>
+            </div>
+            <div className="fyp-review">
+              <dl>
+                <div><dt>Description</dt><dd>{approvalReviewTask.description || 'No description provided'}</dd></div>
+                <div><dt>GitHub</dt><dd>{approvalReviewTask.githubUrl || 'Not provided'}</dd></div>
+                <div><dt>External links</dt><dd>{approvalReviewTask.externalLinks || 'Not provided'}</dd></div>
+                <div><dt>File</dt><dd>{approvalReviewTask.fileName || 'Project ZIP'}</dd></div>
+              </dl>
+              {approvalReviewTask.documentId ? (
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => openDocument(approvalReviewTask.documentId).catch((err) => showNotice(err.message || 'Unable to open file.'))}
+                >
+                  <DownloadIcon className="icon" />
+                  Open submitted file
+                </button>
+              ) : null}
+              <label style={{ display: 'grid', gap: 8, marginTop: 16 }}>
+                <span>Decision note</span>
+                <textarea
+                  rows={4}
+                  value={approvalReviewNote}
+                  onChange={(event) => setApprovalReviewNote(event.target.value)}
+                  placeholder="Required for rejection. Optional for approval."
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="ghost-btn" onClick={() => setApprovalReviewTask(null)} disabled={approvalReviewBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="tiny-btn reject"
+                disabled={approvalReviewBusy}
+                onClick={() => handleDecision(approvalReviewTask.id, 'reject', approvalReviewNote)}
+              >
+                <XIcon className="icon" />
+                Reject
+              </button>
+              <button
+                type="button"
+                className="tiny-btn approve"
+                disabled={approvalReviewBusy}
+                onClick={() => handleDecision(approvalReviewTask.id, 'approve', approvalReviewNote)}
+              >
+                <CheckIcon className="icon" />
+                Accept
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

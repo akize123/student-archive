@@ -35,6 +35,7 @@ public record DocumentDetailResponse(
         String githubUrl,
         String externalLinks,
         String reviewNote,
+        String coverPhotoPath,
         String downloadUrl
 ) {
 }

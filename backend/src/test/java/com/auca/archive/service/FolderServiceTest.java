@@ -4,10 +4,13 @@ import com.auca.archive.dto.FolderNodeResponse;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.repository.DocumentRepository;
 import com.auca.archive.repository.FolderRepository;
+import com.auca.archive.repository.FolderShareRepository;
+import com.auca.archive.repository.StudentRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 
@@ -24,6 +27,12 @@ class FolderServiceTest {
     private DocumentRepository documentRepository;
 
     @Mock
+    private StudentRepository studentRepository;
+
+    @Mock
+    private FolderShareRepository folderShareRepository;
+
+    @Mock
     private ArchiveAccessService accessService;
 
     @Mock
@@ -31,6 +40,12 @@ class FolderServiceTest {
 
     @Mock
     private FileEncryptionService fileEncryptionService;
+
+    @Mock
+    private StudentIdFormatService studentIdFormatService;
+
+    @Mock
+    private ObjectProvider<ArchiveTreeService> archiveTreeService;
 
     @Test
     void getTreeHandlesRootFoldersWithNullParentIds() {
@@ -43,7 +58,18 @@ class FolderServiceTest {
         when(folderRepository.findAll()).thenReturn(List.of(root, child));
         when(documentRepository.findByFolderId(anyLong())).thenReturn(List.of());
 
-        FolderService folderService = new FolderService(folderRepository, documentRepository, accessService, activityService, fileEncryptionService, "storage");
+        FolderService folderService = new FolderService(
+                folderRepository,
+                documentRepository,
+                studentRepository,
+                folderShareRepository,
+                accessService,
+                activityService,
+                fileEncryptionService,
+                studentIdFormatService,
+                archiveTreeService,
+                "storage"
+        );
 
         List<FolderNodeResponse> tree = folderService.getTree();
 

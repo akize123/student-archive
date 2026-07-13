@@ -30,6 +30,8 @@ public record DocumentListItemResponse(
         String archivedBy,
         String githubUrl,
         String externalLinks,
-        String reviewNote
+        String reviewNote,
+        String description,
+        Boolean hasCoverPhoto
 ) {
 }

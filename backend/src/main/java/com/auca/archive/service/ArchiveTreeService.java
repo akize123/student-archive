@@ -8,6 +8,7 @@ import com.auca.archive.model.FolderEntity;
 import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.FolderRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Path;
 import java.util.Locale;
@@ -16,6 +17,22 @@ import java.util.Optional;
 @Service
 public class ArchiveTreeService {
     public static final String ROOT_CODE = "AUCA";
+    public static final String OFFICIAL_DOCUMENTS_NAME = "Official Documents";
+    public static final String OFFICIAL_DOCUMENTS_SUFFIX = "SOFF";
+    public static final String FINAL_YEAR_PROJECT_NAME = "Final Year Project";
+    public static final String FINAL_YEAR_PROJECT_SUFFIX = "SMY";
+    public static final String ARCHIVE_PROJECT_NAME = "Archive project";
+    public static final String ARCHIVE_PROJECT_SUFFIX = "SARC";
+    public static final String LIBRARY_REVIEW_NAME = "Library FYP Reviews";
+    public static final String LIBRARY_REVIEW_CODE = "LIB-FYP";
+    public static final String LIBRARY_ACCEPTED_NAME = "Accepted";
+    public static final String LIBRARY_ACCEPTED_CODE = "LIB-FYP-ACC";
+    public static final String LIBRARY_REJECTED_NAME = "Rejected";
+    public static final String LIBRARY_REJECTED_CODE = "LIB-FYP-REJ";
+    /** @deprecated use FINAL_YEAR_PROJECT_NAME */
+    public static final String MY_PROJECTS_NAME = FINAL_YEAR_PROJECT_NAME;
+    /** @deprecated use FINAL_YEAR_PROJECT_SUFFIX */
+    public static final String MY_PROJECTS_SUFFIX = FINAL_YEAR_PROJECT_SUFFIX;
 
     private final FolderService folderService;
     private final AcademicTermService academicTermService;
@@ -31,64 +48,134 @@ public class ArchiveTreeService {
         this.folderRepository = folderRepository;
     }
 
+    @Transactional
+    public StudentWorkspace ensureStudentWorkspace(StudentEntity student) {
+        return ensureStudentWorkspace(student, null, null, null, null);
+    }
+
+    @Transactional
+    public StudentWorkspace ensureStudentWorkspace(
+            StudentEntity student,
+            String facultyOverride,
+            String departmentOverride,
+            String academicYearOverride,
+            String semesterOverride
+    ) {
+        if (student == null || student.getStudentNumber() == null || student.getStudentNumber().isBlank()) {
+            throw new IllegalArgumentException("Student profile is required to create the workspace");
+        }
+        String faculty = requireText(student.getFaculty(), facultyOverride, "Faculty is required to create the student workspace");
+        String department = requireText(student.getDepartment(), departmentOverride, "Department is required to create the student workspace");
+        FolderEntity studentFolder = resolveStudentRootFolder(
+                student.getStudentNumber(),
+                faculty,
+                department,
+                academicYearOverride,
+                semesterOverride
+        );
+        FolderEntity official = folderService.resolveOrCreateFolder(
+                OFFICIAL_DOCUMENTS_NAME,
+                studentFolder.getCode() + "-" + OFFICIAL_DOCUMENTS_SUFFIX,
+                studentFolder.getId()
+        );
+        FolderEntity projects = folderService.resolveOrCreateFolder(
+                FINAL_YEAR_PROJECT_NAME,
+                studentFolder.getCode() + "-" + FINAL_YEAR_PROJECT_SUFFIX,
+                studentFolder.getId()
+        );
+        FolderEntity archiveProject = folderService.resolveOrCreateFolder(
+                ARCHIVE_PROJECT_NAME,
+                studentFolder.getCode() + "-" + ARCHIVE_PROJECT_SUFFIX,
+                studentFolder.getId()
+        );
+        return new StudentWorkspace(studentFolder, official, projects, archiveProject);
+    }
+
+    @Transactional
+    public LibrarianReviewFolders ensureLibrarianReviewFolders() {
+        FolderEntity root = folderService.getFolderByCodeOrThrow(ROOT_CODE);
+        FolderEntity libraryRoot = folderService.resolveOrCreateFolder(
+                LIBRARY_REVIEW_NAME,
+                LIBRARY_REVIEW_CODE,
+                root.getId()
+        );
+        FolderEntity accepted = folderService.resolveOrCreateFolder(
+                LIBRARY_ACCEPTED_NAME,
+                LIBRARY_ACCEPTED_CODE,
+                libraryRoot.getId()
+        );
+        FolderEntity rejected = folderService.resolveOrCreateFolder(
+                LIBRARY_REJECTED_NAME,
+                LIBRARY_REJECTED_CODE,
+                libraryRoot.getId()
+        );
+        return new LibrarianReviewFolders(libraryRoot, accepted, rejected);
+    }
+
+    @Transactional
+    public FolderEntity createAcceptedProjectProfile(StudentEntity student, String projectTitle, Long documentId) {
+        StudentWorkspace workspace = ensureStudentWorkspace(student);
+        String safeTitle = projectTitle == null || projectTitle.isBlank() ? "Accepted Project" : projectTitle.trim();
+        String profileCode = workspace.archiveProject().getCode()
+                + "-PRF-"
+                + sanitizeCode(safeTitle)
+                + "-"
+                + (documentId == null ? "NEW" : documentId);
+        return folderService.resolveOrCreateFolder(safeTitle, profileCode, workspace.archiveProject().getId());
+    }
+
+    @Transactional
+    public FolderEntity placeRejectedProject(StudentEntity student, String projectTitle, Long documentId) {
+        LibrarianReviewFolders reviewFolders = ensureLibrarianReviewFolders();
+        String label = (student.getStudentNumber() == null ? "Student" : student.getStudentNumber())
+                + " - "
+                + (projectTitle == null || projectTitle.isBlank() ? "Rejected Project" : projectTitle.trim());
+        String code = reviewFolders.rejected().getCode()
+                + "-STU-"
+                + sanitizeCode(student.getStudentNumber())
+                + "-"
+                + (documentId == null ? "NEW" : documentId);
+        return folderService.resolveOrCreateFolder(label, code, reviewFolders.rejected().getId());
+    }
+
+    @Transactional
+    public FolderEntity placeAcceptedProjectForLibrarian(StudentEntity student, String projectTitle, Long documentId) {
+        LibrarianReviewFolders reviewFolders = ensureLibrarianReviewFolders();
+        String label = (student.getStudentNumber() == null ? "Student" : student.getStudentNumber())
+                + " - "
+                + (projectTitle == null || projectTitle.isBlank() ? "Accepted Project" : projectTitle.trim());
+        String code = reviewFolders.accepted().getCode()
+                + "-STU-"
+                + sanitizeCode(student.getStudentNumber())
+                + "-"
+                + (documentId == null ? "NEW" : documentId);
+        return folderService.resolveOrCreateFolder(label, code, reviewFolders.accepted().getId());
+    }
+
     public FolderEntity resolveUploadFolder(
             UploadDocumentRequest request,
             StudentEntity student,
             ExamPaperType examPaperType
     ) {
-        String faculty = requireText(student.getFaculty(), request.faculty(), "Faculty is required to place this document in the archive tree");
-        String department = requireText(student.getDepartment(), request.department(), "Department is required to place this document in the archive tree");
-        String studentNumber = student.getStudentNumber();
-
-        FolderEntity root = folderService.getFolderByCodeOrThrow(ROOT_CODE);
-        FolderEntity facultyFolder = resolveFacultyFolder(faculty, root.getId());
-        FolderEntity departmentFolder = resolveDepartmentFolder(facultyFolder, department);
-
-        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
-                studentNumber,
+        StudentWorkspace workspace = ensureStudentWorkspace(
+                student,
+                request.faculty(),
+                request.department(),
                 request.academicYear(),
                 request.semester()
         );
 
-        String academicYearCode = academicTermService.buildAcademicYearFolderCode(
-                departmentFolder.getCode(),
-                term.academicYear()
-        );
-        FolderEntity academicYearFolder = folderService.resolveOrCreateFolder(
-                term.academicYear(),
-                academicYearCode,
-                departmentFolder.getId()
-        );
-
-        String semesterCode = academicTermService.buildSemesterFolderCode(
-                academicYearFolder.getCode(),
-                term.startYear(),
-                term.semesterNumber()
-        );
-        FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
-                term.semesterFolderName(),
-                semesterCode,
-                academicYearFolder.getId()
-        );
-
-        String studentCode = semesterFolder.getCode() + "-STU-" + sanitizeCode(studentNumber);
-        FolderEntity studentFolder = folderService.resolveOrCreateFolder(studentNumber, studentCode, semesterFolder.getId());
-
         StudentDocumentCategory category = request.category();
-        FolderEntity categoryFolder = folderService.resolveOrCreateFolder(
-                category.getDisplayName(),
-                studentFolder.getCode() + "-" + category.getFolderCode(),
-                studentFolder.getId()
-        );
+        FolderEntity bucket = isOfficialCategory(category) ? workspace.officialDocuments() : workspace.myProjects();
 
         if (category != StudentDocumentCategory.EXAMINATION_DOCUMENTS || examPaperType == null) {
-            return categoryFolder;
+            return bucket;
         }
 
         FolderEntity typeFolder = folderService.resolveOrCreateFolder(
                 examPaperType.getDisplayName(),
-                categoryFolder.getCode() + "-" + examPaperType.getFolderCode(),
-                categoryFolder.getId()
+                bucket.getCode() + "-" + examPaperType.getFolderCode(),
+                bucket.getId()
         );
         return folderService.resolveOrCreateFolder(
                 trim(request.course()),
@@ -160,13 +247,17 @@ public class ArchiveTreeService {
                 request.semester()
         );
 
+        String bucket = isOfficialCategory(request.category())
+                ? OFFICIAL_DOCUMENTS_SUFFIX
+                : FINAL_YEAR_PROJECT_SUFFIX;
+
         Path studentRoot = storageRoot
                 .resolve(sanitizePath(faculty))
                 .resolve(sanitizePath(department))
                 .resolve(sanitizePath(term.academicYear()))
                 .resolve(sanitizePath(term.semesterFolderName()))
                 .resolve(sanitizePath(studentNumber))
-                .resolve(sanitizePath(request.category().getFolderCode()));
+                .resolve(sanitizePath(bucket));
 
         if (request.category() != StudentDocumentCategory.EXAMINATION_DOCUMENTS || examPaperType == null) {
             return studentRoot;
@@ -175,6 +266,96 @@ public class ArchiveTreeService {
         return studentRoot
                 .resolve(sanitizePath(examPaperType.getFolderCode()))
                 .resolve(sanitizePath(request.course()));
+    }
+
+    public static boolean isStudentDefaultFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        String normalized = code.toUpperCase(Locale.ROOT);
+        return normalized.endsWith("-" + OFFICIAL_DOCUMENTS_SUFFIX)
+                || normalized.endsWith("-" + FINAL_YEAR_PROJECT_SUFFIX)
+                || normalized.endsWith("-" + ARCHIVE_PROJECT_SUFFIX);
+    }
+
+    public static boolean isWithinStudentDefaultWorkspace(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        String normalized = code.toUpperCase(Locale.ROOT);
+        return normalized.contains("-" + OFFICIAL_DOCUMENTS_SUFFIX)
+                || normalized.contains("-" + FINAL_YEAR_PROJECT_SUFFIX)
+                || normalized.contains("-" + ARCHIVE_PROJECT_SUFFIX);
+    }
+
+    public static boolean isLibrarianRejectedFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).contains(LIBRARY_REJECTED_CODE);
+    }
+
+    public static boolean isLibrarianAcceptedFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).contains(LIBRARY_ACCEPTED_CODE);
+    }
+
+    public static boolean isLibrarianReviewFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).startsWith(LIBRARY_REVIEW_CODE);
+    }
+
+    private FolderEntity resolveStudentRootFolder(
+            String studentNumber,
+            String faculty,
+            String department,
+            String academicYearOverride,
+            String semesterOverride
+    ) {
+        FolderEntity root = folderService.getFolderByCodeOrThrow(ROOT_CODE);
+        FolderEntity facultyFolder = resolveFacultyFolder(faculty, root.getId());
+        FolderEntity departmentFolder = resolveDepartmentFolder(facultyFolder, department);
+
+        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
+                studentNumber,
+                academicYearOverride,
+                semesterOverride
+        );
+
+        String academicYearCode = academicTermService.buildAcademicYearFolderCode(
+                departmentFolder.getCode(),
+                term.academicYear()
+        );
+        FolderEntity academicYearFolder = folderService.resolveOrCreateFolder(
+                term.academicYear(),
+                academicYearCode,
+                departmentFolder.getId()
+        );
+
+        String semesterCode = academicTermService.buildSemesterFolderCode(
+                academicYearFolder.getCode(),
+                term.startYear(),
+                term.semesterNumber()
+        );
+        FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
+                term.semesterFolderName(),
+                semesterCode,
+                academicYearFolder.getId()
+        );
+
+        String studentCode = semesterFolder.getCode() + "-STU-" + sanitizeCode(studentNumber);
+        return folderService.resolveOrCreateFolder(studentNumber, studentCode, semesterFolder.getId());
+    }
+
+    private boolean isOfficialCategory(StudentDocumentCategory category) {
+        return category == StudentDocumentCategory.REGISTRATION_FORM
+                || category == StudentDocumentCategory.REINTEGRATION_FORM
+                || category == StudentDocumentCategory.APPLICATION_DOCUMENTS
+                || category == StudentDocumentCategory.EXAMINATION_DOCUMENTS;
     }
 
     private FolderEntity resolveFacultyFolder(String facultyName, Long rootId) {
@@ -236,5 +417,20 @@ public class ArchiveTreeService {
             return "UNKNOWN";
         }
         return value.replaceAll("[^a-zA-Z0-9._' /-]", "_");
+    }
+
+    public record StudentWorkspace(
+            FolderEntity studentRoot,
+            FolderEntity officialDocuments,
+            FolderEntity myProjects,
+            FolderEntity archiveProject
+    ) {
+    }
+
+    public record LibrarianReviewFolders(
+            FolderEntity libraryRoot,
+            FolderEntity accepted,
+            FolderEntity rejected
+    ) {
     }
 }
