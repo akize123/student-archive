@@ -28,6 +28,10 @@ public class ArchiveStructureSeedService {
                     archiveRoot.getId()
             );
 
+            if ("FBA".equalsIgnoreCase(faculty.code())) {
+                renameBusinessInformationManagementToManagement(facultyFolder);
+            }
+
             for (String department : faculty.departments()) {
                 String departmentCode = facultyFolder.getCode() + "-DEPT-" + sanitizeCode(department);
                 FolderEntity departmentFolder = ensureFolder(department, departmentCode, facultyFolder.getId());
@@ -49,6 +53,41 @@ public class ArchiveStructureSeedService {
                 }
             }
         }
+    }
+
+    private void renameBusinessInformationManagementToManagement(FolderEntity facultyFolder) {
+        String legacyCode = facultyFolder.getCode() + "-DEPT-INFORMATIONMANAGEMENT";
+        String targetCode = facultyFolder.getCode() + "-DEPT-MANAGEMENT";
+
+        folderRepository.findByCode(legacyCode).ifPresent(legacy -> {
+            if (folderRepository.findByCode(targetCode).isEmpty()) {
+                legacy.setName("Management");
+                legacy.setCode(targetCode);
+                folderRepository.save(legacy);
+                return;
+            }
+            deleteFolderTree(legacy.getId());
+        });
+
+        folderRepository.findAll().stream()
+                .filter(folder -> Objects.equals(folder.getParentId(), facultyFolder.getId()))
+                .filter(folder -> "Information Management".equalsIgnoreCase(folder.getName()))
+                .forEach(folder -> {
+                    if (folderRepository.findByCode(targetCode).isEmpty()) {
+                        folder.setName("Management");
+                        folder.setCode(targetCode);
+                        folderRepository.save(folder);
+                    } else if (!targetCode.equalsIgnoreCase(folder.getCode())) {
+                        deleteFolderTree(folder.getId());
+                    }
+                });
+    }
+
+    private void deleteFolderTree(Long folderId) {
+        folderRepository.findAll().stream()
+                .filter(folder -> Objects.equals(folder.getParentId(), folderId))
+                .forEach(child -> deleteFolderTree(child.getId()));
+        folderRepository.findById(folderId).ifPresent(folderRepository::delete);
     }
 
     private FolderEntity ensureFolder(String name, String code, Long parentId) {

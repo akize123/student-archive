@@ -8,6 +8,11 @@ import java.util.List;
 
 public interface ApprovalTaskRepository extends JpaRepository<ApprovalTaskEntity, Long> {
     List<ApprovalTaskEntity> findTop5ByStatusOrderByRequestedAtAsc(ApprovalStatus status);
+
+    List<ApprovalTaskEntity> findByStatusOrderByRequestedAtAsc(ApprovalStatus status);
+
+    List<ApprovalTaskEntity> findByDocumentIdAndStatus(Long documentId, ApprovalStatus status);
+
     long countByStatus(ApprovalStatus status);
 }
 

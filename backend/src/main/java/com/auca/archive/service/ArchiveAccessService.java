@@ -40,6 +40,9 @@ public class ArchiveAccessService {
         if (normalizedCode == null) {
             return false;
         }
+        if (role != UserRole.LIBRARIAN && ArchiveTreeService.isLibrarianReviewFolderCode(normalizedCode)) {
+            return false;
+        }
         return visibleFolderPrefixes(role).stream().anyMatch(normalizedCode::startsWith);
     }
 
@@ -77,12 +80,12 @@ public class ArchiveAccessService {
         }
 
         return switch (role) {
-            case ADMIN -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD", "SFYP");
-            case REGISTRAR -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD");
-            case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "AY", "SEM", "SEXM", "FLD", "STD");
-            case HOD -> List.of("AUCA", "FAC", "AY", "SEM", "SAPP", "FLD", "STD");
-            case LIBRARIAN -> List.of("AUCA", "FAC", "AY", "SEM", "STD", "SFYP", "FLD");
-            case STUDENT -> List.of("STD", "SFYP", "SREG", "SRIN", "SAPP");
+            case ADMIN -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD", "SFYP", "SOFF", "SMY");
+            case REGISTRAR -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD", "SOFF");
+            case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "AY", "SEM", "SEXM", "FLD", "STD", "SOFF");
+            case HOD -> List.of("AUCA", "FAC", "AY", "SEM", "SAPP", "FLD", "STD", "SOFF", "SMY");
+            case LIBRARIAN -> List.of("AUCA", "FAC", "AY", "SEM", "STD", "SFYP", "FLD", "SMY", "SOFF", "SARC", "LIB", "FYP", "ACC", "REJ");
+            case STUDENT -> List.of("STD", "SFYP", "SREG", "SRIN", "SAPP", "SOFF", "SMY", "SARC", "MY", "PRF");
         };
     }
 

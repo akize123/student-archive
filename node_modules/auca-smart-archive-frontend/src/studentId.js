@@ -1,6 +1,7 @@
-export const STUDENT_ID_FORMAT_HINT = 'YYYYINTAKE+DEPT+SEQ (example: 20251SEN001)'
+export const STUDENT_ID_FORMAT_HINT = 'YYYY + semester(1-3) + DEPT + SEQ (example: 20251SENG041)'
 export const LEGACY_STUDENT_ID_FORMAT_HINT = '5-digit number (example: 25876)'
 export const STUDENT_ID_FORMATS_HINT = `${STUDENT_ID_FORMAT_HINT} or ${LEGACY_STUDENT_ID_FORMAT_HINT}`
+export const STAFF_FOLDER_NAME_HINT = STUDENT_ID_FORMAT_HINT
 
 export const ACADEMIC_YEARS = [
   '2024-2025',
@@ -10,13 +11,30 @@ export const ACADEMIC_YEARS = [
   '2028-2029'
 ]
 
+/** Department / programme codes used in student IDs and staff folder names. */
 export const STUDENT_DEPARTMENT_CODES = {
+  // Faculty of Information Technology
   SEN: 'Software Engineering',
+  SENG: 'Software Engineering',
   IMA: 'Information Management',
-  NET: 'Networking & Communication Systems'
+  NET: 'Networking & Communication Systems',
+  // Faculty of Business Administration
+  ACC: 'Accounting',
+  MGT: 'Management',
+  FIN: 'Finance',
+  // Faculty of Education
+  EPS: 'Educational Psychology',
+  LNG: 'Languages (English / French)',
+  REL: 'Religious Studies',
+  BAC: 'Business Accounting & Computer Science',
+  // Faculty of Health Sciences
+  NUR: 'Nursing',
+  MID: 'Midwifery',
+  // Faculty of Theology
+  THE: 'Theology (Pastoral Training)'
 }
 
-const MODERN_ID_PATTERN = /^(\d{4})(\d)([A-Z]{3})(\d{3})$/i
+const MODERN_ID_PATTERN = /^(\d{4})([123])([A-Z]{3,4})(\d{3})$/i
 const LEGACY_ID_PATTERN = /^\d{5}$/
 
 export function normalizeStudentId(value) {
@@ -91,6 +109,41 @@ export function resolveAcademicDefaults(studentId) {
   }
 }
 
+export function listDepartmentCodeHints() {
+  const unique = new Map()
+  Object.entries(STUDENT_DEPARTMENT_CODES).forEach(([code, name]) => {
+    if (!unique.has(name) || code.length >= 4) {
+      unique.set(name, code)
+    }
+  })
+  return [...unique.entries()]
+    .map(([name, code]) => `${code}=${name}`)
+    .join(', ')
+}
+
+/**
+ * Staff archive folders must be named like a modern student ID:
+ * year + semester(1|2|3) + department code + 3-digit student sequence.
+ * Example: 20251SENG041
+ */
+export function validateStaffFolderName(value) {
+  const normalized = normalizeStudentId(value)
+  if (!normalized) {
+    return 'Folder name is required.'
+  }
+  if (!isModernStudentId(normalized)) {
+    return `Folder name must be ${STAFF_FOLDER_NAME_HINT}. Semester must be 1, 2, or 3.`
+  }
+  const parsed = parseStudentId(normalized)
+  if (!parsed?.departmentName) {
+    return `Unknown department code "${parsed?.departmentCode || ''}". Use codes like SENG, NET, IMA, ACC.`
+  }
+  if (!['1', '2', '3'].includes(String(parsed.intake))) {
+    return 'Semester in the folder name must be 1, 2, or 3.'
+  }
+  return ''
+}
+
 export function validateStudentIdForNewEntry(value) {
   const normalized = normalizeStudentId(value)
   if (!normalized) {
@@ -104,7 +157,7 @@ export function validateStudentIdForNewEntry(value) {
   }
   const parsed = parseStudentId(normalized)
   if (!parsed?.departmentName) {
-    return `Unknown department code in student ID. Use SEN, IMA, or NET.`
+    return `Unknown department code in student ID. Use codes like SENG, NET, IMA, ACC.`
   }
   return ''
 }
@@ -134,12 +187,24 @@ export function applyStudentIdDefaults(currentForm, studentId) {
   }
   const facultyOptions = [
     {
+      value: 'Faculty of Business Administration',
+      departments: ['Accounting', 'Management', 'Finance']
+    },
+    {
       value: 'Faculty of Information Technology',
       departments: ['Networking & Communication Systems', 'Software Engineering', 'Information Management']
     },
     {
-      value: 'Faculty of Business Administration',
-      departments: ['Accounting', 'Management', 'Finance', 'Information Management']
+      value: 'Faculty of Education',
+      departments: ['Educational Psychology', 'Languages (English / French)', 'Religious Studies', 'Business Accounting & Computer Science']
+    },
+    {
+      value: 'Faculty of Health Sciences (Nursing & Midwifery)',
+      departments: ['Nursing', 'Midwifery']
+    },
+    {
+      value: 'Faculty of Theology',
+      departments: ['Theology (Pastoral Training)']
     }
   ]
   const faculty = facultyOptions.find((item) => item.departments.includes(parsed.departmentName))?.value

@@ -194,7 +194,9 @@ public class StudentService {
                 document.getArchivedBy(),
                 document.getGithubUrl(),
                 document.getExternalLinks(),
-                document.getReviewNote()
+                document.getReviewNote(),
+                document.getDescription(),
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
         );
     }
 }

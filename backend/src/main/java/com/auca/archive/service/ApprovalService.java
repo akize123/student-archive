@@ -5,6 +5,7 @@ import com.auca.archive.domain.ApprovalStatus;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.dto.ApprovalDecisionRequest;
 import com.auca.archive.dto.ApprovalTaskResponse;
+import com.auca.archive.dto.DocumentDetailResponse;
 import com.auca.archive.model.ApprovalTaskEntity;
 import com.auca.archive.repository.ApprovalTaskRepository;
 import jakarta.transaction.Transactional;
@@ -29,7 +30,7 @@ public class ApprovalService {
     }
 
     public List<ApprovalTaskResponse> pending() {
-        return approvalTaskRepository.findTop5ByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
+        return approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
                 .stream()
                 .map(this::toResponse)
                 .toList();
@@ -69,11 +70,24 @@ public class ApprovalService {
     }
 
     private ApprovalTaskResponse toResponse(ApprovalTaskEntity task) {
+        DocumentDetailResponse document = null;
+        try {
+            if (task.getDocumentId() != null) {
+                document = documentService.getDocument(task.getDocumentId(), "LIBRARIAN");
+            }
+        } catch (RuntimeException ignored) {
+            // Keep the approval card usable even if the document was removed.
+        }
         return new ApprovalTaskResponse(
                 task.getId(),
                 task.getDocumentId(),
                 task.getDocumentTitle(),
                 task.getRequestedBy(),
+                document == null ? null : document.studentNumber(),
+                document == null ? null : document.description(),
+                document == null ? null : document.githubUrl(),
+                document == null ? null : document.externalLinks(),
+                document == null ? null : document.fileName(),
                 task.getRequestedAt(),
                 task.getDueAt(),
                 task.getNote(),

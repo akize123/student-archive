@@ -2,6 +2,7 @@ package com.auca.archive.service;
 
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
+import com.auca.archive.domain.SharePermission;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.DocumentListItemResponse;
@@ -9,11 +10,16 @@ import com.auca.archive.dto.FolderBreadcrumbResponse;
 import com.auca.archive.dto.FolderDetailResponse;
 import com.auca.archive.dto.FolderNodeResponse;
 import com.auca.archive.dto.ShareFolderResponse;
+import com.auca.archive.dto.SharedItemResponse;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
+import com.auca.archive.model.FolderShareEntity;
 import com.auca.archive.repository.DocumentRepository;
 import com.auca.archive.repository.FolderRepository;
+import com.auca.archive.repository.FolderShareRepository;
+import com.auca.archive.repository.StudentRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -27,10 +33,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -42,24 +50,36 @@ import java.util.zip.ZipOutputStream;
 public class FolderService {
     private final FolderRepository folderRepository;
     private final DocumentRepository documentRepository;
+    private final StudentRepository studentRepository;
+    private final FolderShareRepository folderShareRepository;
     private final ArchiveAccessService accessService;
     private final ActivityService activityService;
     private final FileEncryptionService fileEncryptionService;
+    private final StudentIdFormatService studentIdFormatService;
+    private final ObjectProvider<ArchiveTreeService> archiveTreeService;
     private final Path storageRoot;
 
     public FolderService(
             FolderRepository folderRepository,
             DocumentRepository documentRepository,
+            StudentRepository studentRepository,
+            FolderShareRepository folderShareRepository,
             ArchiveAccessService accessService,
             ActivityService activityService,
             FileEncryptionService fileEncryptionService,
+            StudentIdFormatService studentIdFormatService,
+            ObjectProvider<ArchiveTreeService> archiveTreeService,
             @Value("${archive.storage-root:storage}") String storageRoot
     ) {
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
+        this.studentRepository = studentRepository;
+        this.folderShareRepository = folderShareRepository;
         this.accessService = accessService;
         this.activityService = activityService;
         this.fileEncryptionService = fileEncryptionService;
+        this.studentIdFormatService = studentIdFormatService;
+        this.archiveTreeService = archiveTreeService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
     }
 
@@ -80,16 +100,39 @@ public class FolderService {
             return getStudentPersonalTree(studentNumber);
         }
 
+        if (role == UserRole.LIBRARIAN) {
+            archiveTreeService.getObject().ensureLibrarianReviewFolders();
+        }
+
         List<FolderEntity> folders = folderRepository.findAll();
         Map<Long, FolderEntity> folderById = folders.stream()
                 .collect(Collectors.toMap(FolderEntity::getId, Function.identity()));
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
 
-        return childrenByParent.getOrDefault(null, List.of()).stream()
+        List<FolderNodeResponse> tree = childrenByParent.getOrDefault(null, List.of()).stream()
                 .sorted(Comparator.comparing(FolderEntity::getName))
                 .flatMap(folder -> toVisibleNodes(folder, childrenByParent, folderById, role, null, false).stream())
                 .sorted(Comparator.comparing(FolderNodeResponse::name))
                 .toList();
+
+        if (role == UserRole.LIBRARIAN) {
+            return prioritizeLibrarianReviewFolders(tree);
+        }
+        return tree;
+    }
+
+    private List<FolderNodeResponse> prioritizeLibrarianReviewFolders(List<FolderNodeResponse> tree) {
+        List<FolderNodeResponse> prioritized = new ArrayList<>();
+        List<FolderNodeResponse> rest = new ArrayList<>();
+        for (FolderNodeResponse node : tree) {
+            if (ArchiveTreeService.LIBRARY_REVIEW_CODE.equalsIgnoreCase(String.valueOf(node.code()))) {
+                prioritized.add(node);
+            } else {
+                rest.add(node);
+            }
+        }
+        prioritized.addAll(rest);
+        return prioritized;
     }
 
     public FolderEntity getFolderOrThrow(Long id) {
@@ -116,17 +159,46 @@ public class FolderService {
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
 
         List<FolderBreadcrumbResponse> breadcrumbs = buildBreadcrumbs(folder, folderById, role, studentNumber);
-        List<FolderNodeResponse> children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
-                .sorted(Comparator.comparing(FolderEntity::getName))
-                .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, isFolderVisibleByParent(folder, role, studentNumber)).stream())
-                .toList();
+        List<FolderNodeResponse> children;
+        List<DocumentListItemResponse> documents;
 
-        List<DocumentListItemResponse> documents = documentRepository
-                .findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())
-                .stream()
-                .filter(document -> isDocumentAccessible(document, role, studentNumber))
-                .map(this::toListItem)
-                .toList();
+        if (role == UserRole.LIBRARIAN && ArchiveTreeService.LIBRARY_ACCEPTED_CODE.equalsIgnoreCase(folder.getCode())) {
+            children = List.of();
+            documents = documentRepository.findAll().stream()
+                    .filter(document -> !document.isArchivedForRemoval())
+                    .filter(document -> document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT)
+                    .filter(document -> document.getStatus() == DocumentStatus.APPROVED)
+                    .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .map(this::toListItem)
+                    .toList();
+        } else if (role == UserRole.LIBRARIAN && ArchiveTreeService.LIBRARY_REJECTED_CODE.equalsIgnoreCase(folder.getCode())) {
+            children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+                    .sorted(Comparator.comparing(FolderEntity::getName))
+                    .map(child -> toNode(child, role, studentNumber))
+                    .toList();
+            documents = collectDocumentsUnderFolder(folder.getId(), childrenByParent).stream()
+                    .filter(document -> !document.isArchivedForRemoval())
+                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                    .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .map(this::toListItem)
+                    .toList();
+        } else {
+            children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+                    .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
+                    .sorted(Comparator.comparing(FolderEntity::getName))
+                    .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, isFolderVisibleByParent(folder, role, studentNumber)).stream())
+                    .toList();
+
+            List<DocumentEntity> folderDocuments = isArchiveProjectFolder(folder)
+                    ? collectDocumentsUnderFolder(folder.getId(), childrenByParent)
+                    : documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId());
+
+            documents = folderDocuments.stream()
+                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                    .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                    .map(this::toListItem)
+                    .toList();
+        }
 
         return new FolderDetailResponse(
                 folder.getId(),
@@ -134,10 +206,21 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 breadcrumbs,
-                countDocuments(folder, childrenByParent, role, studentNumber),
+                countDocuments(folder, childrenByParent, role, studentNumber)
+                        + (ArchiveTreeService.LIBRARY_ACCEPTED_CODE.equalsIgnoreCase(folder.getCode()) ? documents.size() : 0),
                 children,
                 documents
         );
+    }
+
+    private List<DocumentEntity> collectDocumentsUnderFolder(Long folderId, Map<Long, List<FolderEntity>> childrenByParent) {
+        List<DocumentEntity> documents = new ArrayList<>(
+                documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folderId)
+        );
+        for (FolderEntity child : childrenByParent.getOrDefault(folderId, List.of())) {
+            documents.addAll(collectDocumentsUnderFolder(child.getId(), childrenByParent));
+        }
+        return documents;
     }
 
     public FolderEntity getFolderByCodeOrThrow(String code) {
@@ -177,15 +260,24 @@ public class FolderService {
             throw new IllegalArgumentException("Folder not found: " + parentId);
         }
         if (role == UserRole.STUDENT && !canStudentCreateSubfolder(parent, studentNumber)) {
-            throw new IllegalArgumentException("You can only create folders inside your personal project workspace");
+            throw new IllegalArgumentException("You can only create folders inside Official Documents or Final Year Project");
+        }
+        if (role == UserRole.STUDENT && isArchiveProjectFolder(parent)) {
+            throw new IllegalArgumentException("Archive project is managed automatically when a project is accepted");
         }
         if (role != UserRole.STUDENT) {
             requireStaffCreateTarget(parent, role);
         }
+        requireShareAtLeast(parent, role, studentNumber, SharePermission.WRITE);
 
         String trimmedName = name == null ? "" : name.trim();
         if (trimmedName.isBlank()) {
             throw new IllegalArgumentException("Folder name is required");
+        }
+        if (role != UserRole.STUDENT) {
+            // Staff archive folders must follow year + semester + department + student sequence.
+            studentIdFormatService.requireStaffFolderName(trimmedName);
+            trimmedName = trimmedName.toUpperCase(Locale.ROOT);
         }
 
         String code = role == UserRole.STUDENT
@@ -198,6 +290,7 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 0,
+                ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode()),
                 List.of()
         );
     }
@@ -209,6 +302,7 @@ public class FolderService {
         accessService.requireStudentAccount(role, studentNumber);
         FolderEntity folder = getFolderOrThrow(id);
         requireModifiableFolder(folder, role, studentNumber);
+        requireShareAtLeast(folder, role, studentNumber, SharePermission.EDIT);
 
         String trimmedName = name == null ? "" : name.trim();
         if (trimmedName.isBlank()) {
@@ -226,9 +320,11 @@ public class FolderService {
         accessService.requireStudentAccount(role, studentNumber);
         FolderEntity folder = getFolderOrThrow(id);
         requireModifiableFolder(folder, role, studentNumber);
+        requireShareAtLeast(folder, role, studentNumber, SharePermission.EDIT);
 
         FolderEntity targetParent = getFolderOrThrow(targetParentId);
         requirePasteTarget(targetParent, role, studentNumber);
+        requireShareAtLeast(targetParent, role, studentNumber, SharePermission.WRITE);
         if (Objects.equals(id, targetParentId) || isDescendantOf(id, targetParentId)) {
             throw new IllegalArgumentException("A folder cannot be moved into itself or one of its subfolders");
         }
@@ -253,6 +349,7 @@ public class FolderService {
 
         FolderEntity targetParent = getFolderOrThrow(targetParentId);
         requirePasteTarget(targetParent, role, studentNumber);
+        requireShareAtLeast(targetParent, role, studentNumber, SharePermission.WRITE);
         if (Objects.equals(id, targetParentId) || isDescendantOf(id, targetParentId)) {
             throw new IllegalArgumentException("A folder cannot be copied into itself or one of its subfolders");
         }
@@ -272,11 +369,16 @@ public class FolderService {
         if (!isFolderAccessible(folder, role)) {
             throw new IllegalArgumentException("Folder not found: " + id);
         }
+        requireShareAtLeast(folder, role, null, SharePermission.EDIT);
         if (folder.getParentId() == null) {
             throw new IllegalArgumentException("System folders cannot be deleted");
         }
         if (isProtectedArchiveStructureFolder(folder)) {
             throw new IllegalArgumentException("Faculty and department folders are part of the system archive structure and cannot be deleted");
+        }
+        if (ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
+                || ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())) {
+            throw new IllegalArgumentException("System review folders cannot be deleted");
         }
 
         boolean hasChildren = folderRepository.findAll().stream()
@@ -293,10 +395,16 @@ public class FolderService {
     }
 
     public byte[] downloadAsZip(Long folderId, List<Long> documentIds, String rawRole) throws IOException {
-        return downloadAsZip(folderId, documentIds, rawRole, null);
+        return downloadAsZip(folderId, documentIds, null, rawRole, null);
     }
 
-    public byte[] downloadAsZip(Long folderId, List<Long> documentIds, String rawRole, String rawStudentNumber) throws IOException {
+    public byte[] downloadAsZip(
+            Long folderId,
+            List<Long> documentIds,
+            List<Long> folderIds,
+            String rawRole,
+            String rawStudentNumber
+    ) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
@@ -305,27 +413,51 @@ public class FolderService {
             throw new IllegalArgumentException("Folder not found: " + folderId);
         }
 
-        List<DocumentEntity> documents;
-        if (documentIds != null && !documentIds.isEmpty()) {
-            documents = documentIds.stream()
-                    .map(id -> documentRepository.findById(id)
-                            .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)))
-                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
-                    .toList();
+        Map<Long, FolderEntity> folderById = folderRepository.findAll().stream()
+                .collect(Collectors.toMap(FolderEntity::getId, Function.identity()));
+        Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folderById.values().stream().toList());
+
+        List<ZipDocumentEntry> entries = new ArrayList<>();
+        boolean hasSelection = (documentIds != null && !documentIds.isEmpty())
+                || (folderIds != null && !folderIds.isEmpty());
+
+        if (hasSelection) {
+            if (documentIds != null) {
+                for (Long documentId : documentIds) {
+                    documentRepository.findById(documentId)
+                            .filter(document -> !document.isArchivedForRemoval())
+                            .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                            .ifPresent(document -> entries.add(new ZipDocumentEntry(
+                                    sanitizeZipPath(document.getFileName() == null ? "document-" + document.getId() : document.getFileName()),
+                                    document
+                            )));
+                }
+            }
+            if (folderIds != null) {
+                for (Long selectedFolderId : folderIds) {
+                    FolderEntity selected = folderById.get(selectedFolderId);
+                    if (selected == null || !isFolderAccessible(selected, role, studentNumber)) {
+                        continue;
+                    }
+                    if (!Objects.equals(selectedFolderId, folderId) && !isDescendantOf(folderId, selectedFolderId)) {
+                        continue;
+                    }
+                    collectDocumentsRecursive(selected, selected.getName(), childrenByParent, role, studentNumber, entries);
+                }
+            }
         } else {
-            documents = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folderId).stream()
-                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
-                    .toList();
+            collectDocumentsRecursive(folder, "", childrenByParent, role, studentNumber, entries);
         }
 
-        if (documents.isEmpty()) {
+        if (entries.isEmpty()) {
             throw new IllegalArgumentException("No documents to download in this folder");
         }
 
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         Set<String> usedNames = new HashSet<>();
         try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
-            for (DocumentEntity document : documents) {
+            for (ZipDocumentEntry entry : entries) {
+                DocumentEntity document = entry.document();
                 if (document.getFilePath() == null || document.getFilePath().isBlank()) {
                     continue;
                 }
@@ -335,10 +467,7 @@ public class FolderService {
                 }
                 byte[] storedBytes = Files.readAllBytes(path);
                 byte[] plainBytes = fileEncryptionService.decrypt(storedBytes, document.getEncryptionIv());
-                String baseName = document.getFileName() == null || document.getFileName().isBlank()
-                        ? "document-" + document.getId() + ".pdf"
-                        : document.getFileName();
-                String entryName = uniqueZipEntryName(usedNames, baseName);
+                String entryName = uniqueZipEntryName(usedNames, entry.relativePath());
                 zip.putNextEntry(new ZipEntry(entryName));
                 zip.write(plainBytes);
                 zip.closeEntry();
@@ -351,23 +480,272 @@ public class FolderService {
         return buffer.toByteArray();
     }
 
-    public ShareFolderResponse shareFolder(Long folderId, String targetRoleRaw, String actorRoleRaw, String actorName) {
+    private void collectDocumentsRecursive(
+            FolderEntity folder,
+            String relativePrefix,
+            Map<Long, List<FolderEntity>> childrenByParent,
+            UserRole role,
+            String studentNumber,
+            List<ZipDocumentEntry> entries
+    ) {
+        String prefix = relativePrefix == null ? "" : relativePrefix.trim();
+        for (DocumentEntity document : documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())) {
+            if (!isDocumentAccessible(document, role, studentNumber)) {
+                continue;
+            }
+            String fileName = document.getFileName() == null || document.getFileName().isBlank()
+                    ? "document-" + document.getId() + ".pdf"
+                    : document.getFileName();
+            String path = prefix.isBlank() ? sanitizeZipPath(fileName) : prefix + "/" + sanitizeZipPath(fileName);
+            entries.add(new ZipDocumentEntry(path, document));
+        }
+        for (FolderEntity child : childrenByParent.getOrDefault(folder.getId(), List.of())) {
+            if (!isFolderAccessible(child, role, studentNumber)) {
+                continue;
+            }
+            String childPrefix = prefix.isBlank()
+                    ? sanitizeZipPath(child.getName())
+                    : prefix + "/" + sanitizeZipPath(child.getName());
+            collectDocumentsRecursive(child, childPrefix, childrenByParent, role, studentNumber, entries);
+        }
+    }
+
+    private String sanitizeZipPath(String value) {
+        String sanitized = String.valueOf(value == null ? "item" : value).replaceAll("[\\\\:*?\"<>|]", "_").trim();
+        return sanitized.isBlank() ? "item" : sanitized.replaceAll("^/+", "").replaceAll("/+", "/");
+    }
+
+    private record ZipDocumentEntry(String relativePath, DocumentEntity document) {
+    }
+
+    public ShareFolderResponse shareFolder(Long folderId, String targetRoleRaw, String permissionRaw, String actorRoleRaw, String actorName) {
+        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName);
+    }
+
+    @Transactional
+    public ShareFolderResponse shareItems(
+            List<Long> folderIds,
+            List<Long> documentIds,
+            String targetRoleRaw,
+            String permissionRaw,
+            String actorRoleRaw,
+            String actorName
+    ) {
         UserRole actorRole = accessService.resolveRole(actorRoleRaw);
         if (actorRole == UserRole.STUDENT) {
-            throw new IllegalArgumentException("Students cannot share archive folders");
+            throw new IllegalArgumentException("Students cannot share archive items");
         }
         UserRole targetRole = accessService.resolveRole(targetRoleRaw);
         validateShareTarget(actorRole, targetRole);
+        SharePermission permission = SharePermission.fromRaw(permissionRaw);
 
-        FolderEntity folder = getFolderOrThrow(folderId);
-        if (!isFolderAccessible(folder, actorRole)) {
-            throw new IllegalArgumentException("Folder not found: " + folderId);
+        LinkedHashSet<Long> uniqueFolderIds = new LinkedHashSet<>();
+        if (folderIds != null) {
+            folderIds.stream().filter(Objects::nonNull).forEach(uniqueFolderIds::add);
+        }
+        LinkedHashSet<Long> uniqueDocumentIds = new LinkedHashSet<>();
+        if (documentIds != null) {
+            documentIds.stream().filter(Objects::nonNull).forEach(uniqueDocumentIds::add);
+        }
+        if (uniqueFolderIds.isEmpty() && uniqueDocumentIds.isEmpty()) {
+            throw new IllegalArgumentException("Select at least one folder or file to share");
         }
 
-        activityService.recordShare(folder.getName(), actorName, targetRole);
+        String actor = actorName == null || actorName.isBlank() ? actorRole.name() : actorName.trim();
+        int sharedFolders = 0;
+        int sharedDocuments = 0;
+        String firstName = null;
+
+        for (Long folderId : uniqueFolderIds) {
+            FolderEntity folder = getFolderOrThrow(folderId);
+            if (!isFolderAccessible(folder, actorRole)) {
+                throw new IllegalArgumentException("Folder not found: " + folderId);
+            }
+            saveFolderShare(folder, targetRole, permission, actor);
+            sharedFolders++;
+            if (firstName == null) {
+                firstName = folder.getName();
+            }
+        }
+
+        for (Long documentId : uniqueDocumentIds) {
+            DocumentEntity document = documentRepository.findById(documentId)
+                    .filter(item -> !item.isArchivedForRemoval())
+                    .orElseThrow(() -> new IllegalArgumentException("Document not found: " + documentId));
+            if (!isDocumentAccessible(document, actorRole)) {
+                throw new IllegalArgumentException("Document not found: " + documentId);
+            }
+            saveDocumentShare(document, targetRole, permission, actor);
+            sharedDocuments++;
+            if (firstName == null) {
+                firstName = document.getTitle() == null || document.getTitle().isBlank()
+                        ? document.getFileName()
+                        : document.getTitle();
+            }
+        }
+
         String targetLabel = roleLabel(targetRole);
-        String message = "Folder shared with " + targetLabel + ". They can open it from their archive workspace.";
-        return new ShareFolderResponse(message, "#/folders/" + folderId, targetRole.name(), targetLabel);
+        activityService.recordShare(
+                firstName == null ? "archive items" : firstName,
+                actor,
+                targetRole
+        );
+
+        StringBuilder message = new StringBuilder("Shared ");
+        if (sharedFolders > 0) {
+            message.append(sharedFolders).append(sharedFolders == 1 ? " folder" : " folders");
+        }
+        if (sharedFolders > 0 && sharedDocuments > 0) {
+            message.append(" and ");
+        }
+        if (sharedDocuments > 0) {
+            message.append(sharedDocuments).append(sharedDocuments == 1 ? " file" : " files");
+        }
+        message.append(" with ").append(targetLabel)
+                .append(" (").append(permission.getLabel()).append(").")
+                .append(" Recipients can open it under Shared with me.");
+
+        Long openFolderId = uniqueFolderIds.isEmpty() ? null : uniqueFolderIds.iterator().next();
+        String shareUrl = openFolderId != null ? "#/folders/" + openFolderId : "#/shared";
+        return new ShareFolderResponse(message.toString(), shareUrl, targetRole.name(), targetLabel);
+    }
+
+    public List<SharedItemResponse> listSharedWithMe(String rawRole, String rawStudentNumber) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
+        if (role == null) {
+            return List.of();
+        }
+        return folderShareRepository.findByTargetRoleOrderByCreatedAtDesc(role).stream()
+                .map(this::toSharedItem)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    public long countSharedWithMe(String rawRole, String rawStudentNumber) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
+        if (role == null) {
+            return 0;
+        }
+        return folderShareRepository.countByTargetRole(role);
+    }
+
+    public void requireDocumentShareAtLeast(DocumentEntity document, UserRole role, SharePermission minimum) {
+        if (document == null || role == null || role == UserRole.ADMIN) {
+            return;
+        }
+        Optional<FolderShareEntity> documentShare = folderShareRepository.findByDocumentIdAndTargetRole(document.getId(), role);
+        if (documentShare.isPresent()) {
+            if (!documentShare.get().getPermission().allows(minimum)) {
+                throw new IllegalArgumentException("This share is "
+                        + documentShare.get().getPermission().getLabel()
+                        + ". You need " + minimum.getLabel() + " permission.");
+            }
+            return;
+        }
+        if (document.getFolderId() == null) {
+            return;
+        }
+        folderRepository.findById(document.getFolderId()).ifPresent(folder ->
+                requireShareAtLeast(folder, role, null, minimum));
+    }
+
+    private void saveFolderShare(FolderEntity folder, UserRole targetRole, SharePermission permission, String actor) {
+        FolderShareEntity share = folderShareRepository
+                .findByFolderIdAndTargetRoleAndDocumentIdIsNull(folder.getId(), targetRole)
+                .orElseGet(FolderShareEntity::new);
+        share.setFolderId(folder.getId());
+        share.setDocumentId(null);
+        FolderEntity facultyFolder = findFacultyAncestor(folder);
+        share.setFacultyFolderId(facultyFolder == null ? null : facultyFolder.getId());
+        share.setTargetRole(targetRole);
+        share.setPermission(permission);
+        share.setSharedBy(actor);
+        share.setCreatedAt(LocalDateTime.now());
+        folderShareRepository.save(share);
+    }
+
+    private void saveDocumentShare(DocumentEntity document, UserRole targetRole, SharePermission permission, String actor) {
+        FolderShareEntity share = folderShareRepository
+                .findByDocumentIdAndTargetRole(document.getId(), targetRole)
+                .orElseGet(FolderShareEntity::new);
+        share.setDocumentId(document.getId());
+        share.setFolderId(document.getFolderId());
+        share.setFacultyFolderId(null);
+        share.setTargetRole(targetRole);
+        share.setPermission(permission);
+        share.setSharedBy(actor);
+        share.setCreatedAt(LocalDateTime.now());
+        folderShareRepository.save(share);
+    }
+
+    private SharedItemResponse toSharedItem(FolderShareEntity share) {
+        if (share == null) {
+            return null;
+        }
+        SharePermission permission = share.getPermission();
+        if (share.getDocumentId() != null) {
+            DocumentEntity document = documentRepository.findById(share.getDocumentId())
+                    .filter(item -> !item.isArchivedForRemoval())
+                    .orElse(null);
+            if (document == null) {
+                return null;
+            }
+            String name = document.getTitle() == null || document.getTitle().isBlank()
+                    ? document.getFileName()
+                    : document.getTitle();
+            return new SharedItemResponse(
+                    share.getId(),
+                    "DOCUMENT",
+                    document.getFolderId(),
+                    document.getId(),
+                    name,
+                    permission.name(),
+                    permission.getLabel(),
+                    share.getSharedBy(),
+                    share.getTargetRole() == null ? null : share.getTargetRole().name(),
+                    share.getCreatedAt(),
+                    document.getFolderId() == null ? "#/shared" : "#/folders/" + document.getFolderId()
+            );
+        }
+        if (share.getFolderId() == null) {
+            return null;
+        }
+        FolderEntity folder = folderRepository.findById(share.getFolderId()).orElse(null);
+        if (folder == null) {
+            return null;
+        }
+        return new SharedItemResponse(
+                share.getId(),
+                "FOLDER",
+                folder.getId(),
+                null,
+                folder.getName(),
+                permission.name(),
+                permission.getLabel(),
+                share.getSharedBy(),
+                share.getTargetRole() == null ? null : share.getTargetRole().name(),
+                share.getCreatedAt(),
+                "#/folders/" + folder.getId()
+        );
+    }
+
+    private FolderEntity findFacultyAncestor(FolderEntity folder) {
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (isFacultyFolder(current)) {
+                return current;
+            }
+            if (current.getParentId() == null) {
+                return null;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return null;
     }
 
     public boolean folderHasContents(Long id, String rawRole) {
@@ -396,23 +774,23 @@ public class FolderService {
     }
 
     private void validateShareTarget(UserRole source, UserRole target) {
-        if (source == UserRole.ADMIN) {
-            if (target == UserRole.ADMIN) {
-                throw new IllegalArgumentException("Choose a department role to share with");
-            }
-            return;
+        if (target == UserRole.ADMIN) {
+            throw new IllegalArgumentException("Choose Examination Office, Head of Department, Librarian, or Student");
         }
-
-        List<UserRole> allowed = switch (source) {
-            case REGISTRAR -> List.of(UserRole.EXAMINATION_OFFICER, UserRole.HOD);
-            case EXAMINATION_OFFICER -> List.of(UserRole.REGISTRAR, UserRole.HOD);
-            case HOD -> List.of(UserRole.REGISTRAR, UserRole.EXAMINATION_OFFICER);
-            case LIBRARIAN -> List.of(UserRole.HOD, UserRole.REGISTRAR);
-            default -> List.of();
-        };
-
-        if (!allowed.contains(target)) {
-            throw new IllegalArgumentException("You cannot share to that role from your account");
+        List<UserRole> allowedTargets = List.of(
+                UserRole.EXAMINATION_OFFICER,
+                UserRole.HOD,
+                UserRole.LIBRARIAN,
+                UserRole.STUDENT
+        );
+        if (!allowedTargets.contains(target)) {
+            throw new IllegalArgumentException("Choose Examination Office, Head of Department, Librarian, or Student");
+        }
+        if (source == UserRole.STUDENT) {
+            throw new IllegalArgumentException("Students cannot share archive items");
+        }
+        if (source == target) {
+            throw new IllegalArgumentException("Choose a different party to share with");
         }
     }
 
@@ -466,14 +844,25 @@ public class FolderService {
         if (role == UserRole.ADMIN || role == UserRole.LIBRARIAN) {
             return true;
         }
+        if (document == null) {
+            return false;
+        }
+        if (role != null && folderShareRepository.findByDocumentIdAndTargetRole(document.getId(), role).isPresent()) {
+            return true;
+        }
         if (role == UserRole.STUDENT) {
-            return accessService.isStudentDocument(document, studentNumber);
+            if (accessService.isStudentDocument(document, studentNumber)) {
+                return true;
+            }
+            if (document.getFolderId() == null) {
+                return false;
+            }
+            return folderRepository.findById(document.getFolderId())
+                    .map(folder -> isSharedWithRole(folder, UserRole.STUDENT))
+                    .orElse(false);
         }
         if (role == null) {
             return true;
-        }
-        if (document == null) {
-            return false;
         }
         // Pending/rejected final-year projects stay out of the shared staff archive until librarian approval.
         if (document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT
@@ -490,26 +879,21 @@ public class FolderService {
     }
 
     private List<FolderNodeResponse> getStudentPersonalTree(String studentNumber) {
+        ArchiveTreeService.StudentWorkspace workspace = ensureStudentWorkspace(studentNumber);
         List<FolderEntity> folders = folderRepository.findAll();
-        String marker = accessService.studentFolderMarker(studentNumber);
-        FolderEntity studentFolder = folders.stream()
-                .filter(folder -> folder.getCode() != null && folder.getCode().toUpperCase().contains(marker))
-                .findFirst()
-                .orElse(null);
-
-        if (studentFolder == null) {
-            return List.of(new FolderNodeResponse(
-                    -1L,
-                    "My Workspace",
-                    "STD-MY",
-                    null,
-                    0,
-                    List.of()
-            ));
-        }
-
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
-        return List.of(buildStudentNode(studentFolder, childrenByParent, studentNumber));
+        return List.of(
+                buildStudentNode(workspace.officialDocuments(), childrenByParent, studentNumber),
+                buildStudentNode(workspace.myProjects(), childrenByParent, studentNumber),
+                buildStudentNode(workspace.archiveProject(), childrenByParent, studentNumber)
+        );
+    }
+
+    private ArchiveTreeService.StudentWorkspace ensureStudentWorkspace(String studentNumber) {
+        return studentRepository.findByStudentNumber(studentNumber.trim().toUpperCase(Locale.ROOT))
+                .or(() -> studentRepository.findByStudentNumber(studentNumber.trim()))
+                .map(student -> archiveTreeService.getObject().ensureStudentWorkspace(student))
+                .orElseThrow(() -> new IllegalArgumentException("Student profile not found for workspace setup"));
     }
 
     private FolderNodeResponse buildStudentNode(
@@ -518,6 +902,7 @@ public class FolderService {
             String studentNumber
     ) {
         List<FolderNodeResponse> children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+                .filter(this::isVisibleStudentChild)
                 .sorted(Comparator.comparing(FolderEntity::getName))
                 .map(child -> buildStudentNode(child, childrenByParent, studentNumber))
                 .toList();
@@ -533,8 +918,21 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 documentCount,
+                ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode()),
                 children
         );
+    }
+
+    private boolean isVisibleStudentChild(FolderEntity child) {
+        if (child == null || child.getCode() == null) {
+            return false;
+        }
+        String code = child.getCode().toUpperCase(Locale.ROOT);
+        // Hide legacy category folders and librarian-only rejected locations from students.
+        return !(code.endsWith("-SREG") || code.endsWith("-SRIN") || code.endsWith("-SAPP")
+                || code.endsWith("-SEXM") || code.endsWith("-SFYP")
+                || ArchiveTreeService.isLibrarianRejectedFolderCode(code)
+                || ArchiveTreeService.isLibrarianReviewFolderCode(code));
     }
 
     private List<FolderNodeResponse> toVisibleNodes(
@@ -545,6 +943,20 @@ public class FolderService {
             String studentNumber,
             boolean parentVisible
     ) {
+        // Never expose Library FYP Reviews (or its children) to non-librarian staff,
+        // even when the AUCA root parent is visible.
+        if (role != null
+                && role != UserRole.ADMIN
+                && role != UserRole.LIBRARIAN
+                && ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())) {
+            return List.of();
+        }
+        // Mirrored "Shared Documents" copies must not appear in the archive tree —
+        // shares are listed only under Quick Access → Shared with me.
+        if (isMirroredSharedDocumentsFolder(folder)) {
+            return List.of();
+        }
+
         boolean nodeVisible = role == null
                 || parentVisible
                 || (role == UserRole.STUDENT
@@ -566,6 +978,9 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 countDocuments(folder, childrenByParent, role, studentNumber),
+                ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
+                        || isProtectedArchiveStructureFolder(folder)
+                        || folder.getParentId() == null,
                 children
         ));
     }
@@ -605,14 +1020,28 @@ public class FolderService {
         if (role == UserRole.ADMIN) {
             return true;
         }
-        if (role == UserRole.STUDENT) {
-            return accessService.isStudentFolder(folder, studentNumber);
-        }
         if (folder == null) {
             return false;
         }
         if (!visited.add(folder.getId())) {
             return false;
+        }
+        if (role == UserRole.STUDENT) {
+            if (ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())
+                    || ArchiveTreeService.isLibrarianRejectedFolderCode(folder.getCode())) {
+                return false;
+            }
+            if (accessService.isStudentFolder(folder, studentNumber)) {
+                return true;
+            }
+            return isSharedWithRole(folder, UserRole.STUDENT);
+        }
+        // Library FYP Reviews is librarian-only; do not inherit visibility from AUCA root.
+        if (role != UserRole.LIBRARIAN && ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())) {
+            return false;
+        }
+        if (isSharedWithRole(folder, role)) {
+            return true;
         }
         if (accessService.matchesRoleFolderCode(folder.getCode(), role)) {
             return true;
@@ -623,6 +1052,100 @@ public class FolderService {
         return folderRepository.findById(folder.getParentId())
                 .map(parent -> isFolderAccessible(parent, role, studentNumber, visited))
                 .orElse(false);
+    }
+
+    public void requireShareAtLeast(FolderEntity folder, UserRole role, String studentNumber, SharePermission minimum) {
+        if (folder == null || role == null || role == UserRole.ADMIN || minimum == null) {
+            return;
+        }
+        if (hasNativeAccessIgnoringShares(folder, role, studentNumber)) {
+            return;
+        }
+        SharePermission granted = findEffectiveSharePermission(folder, role)
+                .orElseThrow(() -> new IllegalArgumentException("Folder not found: " + folder.getId()));
+        if (!granted.allows(minimum)) {
+            throw new IllegalArgumentException("This share is "
+                    + granted.getLabel()
+                    + ". You need " + minimum.getLabel() + " permission.");
+        }
+    }
+
+    private Optional<SharePermission> findEffectiveSharePermission(FolderEntity folder, UserRole role) {
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            Optional<FolderShareEntity> share = folderShareRepository
+                    .findByFolderIdAndTargetRoleAndDocumentIdIsNull(current.getId(), role);
+            if (share.isPresent()) {
+                return Optional.of(share.get().getPermission());
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return Optional.empty();
+    }
+
+    private boolean hasNativeAccessIgnoringShares(FolderEntity folder, UserRole role, String studentNumber) {
+        if (role == UserRole.ADMIN || role == UserRole.LIBRARIAN) {
+            return true;
+        }
+        if (role == UserRole.STUDENT) {
+            return accessService.isStudentFolder(folder, studentNumber);
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (accessService.matchesRoleFolderCode(current.getCode(), role)) {
+                return true;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return false;
+    }
+
+    private boolean isSharedWithRole(FolderEntity folder, UserRole role) {
+        if (folder == null || role == null) {
+            return false;
+        }
+        // Mirrored Shared Documents folders are hidden from the tree; do not treat them as live shares.
+        if (isMirroredSharedDocumentsFolder(folder)) {
+            return false;
+        }
+        if (folderShareRepository.findByFolderIdAndTargetRole(folder.getId(), role).isPresent()) {
+            return true;
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (isMirroredSharedDocumentsFolder(current)) {
+                return false;
+            }
+            if (folderShareRepository.findByFolderIdAndTargetRole(current.getId(), role).isPresent()) {
+                return true;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return false;
+    }
+
+    private boolean isMirroredSharedDocumentsFolder(FolderEntity folder) {
+        if (folder == null) {
+            return false;
+        }
+        String code = folder.getCode() == null ? "" : folder.getCode().toUpperCase(Locale.ROOT);
+        if (code.contains("-SHARED") || code.endsWith("SHARED") || code.equals("SHARED")) {
+            return true;
+        }
+        String name = folder.getName() == null ? "" : folder.getName().trim().toLowerCase(Locale.ROOT);
+        return "shared documents".equals(name);
     }
 
     private boolean isFolderVisibleByParent(FolderEntity folder, UserRole role, String studentNumber) {
@@ -643,8 +1166,32 @@ public class FolderService {
         if (!isWithinStudentTree(parent, studentNumber)) {
             return false;
         }
+        if (isArchiveProjectFolder(parent) || isUnderArchiveProject(parent)) {
+            return false;
+        }
         String code = parent.getCode() == null ? "" : parent.getCode().toUpperCase(Locale.ROOT);
-        return !isRegistrarCategoryFolder(code);
+        return ArchiveTreeService.isWithinStudentDefaultWorkspace(code)
+                && !code.contains("-" + ArchiveTreeService.ARCHIVE_PROJECT_SUFFIX);
+    }
+
+    private boolean isArchiveProjectFolder(FolderEntity folder) {
+        return folder != null && folder.getCode() != null
+                && folder.getCode().toUpperCase(Locale.ROOT).endsWith("-" + ArchiveTreeService.ARCHIVE_PROJECT_SUFFIX);
+    }
+
+    private boolean isUnderArchiveProject(FolderEntity folder) {
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (isArchiveProjectFolder(current)) {
+                return true;
+            }
+            if (current.getParentId() == null) {
+                return false;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return false;
     }
 
     private boolean isWithinStudentTree(FolderEntity folder, String studentNumber) {
@@ -704,10 +1251,26 @@ public class FolderService {
         if (isDepartmentFolder(parent) && !isAdminStaff(role)) {
             throw new IllegalArgumentException("Only administrators can create folders directly under a department");
         }
+        if (isOfficeArchiveRole(role) && !isSemesterOrDeeperFolder(parent)) {
+            throw new IllegalArgumentException("Open a semester folder first. New folders can be created from semester level downward");
+        }
     }
 
     private boolean isAdminStaff(UserRole role) {
         return role == UserRole.ADMIN;
+    }
+
+    private boolean isOfficeArchiveRole(UserRole role) {
+        return role == UserRole.REGISTRAR
+                || role == UserRole.EXAMINATION_OFFICER
+                || role == UserRole.HOD;
+    }
+
+    private boolean isSemesterOrDeeperFolder(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        return folder.getCode().toUpperCase(Locale.ROOT).contains("-SEM-");
     }
 
     private void requireModifiableFolder(FolderEntity folder, UserRole role, String studentNumber) {
@@ -721,7 +1284,7 @@ public class FolderService {
             throw new IllegalArgumentException("Folder not found: " + folder.getId());
         }
         if (role == UserRole.STUDENT && !canStudentModifyFolder(folder, studentNumber)) {
-            throw new IllegalArgumentException("You can only change folders in your personal project workspace");
+            throw new IllegalArgumentException("Official Documents and Final Year Project cannot be changed. You can only rename or move your own subfolders.");
         }
     }
 
@@ -730,7 +1293,7 @@ public class FolderService {
             throw new IllegalArgumentException("Destination folder not found: " + targetParent.getId());
         }
         if (role == UserRole.STUDENT && !canStudentCreateSubfolder(targetParent, studentNumber)) {
-            throw new IllegalArgumentException("You can only paste folders inside your personal project workspace");
+            throw new IllegalArgumentException("You can only paste folders inside Official Documents or Final Year Project");
         }
     }
 
@@ -742,10 +1305,10 @@ public class FolderService {
             return false;
         }
         String code = folder.getCode() == null ? "" : folder.getCode().toUpperCase(Locale.ROOT);
-        if (isRegistrarCategoryFolder(code)) {
+        if (ArchiveTreeService.isStudentDefaultFolderCode(code)) {
             return false;
         }
-        return code.contains("-MY-");
+        return ArchiveTreeService.isWithinStudentDefaultWorkspace(code) && code.contains("-MY-");
     }
 
     private boolean isDescendantOf(Long ancestorId, Long candidateId) {
@@ -771,6 +1334,9 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 countDocuments(folder, childrenByParent, role, studentNumber),
+                ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
+                        || isProtectedArchiveStructureFolder(folder)
+                        || folder.getParentId() == null,
                 List.of()
         );
     }
@@ -848,7 +1414,8 @@ public class FolderService {
         DocumentEntity copy = new DocumentEntity();
         copy.setTitle(source.getTitle());
         copy.setFileName(source.getFileName());
-        copy.setDocumentCode(source.getDocumentCode() + "-COPY-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT));
+        copy.setDocumentCode((source.getDocumentCode() == null ? "DOC" : source.getDocumentCode())
+                + "-COPY-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT));
         copy.setOwnerName(source.getOwnerName());
         copy.setStudentNumber(source.getStudentNumber());
         copy.setDepartment(source.getDepartment());
@@ -940,7 +1507,9 @@ public class FolderService {
                 document.getArchivedBy(),
                 document.getGithubUrl(),
                 document.getExternalLinks(),
-                document.getReviewNote()
+                document.getReviewNote(),
+                document.getDescription(),
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
         );
     }
 }

@@ -13,7 +13,7 @@ public final class AucaFacultyCatalog {
             new FacultyEntry(
                     "Faculty of Business Administration",
                     "FBA",
-                    List.of("Accounting", "Management", "Finance", "Information Management")
+                    List.of("Accounting", "Management", "Finance")
             ),
             new FacultyEntry(
                     "Faculty of Information Technology",

@@ -152,17 +152,35 @@ export function folderHasContents(folderId) {
   return request(`/api/folders/${folderId}/has-contents`)
 }
 
-export function shareFolder(folderId, targetRole) {
+export function shareFolder(folderId, targetRole, permission = 'READ_ONLY') {
   return request(`/api/folders/${folderId}/share`, {
     method: 'POST',
-    body: JSON.stringify({ targetRole })
+    body: JSON.stringify({ targetRole, permission })
   })
 }
 
-export async function downloadFolderZip(folderId, documentIds = []) {
+export function shareItems({ targetRole, permission = 'READ_ONLY', folderIds = [], documentIds = [] }) {
+  return request('/api/shares', {
+    method: 'POST',
+    body: JSON.stringify({ targetRole, permission, folderIds, documentIds })
+  })
+}
+
+export function getSharedWithMe() {
+  return request('/api/shares/with-me')
+}
+
+export function getSharedWithMeCount() {
+  return request('/api/shares/with-me/count')
+}
+
+export async function downloadFolderZip(folderId, documentIds = [], folderIds = []) {
   const params = new URLSearchParams()
   if (documentIds.length) {
     documentIds.forEach((id) => params.append('documentIds', String(id)))
+  }
+  if (folderIds.length) {
+    folderIds.forEach((id) => params.append('folderIds', String(id)))
   }
   const query = params.toString()
   const response = await fetch(`${API_BASE}/api/folders/${folderId}/download${query ? `?${query}` : ''}`, {
@@ -199,6 +217,15 @@ export async function downloadFolderZip(folderId, documentIds = []) {
   link.click()
   link.remove()
   URL.revokeObjectURL(url)
+}
+
+export function replaceDocumentFile(documentId, file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request(`/api/documents/${documentId}/file`, {
+    method: 'PUT',
+    body: formData
+  })
 }
 
 export function getActivities(scope, topic) {
@@ -283,6 +310,22 @@ export async function downloadDocument(documentId) {
   URL.revokeObjectURL(url)
 }
 
+export async function fetchDocumentCoverObjectUrl(documentId) {
+  if (!documentId) {
+    return null
+  }
+  const response = await fetch(`${API_BASE}/api/documents/${documentId}/cover`, {
+    headers: {
+      ...getSessionRoleHeader()
+    }
+  })
+  if (!response.ok) {
+    return null
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
 export function deleteDocument(documentId) {
   return request(`/api/documents/${documentId}`, {
     method: 'DELETE'
@@ -316,6 +359,25 @@ export function submitUpload(metadata, file, coverPhoto) {
     method: 'POST',
     body: formData
   })
+}
+
+export function updatePendingFinalYearProject(documentId, metadata, file, coverPhoto) {
+  const formData = new FormData()
+  formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
+  if (file) {
+    formData.append('file', file)
+  }
+  if (coverPhoto) {
+    formData.append('coverPhoto', coverPhoto)
+  }
+  return request(`/api/documents/${documentId}/final-year-project`, {
+    method: 'PUT',
+    body: formData
+  })
+}
+
+export function getDocument(documentId) {
+  return request(`/api/documents/${documentId}`)
 }
 
 export function scanDocument(file, context = {}) {
