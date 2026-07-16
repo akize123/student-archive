@@ -7,6 +7,8 @@ public record StudentArchiveResponse(
         String studentName,
         String faculty,
         String department,
+        String academicYear,
+        String semester,
         Long folderId,
         long documentCount,
         List<DocumentListItemResponse> documents

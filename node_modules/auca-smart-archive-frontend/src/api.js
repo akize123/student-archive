@@ -1,4 +1,13 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8081'
+const API_PORT = import.meta.env.VITE_API_PORT || '8081'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (
+  import.meta.env.DEV
+    ? ''
+    : (
+      typeof window !== 'undefined'
+        ? `http://${window.location.hostname}:${API_PORT}`
+        : `http://localhost:${API_PORT}`
+    )
+)
 const AUTH_SESSION_KEY = 'auca-archive-session'
 
 function getSessionRoleHeader() {
@@ -7,7 +16,7 @@ function getSessionRoleHeader() {
   }
 
   try {
-    const raw = window.localStorage.getItem(AUTH_SESSION_KEY)
+    const raw = window.sessionStorage.getItem(AUTH_SESSION_KEY)
     if (!raw) {
       return {}
     }
@@ -21,6 +30,15 @@ function getSessionRoleHeader() {
     }
     if (session?.studentNumber) {
       headers['X-Student-Number'] = session.studentNumber
+    }
+    if (session?.department) {
+      headers['X-User-Department'] = session.department
+    }
+    if (session?.id) {
+      headers['X-Account-Id'] = String(session.id)
+    }
+    if (session?.username) {
+      headers['X-User-Username'] = session.username
     }
     return headers
   } catch {
@@ -118,6 +136,32 @@ export function createSubfolder(parentId, name) {
   return request(`/api/folders/${parentId}/subfolders`, {
     method: 'POST',
     body: JSON.stringify({ name })
+  })
+}
+
+export function addDepartmentAcademicYear(departmentId, academicYear) {
+  return request(`/api/folders/${departmentId}/academic-years`, {
+    method: 'POST',
+    body: JSON.stringify({ academicYear })
+  })
+}
+
+export function importFolderArchive(folderId, { archive, files = [], paths = [] } = {}) {
+  const formData = new FormData()
+  if (archive) {
+    formData.append('archive', archive, archive.name || 'import.zip')
+  }
+  if (files.length) {
+    files.forEach((file) => {
+      formData.append('files', file, file.name)
+    })
+    paths.forEach((path) => {
+      formData.append('paths', path)
+    })
+  }
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import`, {
+    method: 'POST',
+    body: formData
   })
 }
 
@@ -417,4 +461,81 @@ export function updateAdminUser(userId, payload) {
     method: 'PUT',
     body: JSON.stringify(payload)
   })
+}
+
+export function getAdminActivity({ scope, userId, category, page = 0, size = 50 } = {}) {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  if (userId) params.set('userId', String(userId))
+  if (category) params.set('category', category)
+  params.set('page', String(page))
+  params.set('size', String(size))
+  const query = params.toString()
+  return request(`/api/admin/activity${query ? `?${query}` : ''}`)
+}
+
+export function getAdminRecentActivity(limit = 5) {
+  return request(`/api/admin/activity/recent?limit=${encodeURIComponent(limit)}`)
+}
+
+export function getAdminOffices() {
+  return request('/api/admin/offices')
+}
+
+export function getAdminArchiveTemplate() {
+  return request('/api/admin/archive-template')
+}
+
+export function createMobileScanSession() {
+  return request('/api/mobile-scan/sessions', { method: 'POST' })
+}
+
+export function getMobileScanNetworkUrl(frontendPort = 5173) {
+  const port = Number(frontendPort) > 0 ? Number(frontendPort) : 5173
+  return request(`/api/mobile-scan/network-url?frontendPort=${encodeURIComponent(port)}`)
+}
+
+export function getMobileScanSession(token) {
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}`)
+}
+
+export function addMobileScanPage(token, imageBlob) {
+  const formData = new FormData()
+  formData.append('image', imageBlob, 'scan-page.jpg')
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/pages`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export function reorderMobileScanPages(token, pageIds) {
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/pages/reorder`, {
+    method: 'PUT',
+    body: JSON.stringify({ pageIds })
+  })
+}
+
+export function deleteMobileScanPage(token, pageId) {
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/pages/${encodeURIComponent(pageId)}`, {
+    method: 'DELETE'
+  })
+}
+
+export function finalizeMobileScanSession(token) {
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/finalize`, {
+    method: 'POST'
+  })
+}
+
+export async function downloadMobileScanPdf(token) {
+  const response = await fetch(`${API_BASE}/api/mobile-scan/sessions/${encodeURIComponent(token)}/pdf`, {
+    headers: {
+      ...getSessionRoleHeader()
+    }
+  })
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(message || 'Unable to download scanned PDF.')
+  }
+  return response.blob()
 }

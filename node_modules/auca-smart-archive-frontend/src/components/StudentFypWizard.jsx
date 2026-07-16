@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { getDocument, submitUpload, updatePendingFinalYearProject } from '../api'
+import { validateImageFile, validateZipFile } from '../fileSignatures'
 import { CheckIcon, UploadIcon, XIcon } from './Icons'
 
 const STEPS = [
@@ -178,6 +179,14 @@ export default function StudentFypWizard({
     if (!file) {
       return
     }
+    const signatureCheck = await validateImageFile(file)
+    if (!signatureCheck.ok) {
+      onNotify?.(signatureCheck.message)
+      updateField('coverPhoto', null)
+      setCoverPreview('')
+      event.target.value = ''
+      return
+    }
     const detection = await detectFaceInImage(file)
     if (!detection.ok) {
       onNotify?.(detection.message)
@@ -237,6 +246,10 @@ export default function StudentFypWizard({
         const name = String(form.zipFile.name || '').toLowerCase()
         if (!name.endsWith('.zip')) {
           return 'Only ZIP files are accepted for the project book.'
+        }
+        const signatureCheck = await validateZipFile(form.zipFile)
+        if (!signatureCheck.ok) {
+          return signatureCheck.message
         }
         if (form.zipFile.size > FYP_ZIP_MAX_BYTES) {
           return 'ZIP file must be 1 MB or smaller.'
@@ -458,7 +471,21 @@ export default function StudentFypWizard({
                 <input
                   type="file"
                   accept=".zip,application/zip"
-                  onChange={(event) => updateField('zipFile', event.target.files?.[0] || null)}
+                  onChange={async (event) => {
+                    const nextFile = event.target.files?.[0] || null
+                    if (!nextFile) {
+                      updateField('zipFile', null)
+                      return
+                    }
+                    const signatureCheck = await validateZipFile(nextFile)
+                    if (!signatureCheck.ok) {
+                      onNotify?.(signatureCheck.message)
+                      event.target.value = ''
+                      updateField('zipFile', null)
+                      return
+                    }
+                    updateField('zipFile', nextFile)
+                  }}
                 />
               </label>
               {form.zipFile ? (

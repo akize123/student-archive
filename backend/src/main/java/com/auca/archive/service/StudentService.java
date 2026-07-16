@@ -50,6 +50,17 @@ public class StudentService {
 
     @Transactional
     public StudentEntity resolveOrCreate(String studentNumber, String studentName, String faculty, String department) {
+        return resolveOrCreate(studentNumber, studentName, faculty, department, false);
+    }
+
+    @Transactional
+    public StudentEntity resolveOrCreate(
+            String studentNumber,
+            String studentName,
+            String faculty,
+            String department,
+            boolean placementFromArchiveContext
+    ) {
         String normalizedNumber = normalize(studentNumber);
         String normalizedName = normalizeName(studentName);
         String normalizedFaculty = normalizeOptional(faculty);
@@ -60,6 +71,7 @@ public class StudentService {
             if (normalizedName != null && !existing.getFullName().equalsIgnoreCase(normalizedName)) {
                 throw new IllegalArgumentException("Student ID " + normalizedNumber + " already belongs to " + existing.getFullName());
             }
+            rejectCrossDepartmentPlacement(existing, normalizedFaculty, normalizedDepartment);
             boolean changed = false;
             if ((existing.getFaculty() == null || existing.getFaculty().isBlank()) && normalizedFaculty != null) {
                 existing.setFaculty(normalizedFaculty);
@@ -80,14 +92,14 @@ public class StudentService {
         }
 
         studentIdFormatService.requireRecognizedFormat(normalizedNumber);
-        if (!studentIdFormatService.isLegacyFormat(normalizedNumber)) {
+        if (!placementFromArchiveContext && !studentIdFormatService.isLegacyFormat(normalizedNumber)) {
             studentIdFormatService.validateDepartmentMatch(normalizedNumber, normalizedDepartment);
         }
 
-        if (normalizedDepartment == null) {
+        if (normalizedDepartment == null && !placementFromArchiveContext) {
             normalizedDepartment = studentIdFormatService.resolveDepartmentName(normalizedNumber).orElse(null);
         }
-        if (normalizedFaculty == null) {
+        if (normalizedFaculty == null && !placementFromArchiveContext) {
             normalizedFaculty = studentIdFormatService.resolveFacultyName(normalizedNumber).orElse(null);
         }
 
@@ -124,11 +136,15 @@ public class StudentService {
                 .map(this::toListItem)
                 .toList();
 
+        ArchiveTreeService.StudentUploadPlacement placement = archiveTreeService.resolveStudentUploadPlacement(student);
+
         return new StudentArchiveResponse(
                 student.getStudentNumber(),
                 student.getFullName(),
-                student.getFaculty(),
-                student.getDepartment(),
+                placement.faculty(),
+                placement.department(),
+                placement.academicYear(),
+                placement.semester(),
                 archiveTreeService.findStudentFolderId(student).orElse(null),
                 documents.size(),
                 documents
@@ -141,6 +157,29 @@ public class StudentService {
             return StudentLookupResponse.notFound(normalized);
         }
         return StudentLookupResponse.fromArchive(getStudentArchive(studentNumber, rawRole, rawSessionStudentNumber));
+    }
+
+    private void rejectCrossDepartmentPlacement(
+            StudentEntity existing,
+            String requestedFaculty,
+            String requestedDepartment
+    ) {
+        if (requestedDepartment != null
+                && existing.getDepartment() != null
+                && !existing.getDepartment().isBlank()
+                && !existing.getDepartment().equalsIgnoreCase(requestedDepartment)) {
+            throw new IllegalArgumentException("Student ID " + existing.getStudentNumber()
+                    + " is already registered under " + existing.getDepartment()
+                    + ". Upload to that student's existing location instead.");
+        }
+        if (requestedFaculty != null
+                && existing.getFaculty() != null
+                && !existing.getFaculty().isBlank()
+                && !existing.getFaculty().equalsIgnoreCase(requestedFaculty)) {
+            throw new IllegalArgumentException("Student ID " + existing.getStudentNumber()
+                    + " is already registered under " + existing.getFaculty()
+                    + ". Upload to that student's existing location instead.");
+        }
     }
 
     private String normalize(String studentNumber) {

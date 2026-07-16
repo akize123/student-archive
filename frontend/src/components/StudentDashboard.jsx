@@ -52,7 +52,8 @@ export default function StudentDashboard({
   onOpenDocument,
   onCreateFolder,
   onBrowse,
-  onEditFinalYearProject
+  onEditFinalYearProject,
+  profileMenu
 }) {
   const [projectTab, setProjectTab] = useState('pending')
 
@@ -112,6 +113,7 @@ export default function StudentDashboard({
           <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowse}>
             Browse
           </button>
+          {profileMenu}
         </div>
       </header>
 

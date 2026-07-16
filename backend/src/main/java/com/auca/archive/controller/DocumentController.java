@@ -133,9 +133,19 @@ public class DocumentController {
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "coverPhoto", required = false) MultipartFile coverPhoto,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName
     ) throws IOException {
-        return documentService.upload(metadata, file, coverPhoto, role, studentNumber);
+        return documentService.upload(
+                metadata,
+                file,
+                coverPhoto,
+                role,
+                studentNumber,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 
     @PutMapping(value = "/{id}/file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -143,9 +153,17 @@ public class DocumentController {
             @PathVariable Long id,
             @RequestPart("file") MultipartFile file,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username
     ) throws IOException {
-        return documentService.replaceDocumentFile(id, file, role, actorName);
+        return documentService.replaceDocumentFile(
+                id,
+                file,
+                role,
+                actorName,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 
     @PutMapping(value = "/{id}/final-year-project", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -172,9 +190,16 @@ public class DocumentController {
     @DeleteMapping("/{id}")
     public Map<String, String> deleteDocument(
             @PathVariable Long id,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName
     ) {
-        documentService.archiveDocument(id, role);
+        documentService.archiveDocument(
+                id,
+                role,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
         Map<String, String> response = new java.util.LinkedHashMap<>();
         response.put("message", "Document moved to archive");
         return response;

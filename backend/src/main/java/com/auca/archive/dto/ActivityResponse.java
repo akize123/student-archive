@@ -7,7 +7,13 @@ public record ActivityResponse(
         String message,
         String actor,
         String category,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        String sourceRole,
+        String targetRole,
+        String academicDepartment,
+        String documentCategory,
+        String studentNumber,
+        Long actorAccountId,
+        String actorUsername
 ) {
 }
-

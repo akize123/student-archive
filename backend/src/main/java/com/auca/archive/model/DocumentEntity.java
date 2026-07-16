@@ -3,6 +3,7 @@ package com.auca.archive.model;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.domain.UserRole;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -54,6 +55,9 @@ public class DocumentEntity {
 
     @Enumerated(EnumType.STRING)
     private StudentDocumentCategory category;
+
+    @Enumerated(EnumType.STRING)
+    private UserRole uploadedByRole;
 
     private LocalDateTime archivedAt;
     private String archivedBy;
@@ -289,6 +293,14 @@ public class DocumentEntity {
 
     public void setCategory(StudentDocumentCategory category) {
         this.category = category;
+    }
+
+    public UserRole getUploadedByRole() {
+        return uploadedByRole;
+    }
+
+    public void setUploadedByRole(UserRole uploadedByRole) {
+        this.uploadedByRole = uploadedByRole;
     }
 
     public LocalDateTime getArchivedAt() {

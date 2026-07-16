@@ -3,6 +3,7 @@ package com.auca.archive.service;
 import com.auca.archive.domain.ApprovalStatus;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.ActivityResponse;
+import com.auca.archive.dto.ApprovalTaskResponse;
 import com.auca.archive.dto.DashboardResponse;
 import com.auca.archive.dto.DocumentListItemResponse;
 import com.auca.archive.model.DocumentEntity;
@@ -54,8 +55,15 @@ public class DashboardService {
     }
 
     public DashboardResponse getDashboard(String rawRole, String rawStudentNumber) {
+        return getDashboard(rawRole, rawStudentNumber, null);
+    }
+
+    public DashboardResponse getDashboard(String rawRole, String rawStudentNumber, String rawViewerDepartment) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = rawStudentNumber == null || rawStudentNumber.isBlank() ? null : rawStudentNumber.trim();
+        String viewerDepartment = rawViewerDepartment == null || rawViewerDepartment.isBlank()
+                ? null
+                : rawViewerDepartment.trim();
         accessService.requireStudentAccount(role, studentNumber);
         List<DocumentEntity> visibleDocuments = documentRepository.findAll().stream()
                 .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber))
@@ -71,18 +79,21 @@ public class DashboardService {
         long recentUploads = visibleDocuments.stream()
                 .filter(document -> document.getCreatedAt() != null && document.getCreatedAt().isAfter(LocalDateTime.now().minusDays(7)))
                 .count();
-        long pendingApprovals = approvalTaskRepository.findAll().stream()
-                .filter(task -> task.getStatus() == ApprovalStatus.PENDING)
-                .filter(task -> task.getDocumentId() != null)
-                .filter(task -> documentRepository.findById(task.getDocumentId())
-                        .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
-                        .orElse(false))
-                .count();
+        boolean includeApprovals = role != UserRole.REGISTRAR;
+        long pendingApprovals = includeApprovals
+                ? approvalTaskRepository.findAll().stream()
+                        .filter(task -> task.getStatus() == ApprovalStatus.PENDING)
+                        .filter(task -> task.getDocumentId() != null)
+                        .filter(task -> documentRepository.findById(task.getDocumentId())
+                                .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
+                                .orElse(false))
+                        .count()
+                : 0L;
         long departmentFiles = visibleDocuments.size();
         long storageUsedBytes = visibleDocuments.stream()
                 .mapToLong(document -> document.getSizeBytes() == null ? 0L : document.getSizeBytes())
                 .sum();
-        List<ActivityResponse> recentActivity = activityService.recent(rawRole);
+        List<ActivityResponse> recentActivity = activityService.recent(rawRole, null, null, viewerDepartment, studentNumber);
         List<DocumentListItemResponse> recentFiles = documentService.search(null, null, rawRole, rawStudentNumber).stream()
                 .limit(8)
                 .toList();
@@ -107,32 +118,34 @@ public class DashboardService {
                 storageLimitBytes,
                 folderService.getTree(rawRole, rawStudentNumber),
                 recentFiles,
-                approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
-                        .stream()
-                        .filter(task -> task.getDocumentId() != null)
-                        .filter(task -> documentRepository.findById(task.getDocumentId())
-                                .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
-                                .orElse(false))
-                        .map(task -> {
-                            DocumentEntity document = documentRepository.findById(task.getDocumentId()).orElse(null);
-                            return new com.auca.archive.dto.ApprovalTaskResponse(
-                                    task.getId(),
-                                    task.getDocumentId(),
-                                    task.getDocumentTitle(),
-                                    task.getRequestedBy(),
-                                    document == null ? null : document.getStudentNumber(),
-                                    document == null ? null : document.getDescription(),
-                                    document == null ? null : document.getGithubUrl(),
-                                    document == null ? null : document.getExternalLinks(),
-                                    document == null ? null : document.getFileName(),
-                                    task.getRequestedAt(),
-                                    task.getDueAt(),
-                                    task.getNote(),
-                                    task.getPriority(),
-                                    task.getStatus().name()
-                            );
-                        })
-                        .toList(),
+                includeApprovals
+                        ? approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
+                                .stream()
+                                .filter(task -> task.getDocumentId() != null)
+                                .filter(task -> documentRepository.findById(task.getDocumentId())
+                                        .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
+                                        .orElse(false))
+                                .map(task -> {
+                                    DocumentEntity document = documentRepository.findById(task.getDocumentId()).orElse(null);
+                                    return new ApprovalTaskResponse(
+                                            task.getId(),
+                                            task.getDocumentId(),
+                                            task.getDocumentTitle(),
+                                            task.getRequestedBy(),
+                                            document == null ? null : document.getStudentNumber(),
+                                            document == null ? null : document.getDescription(),
+                                            document == null ? null : document.getGithubUrl(),
+                                            document == null ? null : document.getExternalLinks(),
+                                            document == null ? null : document.getFileName(),
+                                            task.getRequestedAt(),
+                                            task.getDueAt(),
+                                            task.getNote(),
+                                            task.getPriority(),
+                                            task.getStatus().name()
+                                    );
+                                })
+                                .toList()
+                        : List.of(),
                 recentActivity
         );
     }

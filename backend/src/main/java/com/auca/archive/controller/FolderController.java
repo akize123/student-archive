@@ -1,12 +1,15 @@
 package com.auca.archive.controller;
 
+import com.auca.archive.dto.AddAcademicYearRequest;
 import com.auca.archive.dto.CreateFolderRequest;
 import com.auca.archive.dto.FolderDetailResponse;
+import com.auca.archive.dto.FolderImportResponse;
 import com.auca.archive.dto.FolderNodeResponse;
 import com.auca.archive.dto.FolderTargetRequest;
 import com.auca.archive.dto.RenameFolderRequest;
 import com.auca.archive.dto.ShareFolderRequest;
 import com.auca.archive.dto.ShareFolderResponse;
+import com.auca.archive.service.FolderImportService;
 import com.auca.archive.service.FolderService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
@@ -21,7 +24,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -32,9 +37,11 @@ import java.util.Map;
 @RequestMapping("/api/folders")
 public class FolderController {
     private final FolderService folderService;
+    private final FolderImportService folderImportService;
 
-    public FolderController(FolderService folderService) {
+    public FolderController(FolderService folderService, FolderImportService folderImportService) {
         this.folderService = folderService;
+        this.folderImportService = folderImportService;
     }
 
     @GetMapping("/tree")
@@ -62,6 +69,23 @@ public class FolderController {
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
         return folderService.createSubfolder(parentId, request.name(), role, studentNumber);
+    }
+
+    @PostMapping("/{departmentId}/academic-years")
+    public FolderNodeResponse addAcademicYear(
+            @PathVariable Long departmentId,
+            @Valid @RequestBody AddAcademicYearRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName
+    ) {
+        return folderService.addAcademicYear(
+                departmentId,
+                request.academicYear(),
+                role,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 
     @PatchMapping("/{id}")
@@ -130,9 +154,18 @@ public class FolderController {
             @PathVariable Long id,
             @Valid @RequestBody ShareFolderRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username
     ) {
-        return folderService.shareFolder(id, request.targetRole(), request.permission(), role, actorName);
+        return folderService.shareFolder(
+                id,
+                request.targetRole(),
+                request.permission(),
+                role,
+                actorName,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 
     @GetMapping("/{id}/has-contents")
@@ -143,5 +176,27 @@ public class FolderController {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("hasContents", folderService.folderHasContents(id, role));
         return response;
+    }
+
+    @PostMapping(value = "/{id}/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public FolderImportResponse importIntoFolder(
+            @PathVariable Long id,
+            @RequestPart(value = "archive", required = false) MultipartFile archive,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "paths", required = false) List<String> paths,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username
+    ) throws IOException {
+        return folderImportService.importIntoFolder(
+                id,
+                archive,
+                files,
+                paths,
+                role,
+                actorName,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 }

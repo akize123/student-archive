@@ -54,24 +54,135 @@ public class ArchiveAccessService {
     }
 
     public boolean isActivityRelevant(ActivityEntryEntity activity, UserRole role) {
-        if (activity == null || role == null) {
+        return isActivityVisible(activity, role, null, null);
+    }
+
+    public boolean isActivityVisible(
+            ActivityEntryEntity activity,
+            UserRole viewerRole,
+            String viewerDepartment,
+            String viewerStudentNumber
+    ) {
+        if (activity == null) {
+            return false;
+        }
+        if (viewerRole == null) {
+            return true;
+        }
+        if (viewerRole == UserRole.ADMIN) {
             return true;
         }
 
-        String haystack = String.join(" ",
-                safe(activity.getMessage()),
-                safe(activity.getActor()),
-                activity.getCategory() == null ? "" : activity.getCategory().name()
-        ).toLowerCase(Locale.ROOT);
+        if (!hasScopeMetadata(activity)) {
+            return false;
+        }
 
-        return switch (role) {
-            case ADMIN -> true;
-            case REGISTRAR -> containsAny(haystack, "registrar", "registration", "enrollment", "transcript", "graduation", "admission");
-            case EXAMINATION_OFFICER -> containsAny(haystack, "exam", "marks", "grading", "paper", "semester", "mid-sem", "final");
-            case HOD -> containsAny(haystack, "hod", "department", "thesis", "approval", "faculty");
-            case LIBRARIAN -> containsAny(haystack, "library", "librarian", "project", "thesis", "final year", "fyp", "approval", "student");
-            case STUDENT -> containsAny(haystack, "student", "registration", "registrar", "project", "final year", "application", "reintegration");
+        if (viewerRole == UserRole.STUDENT) {
+            if (activity.getSourceRole() == viewerRole || activity.getTargetRole() == viewerRole) {
+                return matchesStudentNumber(activity.getStudentNumber(), viewerStudentNumber);
+            }
+            return matchesStudentNumber(activity.getStudentNumber(), viewerStudentNumber);
+        }
+
+        if (viewerRole == UserRole.HOD) {
+            if (activity.getSourceRole() == viewerRole || activity.getTargetRole() == viewerRole) {
+                return matchesDepartment(activity.getAcademicDepartment(), viewerDepartment);
+            }
+            return matchesDepartment(activity.getAcademicDepartment(), viewerDepartment);
+        }
+
+        if (activity.getSourceRole() == viewerRole || activity.getTargetRole() == viewerRole) {
+            return true;
+        }
+
+        if (activity.getCategory() == ActivityCategory.SHARE) {
+            return false;
+        }
+
+        if (viewerRole == UserRole.REGISTRAR
+                || viewerRole == UserRole.EXAMINATION_OFFICER
+                || viewerRole == UserRole.LIBRARIAN) {
+            return false;
+        }
+
+        if (activity.getDocumentCategory() != null) {
+            return allowedUploadCategories(viewerRole).contains(activity.getDocumentCategory());
+        }
+
+        if (activity.getCategory() == ActivityCategory.SYNC) {
+            return activity.getSourceRole() == viewerRole;
+        }
+
+        return false;
+    }
+
+    public boolean canViewOfficeDocument(DocumentEntity document, UserRole viewerRole) {
+        if (document == null || viewerRole == null) {
+            return false;
+        }
+        if (viewerRole == UserRole.ADMIN) {
+            return true;
+        }
+        if (viewerRole == UserRole.STUDENT) {
+            return false;
+        }
+
+        UserRole ownerRole = document.getUploadedByRole();
+        if (ownerRole != null) {
+            if (viewerRole == ownerRole) {
+                return true;
+            }
+            return viewerRole == UserRole.LIBRARIAN
+                    && ownerRole == UserRole.STUDENT
+                    && document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT;
+        }
+
+        StudentDocumentCategory category = document.getCategory();
+        if (category == null) {
+            return false;
+        }
+
+        return switch (category) {
+            case REGISTRATION_FORM, REINTEGRATION_FORM -> viewerRole == UserRole.REGISTRAR;
+            case EXAMINATION_DOCUMENTS -> viewerRole == UserRole.EXAMINATION_OFFICER;
+            case APPLICATION_DOCUMENTS -> viewerRole == UserRole.REGISTRAR || viewerRole == UserRole.HOD;
+            case FINAL_YEAR_PROJECT -> viewerRole == UserRole.LIBRARIAN || viewerRole == UserRole.STUDENT;
         };
+    }
+
+    public boolean isOfficeStaffRole(UserRole role) {
+        return role == UserRole.REGISTRAR
+                || role == UserRole.EXAMINATION_OFFICER
+                || role == UserRole.HOD
+                || role == UserRole.LIBRARIAN;
+    }
+
+    private boolean hasScopeMetadata(ActivityEntryEntity activity) {
+        return activity.getSourceRole() != null
+                || activity.getTargetRole() != null
+                || activity.getDocumentCategory() != null
+                || activity.getAcademicDepartment() != null
+                || activity.getStudentNumber() != null;
+    }
+
+    private boolean matchesStudentNumber(String activityStudentNumber, String viewerStudentNumber) {
+        if (activityStudentNumber == null || activityStudentNumber.isBlank()) {
+            return false;
+        }
+        if (viewerStudentNumber == null || viewerStudentNumber.isBlank()) {
+            return false;
+        }
+        return activityStudentNumber.trim().equalsIgnoreCase(viewerStudentNumber.trim());
+    }
+
+    private boolean matchesDepartment(String activityDepartment, String viewerDepartment) {
+        if (activityDepartment == null || activityDepartment.isBlank()) {
+            return false;
+        }
+        if (viewerDepartment == null || viewerDepartment.isBlank()) {
+            return false;
+        }
+        return activityDepartment.trim().equalsIgnoreCase(viewerDepartment.trim());
     }
 
     public List<String> visibleFolderPrefixes(UserRole role) {
@@ -163,23 +274,10 @@ public class ArchiveAccessService {
         return value.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
     }
 
-    private boolean containsAny(String haystack, String... terms) {
-        for (String term : terms) {
-            if (haystack.contains(term)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private String normalize(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }
         return value.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value;
     }
 }

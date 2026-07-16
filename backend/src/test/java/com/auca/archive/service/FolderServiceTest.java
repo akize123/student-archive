@@ -45,6 +45,9 @@ class FolderServiceTest {
     private StudentIdFormatService studentIdFormatService;
 
     @Mock
+    private AcademicTermService academicTermService;
+
+    @Mock
     private ObjectProvider<ArchiveTreeService> archiveTreeService;
 
     @Test
@@ -67,6 +70,7 @@ class FolderServiceTest {
                 activityService,
                 fileEncryptionService,
                 studentIdFormatService,
+                academicTermService,
                 archiveTreeService,
                 "storage"
         );

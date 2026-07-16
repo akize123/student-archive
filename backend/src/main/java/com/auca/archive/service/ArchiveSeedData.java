@@ -5,6 +5,7 @@ import com.auca.archive.domain.ApprovalStatus;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.ActivityEntryEntity;
 import com.auca.archive.model.ApprovalTaskEntity;
 import com.auca.archive.model.DocumentEntity;
@@ -131,20 +132,160 @@ public class ArchiveSeedData implements CommandLineRunner {
         approvalTaskRepository.save(createApproval(doc3.getId(), doc3.getTitle(), "M. Uwimana", "High", "Final sign-off pending"));
         approvalTaskRepository.save(createApproval(doc2.getId(), "Semester 1 minutes duplicate scan", "S. Ingabire", "Low", "Duplicate scan needs cleanup"));
 
-        activityEntryRepository.save(activity("Uploaded thesis defense slides", "M. Uwimana", ActivityCategory.UPLOAD, 2));
-        activityEntryRepository.save(activity("Approved meeting minutes", "T. Mukamana", ActivityCategory.APPROVAL, 4));
-        activityEntryRepository.save(activity("Synced registrar archive tree", "System", ActivityCategory.SYNC, 6));
-        activityEntryRepository.save(activity("Archived thesis draft", "S. Ingabire", ActivityCategory.ARCHIVE, 8));
-        activityEntryRepository.save(activity("Shared exam registration regulations", "Registrar Office", ActivityCategory.SHARE, 12));
-        activityEntryRepository.save(activity("Uploaded registration form for STUD-2026-014", "Registrar Office", ActivityCategory.UPLOAD, 3));
-        activityEntryRepository.save(activity("Processed reintegration request SRIN-2026-008", "K. Twagirayezu", ActivityCategory.APPROVAL, 5));
-        activityEntryRepository.save(activity("Archived application documents for new intake", "Registrar Office", ActivityCategory.ARCHIVE, 7));
-        activityEntryRepository.save(activity("Uploaded final exam paper for IT301", "Examination Office", ActivityCategory.UPLOAD, 1));
-        activityEntryRepository.save(activity("Published semester marks for School of IT", "Examination Office", ActivityCategory.SYNC, 9));
-        activityEntryRepository.save(activity("Shared grading rubric with HOD", "Examination Office", ActivityCategory.SHARE, 11));
-        activityEntryRepository.save(activity("Approved thesis proposal for department review", "T. Mukamana", ActivityCategory.APPROVAL, 10));
-        activityEntryRepository.save(activity("Requested registrar verification for graduation list", "T. Mukamana", ActivityCategory.SYNC, 14));
-        activityEntryRepository.save(activity("Shared department minutes with registrar", "T. Mukamana", ActivityCategory.SHARE, 16));
+        activityEntryRepository.save(activity(
+                "Uploaded thesis defense slides",
+                "M. Uwimana",
+                ActivityCategory.UPLOAD,
+                2,
+                UserRole.HOD,
+                null,
+                "Software Engineering",
+                StudentDocumentCategory.APPLICATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Approved meeting minutes",
+                "T. Mukamana",
+                ActivityCategory.APPROVAL,
+                4,
+                UserRole.HOD,
+                null,
+                "Software Engineering",
+                StudentDocumentCategory.APPLICATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Synced registrar archive tree",
+                "System",
+                ActivityCategory.SYNC,
+                6,
+                UserRole.REGISTRAR,
+                null,
+                null,
+                null,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Archived thesis draft",
+                "S. Ingabire",
+                ActivityCategory.ARCHIVE,
+                8,
+                UserRole.HOD,
+                null,
+                "Software Engineering",
+                StudentDocumentCategory.APPLICATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Shared exam registration regulations",
+                "Registrar Office",
+                ActivityCategory.SHARE,
+                12,
+                UserRole.REGISTRAR,
+                UserRole.EXAMINATION_OFFICER,
+                null,
+                null,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Uploaded registration form for STUD-2026-014",
+                "Registrar Office",
+                ActivityCategory.UPLOAD,
+                3,
+                UserRole.REGISTRAR,
+                null,
+                "Admissions",
+                StudentDocumentCategory.REGISTRATION_FORM,
+                "STUD-2026-014"
+        ));
+        activityEntryRepository.save(activity(
+                "Processed reintegration request SRIN-2026-008",
+                "K. Twagirayezu",
+                ActivityCategory.APPROVAL,
+                5,
+                UserRole.REGISTRAR,
+                null,
+                "Admissions",
+                StudentDocumentCategory.REINTEGRATION_FORM,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Archived application documents for new intake",
+                "Registrar Office",
+                ActivityCategory.ARCHIVE,
+                7,
+                UserRole.REGISTRAR,
+                null,
+                "Admissions",
+                StudentDocumentCategory.APPLICATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Uploaded final exam paper for IT301",
+                "Examination Office",
+                ActivityCategory.UPLOAD,
+                1,
+                UserRole.EXAMINATION_OFFICER,
+                null,
+                "Software Engineering",
+                StudentDocumentCategory.EXAMINATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Published semester marks for School of IT",
+                "Examination Office",
+                ActivityCategory.SYNC,
+                9,
+                UserRole.EXAMINATION_OFFICER,
+                null,
+                "Software Engineering",
+                null,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Shared grading rubric with HOD",
+                "Examination Office",
+                ActivityCategory.SHARE,
+                11,
+                UserRole.EXAMINATION_OFFICER,
+                UserRole.HOD,
+                "Software Engineering",
+                null,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Approved thesis proposal for department review",
+                "T. Mukamana",
+                ActivityCategory.APPROVAL,
+                10,
+                UserRole.HOD,
+                null,
+                "Software Engineering",
+                StudentDocumentCategory.APPLICATION_DOCUMENTS,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Requested registrar verification for graduation list",
+                "T. Mukamana",
+                ActivityCategory.SYNC,
+                14,
+                UserRole.HOD,
+                UserRole.REGISTRAR,
+                "Software Engineering",
+                null,
+                null
+        ));
+        activityEntryRepository.save(activity(
+                "Shared department minutes with registrar",
+                "T. Mukamana",
+                ActivityCategory.SHARE,
+                16,
+                UserRole.HOD,
+                UserRole.REGISTRAR,
+                "Software Engineering",
+                null,
+                null
+        ));
     }
 
     private FolderEntity ensureFolder(String name, String code, Long parentId) {
@@ -209,12 +350,27 @@ public class ArchiveSeedData implements CommandLineRunner {
         return entity;
     }
 
-    private ActivityEntryEntity activity(String message, String actor, ActivityCategory category, int hoursAgo) {
+    private ActivityEntryEntity activity(
+            String message,
+            String actor,
+            ActivityCategory category,
+            int hoursAgo,
+            UserRole sourceRole,
+            UserRole targetRole,
+            String academicDepartment,
+            StudentDocumentCategory documentCategory,
+            String studentNumber
+    ) {
         ActivityEntryEntity entity = new ActivityEntryEntity();
         entity.setMessage(message);
         entity.setActor(actor);
         entity.setCategory(category);
         entity.setCreatedAt(LocalDateTime.now().minusHours(hoursAgo));
+        entity.setSourceRole(sourceRole);
+        entity.setTargetRole(targetRole);
+        entity.setAcademicDepartment(academicDepartment);
+        entity.setDocumentCategory(documentCategory);
+        entity.setStudentNumber(studentNumber);
         return entity;
     }
 }
