@@ -1,18 +1,28 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.SystemPrivilege;
 import com.auca.archive.domain.UserRole;
+import com.auca.archive.dto.AdminActivityPageResponse;
 import com.auca.archive.dto.AdminDashboardResponse;
+import com.auca.archive.dto.AdminOfficeMemberResponse;
+import com.auca.archive.dto.AdminOfficeResponse;
+import com.auca.archive.dto.ArchiveTemplateNodeResponse;
 import com.auca.archive.dto.CreateUserRequest;
+import com.auca.archive.dto.FolderNodeResponse;
+import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.UpdateUserRequest;
 import com.auca.archive.dto.UserAccountResponse;
+import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.model.AccountEntity;
 import com.auca.archive.repository.AccountRepository;
+import com.auca.archive.repository.ActivityEntryRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -24,18 +34,68 @@ import java.util.stream.Collectors;
 
 @Service
 public class AdminService {
+    private static final Map<UserRole, OfficeMeta> OFFICE_META = Map.of(
+            UserRole.REGISTRAR, new OfficeMeta(
+                    "Registrar",
+                    "Registrar Office",
+                    "Registration, reintegration, and application archive work.",
+                    List.of("REGISTRATION_FORM", "REINTEGRATION_FORM", "APPLICATION_DOCUMENTS")
+            ),
+            UserRole.EXAMINATION_OFFICER, new OfficeMeta(
+                    "Examination Office",
+                    "Examination Office",
+                    "Exam papers, marks, and course-level archive work.",
+                    List.of("EXAMINATION_DOCUMENTS")
+            ),
+            UserRole.HOD, new OfficeMeta(
+                    "Head of Department",
+                    "Department Office",
+                    "Department approvals and application submissions.",
+                    List.of("APPLICATION_DOCUMENTS")
+            ),
+            UserRole.LIBRARIAN, new OfficeMeta(
+                    "Librarian",
+                    "University Library",
+                    "Final year project review and archive approval.",
+                    List.of("FINAL_YEAR_PROJECT")
+            ),
+            UserRole.STUDENT, new OfficeMeta(
+                    "Student",
+                    "Student Workspace",
+                    "Student project uploads and personal archive files.",
+                    List.of("FINAL_YEAR_PROJECT")
+            )
+    );
+
+    private static final List<UserRole> OFFICE_ORDER = List.of(
+            UserRole.REGISTRAR,
+            UserRole.EXAMINATION_OFFICER,
+            UserRole.HOD,
+            UserRole.LIBRARIAN,
+            UserRole.STUDENT
+    );
+
     private final AccountRepository accountRepository;
     private final PasswordHasher passwordHasher;
     private final ArchiveAccessService accessService;
+    private final ActivityService activityService;
+    private final ActivityEntryRepository activityEntryRepository;
+    private final FolderService folderService;
 
     public AdminService(
             AccountRepository accountRepository,
             PasswordHasher passwordHasher,
-            ArchiveAccessService accessService
+            ArchiveAccessService accessService,
+            ActivityService activityService,
+            ActivityEntryRepository activityEntryRepository,
+            FolderService folderService
     ) {
         this.accountRepository = accountRepository;
         this.passwordHasher = passwordHasher;
         this.accessService = accessService;
+        this.activityService = activityService;
+        this.activityEntryRepository = activityEntryRepository;
+        this.folderService = folderService;
     }
 
     public AdminDashboardResponse getDashboard(String rawRole) {
@@ -62,7 +122,7 @@ public class AdminService {
                 .toList();
     }
 
-    public UserAccountResponse createUser(CreateUserRequest request, String rawRole) {
+    public UserAccountResponse createUser(CreateUserRequest request, String rawRole, RequestActor actor) {
         requireAdmin(rawRole);
         String username = normalizeUsername(request.username());
         if (accountRepository.findByUsername(username).isPresent()) {
@@ -79,10 +139,22 @@ public class AdminService {
         account.setCreatedAt(LocalDateTime.now());
         account.setPrivileges(serializePrivileges(resolveRequestedPrivileges(request.role(), request.privileges())));
 
-        return toUserResponse(accountRepository.save(account));
+        UserAccountResponse saved = toUserResponse(accountRepository.save(account));
+        activityService.recordAction(
+                "Created user account \"" + saved.fullName() + "\" (" + saved.username() + ")",
+                actor.resolvedActorLabel("Administrator"),
+                ActivityCategory.SYNC,
+                ActivityScope.builder()
+                        .sourceRole(UserRole.ADMIN)
+                        .targetRole(request.role())
+                        .academicDepartment(saved.department())
+                        .build(),
+                actor
+        );
+        return saved;
     }
 
-    public UserAccountResponse updateUser(Long id, UpdateUserRequest request, String rawRole) {
+    public UserAccountResponse updateUser(Long id, UpdateUserRequest request, String rawRole, RequestActor actor) {
         requireAdmin(rawRole);
         AccountEntity account = accountRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + id));
@@ -99,12 +171,63 @@ public class AdminService {
             account.setPasswordHash(passwordHasher.hash(request.password()));
         }
 
-        return toUserResponse(accountRepository.save(account));
+        UserAccountResponse saved = toUserResponse(accountRepository.save(account));
+        activityService.recordAction(
+                "Updated user account \"" + saved.fullName() + "\" (" + saved.username() + ")",
+                actor.resolvedActorLabel("Administrator"),
+                ActivityCategory.SYNC,
+                ActivityScope.builder()
+                        .sourceRole(UserRole.ADMIN)
+                        .targetRole(request.role())
+                        .academicDepartment(saved.department())
+                        .build(),
+                actor
+        );
+        return saved;
     }
 
     public List<Map<String, String>> listPrivileges(String rawRole) {
         requireAdmin(rawRole);
         return SystemPrivilege.catalog();
+    }
+
+    public AdminActivityPageResponse listActivity(
+            String rawRole,
+            String scopeRole,
+            Long userId,
+            String category,
+            int page,
+            int size
+    ) {
+        requireAdmin(rawRole);
+        return activityService.adminActivity(scopeRole, userId, category, page, size);
+    }
+
+    public List<AdminOfficeResponse> listOffices(String rawRole) {
+        requireAdmin(rawRole);
+        List<AccountEntity> accounts = accountRepository.findAll().stream()
+                .filter(account -> account.getRole() != UserRole.ADMIN)
+                .toList();
+
+        Map<UserRole, List<AccountEntity>> grouped = accounts.stream()
+                .collect(Collectors.groupingBy(AccountEntity::getRole, LinkedHashMap::new, Collectors.toList()));
+
+        List<AdminOfficeResponse> offices = new ArrayList<>();
+        for (UserRole role : OFFICE_ORDER) {
+            offices.add(toOfficeResponse(role, grouped.getOrDefault(role, List.of())));
+        }
+        grouped.keySet().stream()
+                .filter(role -> !OFFICE_ORDER.contains(role))
+                .sorted(Comparator.comparing(Enum::name))
+                .forEach(role -> offices.add(toOfficeResponse(role, grouped.get(role))));
+        return offices;
+    }
+
+    public List<ArchiveTemplateNodeResponse> archiveTemplate(String rawRole) {
+        requireAdmin(rawRole);
+        return folderService.getTree(UserRole.ADMIN.name()).stream()
+                .map(this::toTemplateNode)
+                .toList();
     }
 
     public void requireAdmin(String rawRole) {
@@ -133,6 +256,53 @@ public class AdminService {
                 .map(Enum::name)
                 .sorted()
                 .toList();
+    }
+
+    private AdminOfficeResponse toOfficeResponse(UserRole role, List<AccountEntity> members) {
+        OfficeMeta meta = OFFICE_META.getOrDefault(role, new OfficeMeta(
+                role.getDisplayName(),
+                role.getDepartment(),
+                "Live archive activity for " + role.getDisplayName() + ".",
+                List.of()
+        ));
+        List<AdminOfficeMemberResponse> memberResponses = members.stream()
+                .sorted(Comparator.comparing(AccountEntity::getFullName, String.CASE_INSENSITIVE_ORDER))
+                .map(member -> new AdminOfficeMemberResponse(
+                        member.getId(),
+                        member.getUsername(),
+                        member.getFullName(),
+                        Boolean.TRUE.equals(member.getActive()),
+                        activityEntryRepository.countByActorAccountId(member.getId())
+                ))
+                .toList();
+        long recentActivityCount = activityEntryRepository.countBySourceRole(role);
+        return new AdminOfficeResponse(
+                role.name(),
+                meta.label(),
+                meta.department(),
+                meta.summary(),
+                members.size(),
+                recentActivityCount,
+                meta.categories(),
+                memberResponses
+        );
+    }
+
+    private ArchiveTemplateNodeResponse toTemplateNode(FolderNodeResponse node) {
+        if (node == null) {
+            return new ArchiveTemplateNodeResponse(null, "", "", List.of());
+        }
+        String code = node.code() == null ? "" : node.code().toUpperCase(Locale.ROOT);
+        if (code.contains("-STU-") || code.contains("-SOFF") || code.contains("-SMY") || code.contains("-SARC")) {
+            return null;
+        }
+        List<ArchiveTemplateNodeResponse> children = node.children() == null
+                ? List.of()
+                : node.children().stream()
+                        .map(this::toTemplateNode)
+                        .filter(child -> child != null)
+                        .toList();
+        return new ArchiveTemplateNodeResponse(node.id(), node.name(), node.code(), children);
     }
 
     private Set<SystemPrivilege> resolveRequestedPrivileges(UserRole role, List<String> requested) {
@@ -173,5 +343,8 @@ public class AdminService {
             throw new IllegalArgumentException("Username is required");
         }
         return username.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private record OfficeMeta(String label, String department, String summary, List<String> categories) {
     }
 }

@@ -22,9 +22,11 @@ public class ActivityController {
     @GetMapping
     public List<ActivityResponse> recent(
             @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
             @RequestParam(required = false) String scope,
             @RequestParam(required = false) String topic
     ) {
-        return activityService.recent(role, scope, topic);
+        return activityService.recent(role, scope, topic, department, studentNumber);
     }
 }

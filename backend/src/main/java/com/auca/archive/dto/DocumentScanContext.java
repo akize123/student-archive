@@ -6,6 +6,7 @@ public record DocumentScanContext(
         String category,
         String course,
         String faculty,
-        String department
+        String department,
+        String fileName
 ) {
 }

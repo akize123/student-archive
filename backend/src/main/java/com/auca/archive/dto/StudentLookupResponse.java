@@ -8,6 +8,8 @@ public record StudentLookupResponse(
         String studentName,
         String faculty,
         String department,
+        String academicYear,
+        String semester,
         Long folderId,
         long documentCount,
         List<DocumentListItemResponse> documents
@@ -16,6 +18,8 @@ public record StudentLookupResponse(
         return new StudentLookupResponse(
                 false,
                 studentNumber,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -32,6 +36,8 @@ public record StudentLookupResponse(
                 archive.studentName(),
                 archive.faculty(),
                 archive.department(),
+                archive.academicYear(),
+                archive.semester(),
                 archive.folderId(),
                 archive.documentCount(),
                 archive.documents()

@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -28,8 +29,18 @@ public class ApprovalController {
     }
 
     @PostMapping("/{id}/decision")
-    public ApprovalTaskResponse decide(@PathVariable Long id, @Valid @RequestBody ApprovalDecisionRequest request) {
-        return approvalService.decide(id, request);
+    public ApprovalTaskResponse decide(
+            @PathVariable Long id,
+            @Valid @RequestBody ApprovalDecisionRequest request,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName
+    ) {
+        return approvalService.decide(
+                id,
+                request,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
     }
 }
 

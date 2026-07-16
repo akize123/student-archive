@@ -1,5 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { createAdminUser, getActivities, getAdminDashboard, getAdminPrivileges, updateAdminUser } from '../api'
+import {
+  createAdminUser,
+  getAdminActivity,
+  getAdminArchiveTemplate,
+  getAdminDashboard,
+  getAdminOffices,
+  getAdminPrivileges,
+  updateAdminUser
+} from '../api'
+import {
+  CATEGORY_LABELS,
+  OFFICE_META,
+  activityScopeTabs,
+  officeMembersForRole,
+  roleLabel
+} from '../adminOfficeUtils'
 import { CheckIcon, XIcon } from './Icons'
 
 const roleOptions = [
@@ -36,12 +51,6 @@ const defaultPrivilegesByRole = {
   LIBRARIAN: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL'],
   STUDENT: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD']
 }
-
-const activityScopeTabs = [
-  { value: 'REGISTRAR', label: 'Registration' },
-  { value: 'EXAMINATION_OFFICER', label: 'Examination' },
-  { value: 'HOD', label: 'HOD' }
-]
 
 function activityCategoryLabel(category) {
   const normalized = String(category || '').toUpperCase()
@@ -80,25 +89,64 @@ function formatDateTime(value) {
   }).format(new Date(value))
 }
 
+function TemplateTree({ nodes = [], depth = 0 }) {
+  if (!nodes.length) {
+    return <p className="admin-muted-cell">No archive structure available.</p>
+  }
+  return (
+    <ul className="admin-template-tree" style={{ paddingLeft: depth ? '1rem' : 0 }}>
+      {nodes.map((node) => (
+        <li key={`${node.code}-${node.id}`}>
+          <strong>{node.name}</strong>
+          {node.children?.length ? <TemplateTree nodes={node.children} depth={depth + 1} /> : null}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export default function AdminDashboard({ onNotify }) {
   const [data, setData] = useState(null)
+  const [offices, setOffices] = useState([])
   const [privilegeCatalog, setPrivilegeCatalog] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [modalMode, setModalMode] = useState(null)
+  const [wizardStep, setWizardStep] = useState(1)
+  const [archiveTemplate, setArchiveTemplate] = useState([])
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [enabledCategories, setEnabledCategories] = useState([])
   const [editingUser, setEditingUser] = useState(null)
   const [form, setForm] = useState(emptyUserForm)
   const [activityScope, setActivityScope] = useState('REGISTRAR')
+  const [activePanel, setActivePanel] = useState('activity')
   const [roleActivities, setRoleActivities] = useState([])
+  const [activityTotal, setActivityTotal] = useState(0)
   const [activitiesLoading, setActivitiesLoading] = useState(false)
+
+  const officeMembers = useMemo(
+    () => officeMembersForRole(offices, form.role),
+    [offices, form.role]
+  )
+
+  const roleCategories = useMemo(
+    () => OFFICE_META[form.role]?.categories || [],
+    [form.role]
+  )
 
   async function loadRoleActivities(scope = activityScope) {
     setActivitiesLoading(true)
     try {
-      const entries = await getActivities(scope)
-      setRoleActivities(entries)
+      const response = await getAdminActivity({
+        scope,
+        page: 0,
+        size: 100
+      })
+      setRoleActivities(response?.items || [])
+      setActivityTotal(response?.total || 0)
     } catch (err) {
       setRoleActivities([])
+      setActivityTotal(0)
       onNotify?.(err.message || 'Unable to load role activity.')
     } finally {
       setActivitiesLoading(false)
@@ -108,16 +156,31 @@ export default function AdminDashboard({ onNotify }) {
   async function loadDashboard() {
     setLoading(true)
     try {
-      const [dashboard, privileges] = await Promise.all([
+      const [dashboard, privileges, officeData] = await Promise.all([
         getAdminDashboard(),
-        getAdminPrivileges()
+        getAdminPrivileges(),
+        getAdminOffices()
       ])
       setData(dashboard)
       setPrivilegeCatalog(privileges)
+      setOffices(officeData || [])
     } catch (err) {
       onNotify?.(err.message || 'Unable to load admin dashboard.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadArchiveTemplate() {
+    setTemplateLoading(true)
+    try {
+      const template = await getAdminArchiveTemplate()
+      setArchiveTemplate(template || [])
+    } catch (err) {
+      setArchiveTemplate([])
+      onNotify?.(err.message || 'Unable to load archive template.')
+    } finally {
+      setTemplateLoading(false)
     }
   }
 
@@ -136,9 +199,19 @@ export default function AdminDashboard({ onNotify }) {
     return entries.length ? entries : []
   }, [data])
 
+  const usersByRole = useMemo(() => {
+    const grouped = {}
+    ;(data?.users || []).forEach((user) => {
+      grouped[user.role] = (grouped[user.role] || 0) + 1
+    })
+    return grouped
+  }, [data])
+
   function openCreateModal() {
     setEditingUser(null)
     setForm(buildUserForm())
+    setWizardStep(1)
+    setEnabledCategories(OFFICE_META.REGISTRAR?.categories || [])
     setModalMode('create')
   }
 
@@ -149,19 +222,20 @@ export default function AdminDashboard({ onNotify }) {
       department: roleDepartments[role] || current.department,
       privileges: defaultPrivilegesByRole[role] || []
     }))
+    setEnabledCategories(OFFICE_META[role]?.categories || [])
   }
 
-  function validateForm() {
-    if (modalMode === 'create' && !form.username.trim()) {
+  function validateForm(step = null) {
+    if (modalMode === 'create' && step === 4 && !form.username.trim()) {
       return 'Please enter a username.'
     }
-    if (!form.fullName.trim()) {
+    if ((step === null || step >= 4) && !form.fullName.trim()) {
       return 'Please enter the user full name.'
     }
-    if (!form.department.trim()) {
+    if ((step === null || step >= 4) && !form.department.trim()) {
       return 'Please enter a department.'
     }
-    if (modalMode === 'create' && form.password.length < 6) {
+    if (modalMode === 'create' && (step === null || step >= 4) && form.password.length < 6) {
       return 'Password must be at least 6 characters.'
     }
     if (modalMode === 'edit' && form.password.trim() && form.password.trim().length < 6) {
@@ -188,6 +262,7 @@ export default function AdminDashboard({ onNotify }) {
     if (busy) return
     setModalMode(null)
     setEditingUser(null)
+    setWizardStep(1)
     setForm(emptyUserForm)
   }
 
@@ -201,6 +276,26 @@ export default function AdminDashboard({ onNotify }) {
       }
       return { ...current, privileges: [...privileges] }
     })
+  }
+
+  function toggleCategory(category) {
+    setEnabledCategories((current) => (
+      current.includes(category)
+        ? current.filter((value) => value !== category)
+        : [...current, category]
+    ))
+  }
+
+  async function handleWizardNext() {
+    const validationError = validateForm(wizardStep)
+    if (validationError) {
+      onNotify?.(validationError)
+      return
+    }
+    if (wizardStep === 2) {
+      await loadArchiveTemplate()
+    }
+    setWizardStep((current) => Math.min(current + 1, 4))
   }
 
   async function handleSubmit(event) {
@@ -253,14 +348,32 @@ export default function AdminDashboard({ onNotify }) {
   }
 
   return (
-    <section className="admin-page">
+    <section className="admin-page admin-dashboard-page" id="admin-activity-panel">
       <header className="admin-top">
         <div className="admin-top-copy">
           <h1>Users</h1>
         </div>
-        <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
-          New user
-        </button>
+        <div className="admin-top-actions">
+          <div className="admin-dashboard-tabs">
+            <button
+              type="button"
+              className={`admin-dashboard-tab ${activePanel === 'activity' ? 'active' : ''}`}
+              onClick={() => setActivePanel('activity')}
+            >
+              System activity
+            </button>
+            <button
+              type="button"
+              className={`admin-dashboard-tab ${activePanel === 'users' ? 'active' : ''}`}
+              onClick={() => setActivePanel('users')}
+            >
+              All users
+            </button>
+          </div>
+          <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
+            New user
+          </button>
+        </div>
       </header>
 
       <div className="admin-overview">
@@ -295,31 +408,36 @@ export default function AdminDashboard({ onNotify }) {
         ) : null}
       </div>
 
-      <div className="admin-card admin-activity-card">
+      <div className="admin-dashboard-panel">
+      {activePanel === 'activity' ? (
+      <div className="admin-card admin-activity-card admin-dashboard-activity-card">
         <div className="admin-activity-head">
           <div>
-            <h2>Role activity monitor</h2>
-            <p>Review recent actions by department role — not file listings.</p>
+            <h2>System activity</h2>
+            <p>All changes across offices and users ({activityTotal} total).</p>
           </div>
-          <div className="admin-activity-tabs">
-            {activityScopeTabs.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                className={`admin-activity-tab ${activityScope === tab.value ? 'active' : ''}`}
-                onClick={() => setActivityScope(tab.value)}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="admin-activity-filters">
+            <div className="admin-activity-tabs">
+              {activityScopeTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  className={`admin-activity-tab ${activityScope === tab.value ? 'active' : ''}`}
+                  onClick={() => setActivityScope(tab.value)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="table-shell admin-table-shell">
+        <div className="table-shell admin-table-shell admin-dashboard-panel-scroll">
           <table className="admin-table admin-activity-table">
             <thead>
               <tr>
                 <th>Action</th>
-                <th>Performed by</th>
+                <th>User</th>
+                <th>Role</th>
                 <th>Type</th>
                 <th>Date</th>
               </tr>
@@ -327,34 +445,41 @@ export default function AdminDashboard({ onNotify }) {
             <tbody>
               {activitiesLoading ? (
                 <tr>
-                  <td colSpan="4" className="admin-muted-cell">Loading activity...</td>
+                  <td colSpan="5" className="admin-muted-cell">Loading activity...</td>
                 </tr>
               ) : roleActivities.length ? (
                 roleActivities.map((entry) => (
                   <tr key={entry.id}>
                     <td><strong>{entry.message}</strong></td>
-                    <td>{entry.actor}</td>
+                    <td>{entry.actorUsername || entry.actor}</td>
+                    <td>{entry.sourceRole ? roleLabel(entry.sourceRole) : '—'}</td>
                     <td><span className="admin-tag">{activityCategoryLabel(entry.category)}</span></td>
                     <td className="admin-muted-cell">{formatDateTime(entry.createdAt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="4" className="admin-muted-cell">No recent activity for this role.</td>
+                  <td colSpan="5" className="admin-muted-cell">No recent activity for this filter.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
-
-      <div className="admin-card">
-        <div className="table-shell admin-table-shell">
+      ) : (
+      <div className="admin-card admin-dashboard-users-card">
+        <div className="admin-activity-head">
+          <div>
+            <h2>All users</h2>
+            <p>{data?.totalUsers ?? 0} accounts across all offices.</p>
+          </div>
+        </div>
+        <div className="table-shell admin-table-shell admin-dashboard-panel-scroll">
           <table className="admin-table">
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Role</th>
+                <th>Role / Office</th>
                 <th>Department</th>
                 <th>Privileges</th>
                 <th>Status</th>
@@ -371,7 +496,15 @@ export default function AdminDashboard({ onNotify }) {
                       <span>{user.username}</span>
                     </div>
                   </td>
-                  <td>{user.roleLabel}</td>
+                  <td>
+                    <div className="admin-user-cell">
+                      <strong>{user.roleLabel}</strong>
+                      <span>
+                        {roleLabel(user.role)} office
+                        {usersByRole[user.role] > 1 ? ` · shared with ${usersByRole[user.role] - 1} other(s)` : ''}
+                      </span>
+                    </div>
+                  </td>
                   <td>{user.department}</td>
                   <td>
                     <div className="admin-privilege-tags">
@@ -400,6 +533,8 @@ export default function AdminDashboard({ onNotify }) {
           </table>
         </div>
       </div>
+      )}
+      </div>
 
       {modalMode ? (
         <div className="modal-backdrop" onClick={closeModal} role="presentation">
@@ -407,111 +542,242 @@ export default function AdminDashboard({ onNotify }) {
             <div className="modal-head admin-modal-head">
               <div>
                 <h2>{modalMode === 'create' ? 'New user' : form.fullName}</h2>
-                <p>{modalMode === 'create' ? 'Add a system account' : 'Update account details'}</p>
+                <p>
+                  {modalMode === 'create'
+                    ? `Step ${wizardStep} of 4 · Shared office setup`
+                    : 'Update account details'}
+                </p>
               </div>
               <button type="button" className="ghost-icon" onClick={closeModal}>
                 <XIcon className="icon" />
               </button>
             </div>
 
-            <form className="admin-user-form" onSubmit={handleSubmit}>
-              {modalMode === 'create' ? (
+            {modalMode === 'create' ? (
+              <div className="admin-wizard">
+                <div className="admin-wizard-steps">
+                  {['Role', 'Office', 'Archive tree', 'Account'].map((label, index) => (
+                    <span
+                      key={label}
+                      className={`admin-wizard-step ${wizardStep === index + 1 ? 'active' : wizardStep > index + 1 ? 'done' : ''}`}
+                    >
+                      {index + 1}. {label}
+                    </span>
+                  ))}
+                </div>
+
+                {wizardStep === 1 ? (
+                  <div className="admin-wizard-panel">
+                    <label>
+                      <span>Role</span>
+                      <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
+                        {roleOptions.filter((option) => option.value !== 'ADMIN').map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
+
+                {wizardStep === 2 ? (
+                  <div className="admin-wizard-panel">
+                    <div className="admin-office-assignment">
+                      {officeMembers.length ? (
+                        <>
+                          <strong>Join existing {roleLabel(form.role)} office</strong>
+                          <p>This user will share the same dashboard and archive tree with {officeMembers.length} existing member(s).</p>
+                          <ul className="admin-office-member-list">
+                            {officeMembers.map((member) => (
+                              <li key={member.id}>{member.fullName} · {member.username}</li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : (
+                        <>
+                          <strong>Creates new {roleLabel(form.role)} office</strong>
+                          <p>This is the first account for this role. They will use the shared global archive tree.</p>
+                        </>
+                      )}
+                    </div>
+                    <label>
+                      <span>Department</span>
+                      <input
+                        value={form.department}
+                        onChange={(event) => setForm({ ...form, department: event.target.value })}
+                        required
+                      />
+                    </label>
+                  </div>
+                ) : null}
+
+                {wizardStep === 3 ? (
+                  <div className="admin-wizard-panel">
+                    <p className="admin-template-lead">Default archive structure (Faculty → Department → Year → Semester):</p>
+                    {templateLoading ? (
+                      <p className="admin-muted-cell">Loading archive template…</p>
+                    ) : (
+                      <TemplateTree nodes={archiveTemplate} />
+                    )}
+                    {roleCategories.length ? (
+                      <div className="admin-category-picker">
+                        <span className="admin-field-label">Document categories for this office</span>
+                        <div className="admin-privilege-grid">
+                          {roleCategories.map((category) => (
+                            <label key={category} className={`admin-privilege-option ${enabledCategories.includes(category) ? 'checked' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={enabledCategories.includes(category)}
+                                onChange={() => toggleCategory(category)}
+                              />
+                              <div>
+                                <strong>{CATEGORY_LABELS[category] || category}</strong>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {wizardStep === 4 ? (
+                  <form className="admin-user-form" onSubmit={handleSubmit}>
+                    <label>
+                      <span>Username</span>
+                      <input
+                        value={form.username}
+                        onChange={(event) => setForm({ ...form, username: event.target.value })}
+                        placeholder="e.g. jane.doe"
+                        required
+                      />
+                    </label>
+                    <label>
+                      <span>Full name</span>
+                      <input
+                        value={form.fullName}
+                        onChange={(event) => setForm({ ...form, fullName: event.target.value })}
+                        required
+                      />
+                    </label>
+                    <label>
+                      <span>Password</span>
+                      <input
+                        type="password"
+                        value={form.password}
+                        onChange={(event) => setForm({ ...form, password: event.target.value })}
+                        required
+                        minLength={6}
+                      />
+                    </label>
+                    <label className="admin-active-toggle">
+                      <input
+                        type="checkbox"
+                        checked={form.active}
+                        onChange={(event) => setForm({ ...form, active: event.target.checked })}
+                      />
+                      <span>Account is active</span>
+                    </label>
+                    <div className="modal-actions">
+                      <button type="button" className="ghost-btn" onClick={() => setWizardStep(3)} disabled={busy}>Back</button>
+                      <button type="submit" className="primary-btn" disabled={busy}>
+                        {busy ? 'Creating...' : 'Create user'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="modal-actions">
+                    <button type="button" className="ghost-btn" onClick={closeModal} disabled={busy}>Cancel</button>
+                    {wizardStep > 1 ? (
+                      <button type="button" className="ghost-btn" onClick={() => setWizardStep((current) => current - 1)} disabled={busy}>
+                        Back
+                      </button>
+                    ) : null}
+                    <button type="button" className="primary-btn" onClick={handleWizardNext} disabled={busy}>
+                      Next
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <form className="admin-user-form" onSubmit={handleSubmit}>
+                <p className="admin-office-assignment-note">
+                  Office: {roleLabel(form.role)}
+                  {usersByRole[form.role] > 1 ? ` (shared with ${usersByRole[form.role] - 1} other user(s))` : ''}
+                </p>
                 <label>
-                  <span>Username</span>
+                  <span>Full name</span>
                   <input
-                    value={form.username}
-                    onChange={(event) => setForm({ ...form, username: event.target.value })}
-                    placeholder="e.g. jane.doe"
+                    value={form.fullName}
+                    onChange={(event) => setForm({ ...form, fullName: event.target.value })}
                     required
                   />
                 </label>
-              ) : null}
-
-              <label>
-                <span>Full name</span>
-                <input
-                  value={form.fullName}
-                  onChange={(event) => setForm({ ...form, fullName: event.target.value })}
-                  required
-                />
-              </label>
-
-              <label>
-                <span>Role</span>
-                <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
-                  {roleOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                <span>Department</span>
-                <input
-                  value={form.department}
-                  onChange={(event) => setForm({ ...form, department: event.target.value })}
-                  required
-                />
-              </label>
-
-              <label>
-                <span>{modalMode === 'create' ? 'Password' : 'New password (optional)'}</span>
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={(event) => setForm({ ...form, password: event.target.value })}
-                  required={modalMode === 'create'}
-                  minLength={6}
-                  placeholder={modalMode === 'edit' ? 'Leave blank to keep current password' : ''}
-                />
-              </label>
-
-              <label className="admin-active-toggle">
-                <input
-                  type="checkbox"
-                  checked={form.active}
-                  onChange={(event) => setForm({ ...form, active: event.target.checked })}
-                />
-                <span>Account is active</span>
-              </label>
-
-              <div className="admin-privilege-picker">
-                <span className="admin-field-label">Privileges</span>
-                <p className="admin-privilege-note">
-                  {form.role === 'ADMIN'
-                    ? 'Administrators receive full system privileges automatically.'
-                    : 'Select the actions this user is allowed to perform.'}
-                </p>
-                <div className="admin-privilege-grid">
-                  {privilegeCatalog.map((privilege) => {
-                    const checked = form.privileges.includes(privilege.code)
-                    const disabled = form.role === 'ADMIN'
-                    return (
-                      <label key={privilege.code} className={`admin-privilege-option ${checked ? 'checked' : ''}`}>
-                        <input
-                          type="checkbox"
-                          checked={checked || form.role === 'ADMIN'}
-                          disabled={disabled}
-                          onChange={() => togglePrivilege(privilege.code)}
-                        />
-                        <div>
-                          <strong>{privilege.label}</strong>
-                          <span>{privilege.description}</span>
-                        </div>
-                        {checked || form.role === 'ADMIN' ? <CheckIcon className="icon tiny" /> : null}
-                      </label>
-                    )
-                  })}
+                <label>
+                  <span>Role</span>
+                  <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
+                    {roleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Department</span>
+                  <input
+                    value={form.department}
+                    onChange={(event) => setForm({ ...form, department: event.target.value })}
+                    required
+                  />
+                </label>
+                <label>
+                  <span>New password (optional)</span>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => setForm({ ...form, password: event.target.value })}
+                    minLength={6}
+                    placeholder="Leave blank to keep current password"
+                  />
+                </label>
+                <label className="admin-active-toggle">
+                  <input
+                    type="checkbox"
+                    checked={form.active}
+                    onChange={(event) => setForm({ ...form, active: event.target.checked })}
+                  />
+                  <span>Account is active</span>
+                </label>
+                <div className="admin-privilege-picker">
+                  <span className="admin-field-label">Privileges</span>
+                  <div className="admin-privilege-grid">
+                    {privilegeCatalog.map((privilege) => {
+                      const checked = form.privileges.includes(privilege.code)
+                      const disabled = form.role === 'ADMIN'
+                      return (
+                        <label key={privilege.code} className={`admin-privilege-option ${checked ? 'checked' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked || form.role === 'ADMIN'}
+                            disabled={disabled}
+                            onChange={() => togglePrivilege(privilege.code)}
+                          />
+                          <div>
+                            <strong>{privilege.label}</strong>
+                            <span>{privilege.description}</span>
+                          </div>
+                          {checked || form.role === 'ADMIN' ? <CheckIcon className="icon tiny" /> : null}
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
-
-              <div className="modal-actions">
-                <button type="button" className="ghost-btn" onClick={closeModal} disabled={busy}>Cancel</button>
-                <button type="submit" className="primary-btn" disabled={busy}>
-                  {busy ? 'Saving...' : modalMode === 'create' ? 'Create user' : 'Save changes'}
-                </button>
-              </div>
-            </form>
+                <div className="modal-actions">
+                  <button type="button" className="ghost-btn" onClick={closeModal} disabled={busy}>Cancel</button>
+                  <button type="submit" className="primary-btn" disabled={busy}>
+                    {busy ? 'Saving...' : 'Save changes'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       ) : null}

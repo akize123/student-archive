@@ -28,7 +28,9 @@ public class ShareController {
     public ShareFolderResponse shareItems(
             @Valid @RequestBody ShareItemsRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username
     ) {
         return folderService.shareItems(
                 request.folderIds(),
@@ -36,7 +38,8 @@ public class ShareController {
                 request.targetRole(),
                 request.permission(),
                 role,
-                actorName
+                actorName,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
         );
     }
 

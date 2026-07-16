@@ -1,13 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
 import AdminDashboard from './components/AdminDashboard'
-import AdminOfficeView, { buildAdminOffices } from './components/AdminOfficeView'
+import AdminOfficeView from './components/AdminOfficeView'
+import { buildAdminOffices, filterArchiveTreeForOffice } from './adminOfficeUtils'
+import AcademicYearField from './components/AcademicYearField'
+import MobileScanPage from './components/MobileScanPage'
+import UploadPhoneScanPanel from './components/UploadPhoneScanPanel'
+import LibrarianDashboard from './components/LibrarianDashboard'
 import StudentDashboard from './components/StudentDashboard'
 import StudentFypWizard from './components/StudentFypWizard'
 import ProjectCoverPhoto from './components/ProjectCoverPhoto'
 import BrandLogo from './components/BrandLogo'
 import {
-  ACADEMIC_YEARS,
   applyStudentIdDefaults,
   normalizeStudentId,
   semesterOptionsForAcademicYear,
@@ -17,6 +21,9 @@ import {
   validateStudentIdDepartmentMatch,
   validateStudentIdForNewEntry
 } from './studentId'
+import { countPdfPages } from './documentScan'
+import { validateAcademicYearFormat } from './academicYears'
+import { validatePdfFile, validateReplacementFile } from './fileSignatures'
 import {
   ArrowRightIcon,
   ArrowUpIcon,
@@ -168,24 +175,30 @@ const demoDashboard = {
 }
 
 const quickAccess = [
-  { label: 'Recent', icon: ClockIcon, count: null, action: 'recent' },
+  { label: 'Recent activity', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
   { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
-  { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' }
+  { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' }
 ]
 
 const staffQuickAccess = [
-  { label: 'Recent', icon: ClockIcon, count: null, action: 'recent' },
+  { label: 'Recent activity', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
   { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
-  { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' },
+  { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' },
   { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
 ]
 
 const adminQuickAccess = [
   { label: 'System Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
   { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
-  { label: 'Archive', icon: TrashIcon, count: null, action: 'archive' },
+  { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' },
+  { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
+]
+
+const librarianQuickAccess = [
+  { label: 'Library Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Browse Archive', icon: FolderIcon, count: null, action: 'browse' }
 ]
 
@@ -331,24 +344,31 @@ function isWithinDays(value, days) {
   return Date.now() - timestamp <= days * 24 * 60 * 60 * 1000
 }
 
-function filterTreeNodes(nodes, query) {
-  const trimmed = String(query || '').trim().toLowerCase()
-  if (!trimmed) {
-    return nodes
+function isToday(value) {
+  if (!value) {
+    return false
   }
-
-  function walk(list) {
-    return list.reduce((acc, node) => {
-      const children = node.children?.length ? walk(node.children) : []
-      const matches = String(node.name || '').toLowerCase().includes(trimmed)
-      if (matches || children.length) {
-        acc.push({ ...node, children })
-      }
-      return acc
-    }, [])
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return false
   }
+  const now = new Date()
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+}
 
-  return walk(nodes)
+function groupActivitiesByRecency(entries) {
+  const today = []
+  const earlier = []
+  for (const entry of entries || []) {
+    if (isToday(entry.createdAt)) {
+      today.push(entry)
+    } else {
+      earlier.push(entry)
+    }
+  }
+  return { today, earlier }
 }
 
 function stripLibrarianReviewFolders(nodes) {
@@ -366,6 +386,48 @@ function stripLibrarianReviewFolders(nodes) {
       children: stripLibrarianReviewFolders(node.children || [])
     }]
   })
+}
+
+function isSemesterFolder(folder) {
+  const code = String(folder?.code || '').toUpperCase()
+  return code.includes('-SEM-') && !code.includes('-STU-')
+}
+
+function trimArchiveTreeToSemesters(nodes) {
+  return (nodes || []).map((node) => {
+    if (isSemesterFolder(node)) {
+      return { ...node, children: [] }
+    }
+    return {
+      ...node,
+      children: trimArchiveTreeToSemesters(node.children || [])
+    }
+  })
+}
+
+function prepareStaffArchiveTree(nodes, userRole) {
+  let tree = stripLibrarianReviewFolders(nodes || [])
+  if (userRole === 'REGISTRAR' || userRole === 'LIBRARIAN') {
+    tree = trimArchiveTreeToSemesters(tree)
+  }
+  return tree
+}
+
+function canAddAcademicYearRole(userRole) {
+  return userRole === 'REGISTRAR'
+    || userRole === 'LIBRARIAN'
+    || userRole === 'EXAMINATION_OFFICER'
+}
+
+function usesStructureArchiveBrowse(userRole) {
+  return isOfficeArchiveRole(userRole) || userRole === 'LIBRARIAN'
+}
+
+function usesSemesterFolderUpload(userRole) {
+  return userRole === 'REGISTRAR'
+    || userRole === 'EXAMINATION_OFFICER'
+    || userRole === 'HOD'
+    || userRole === 'LIBRARIAN'
 }
 
 const roleDashboardConfig = {
@@ -419,16 +481,67 @@ const roleDashboardConfig = {
   }
 }
 
-function loadStoredSession() {
+function readAuthStorage() {
   if (typeof window === 'undefined') {
+    return null
+  }
+  try {
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+function loadStoredSession() {
+  const storage = readAuthStorage()
+  if (!storage) {
     return null
   }
 
   try {
-    const raw = window.localStorage.getItem(AUTH_SESSION_KEY)
+    const raw = storage.getItem(AUTH_SESSION_KEY)
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
+  }
+}
+
+function saveStoredSession(account) {
+  const storage = readAuthStorage()
+  if (!storage || !account) {
+    return
+  }
+  storage.setItem(AUTH_SESSION_KEY, JSON.stringify(account))
+  try {
+    window.localStorage.removeItem(AUTH_SESSION_KEY)
+  } catch {
+    // ignore legacy storage cleanup failures
+  }
+}
+
+function clearStoredSession() {
+  const storage = readAuthStorage()
+  if (storage) {
+    storage.removeItem(AUTH_SESSION_KEY)
+  }
+  try {
+    window.localStorage.removeItem(AUTH_SESSION_KEY)
+  } catch {
+    // ignore legacy storage cleanup failures
+  }
+}
+
+function isMobileScanHash(hash = '') {
+  return /^#\/mobile-scan\/[a-f0-9]+$/i.test(String(hash || ''))
+}
+
+function clearProtectedHash() {
+  if (typeof window === 'undefined') {
+    return
+  }
+  const hash = window.location.hash || ''
+  if (!isMobileScanHash(hash) && hash) {
+    window.location.hash = ''
   }
 }
 
@@ -563,6 +676,13 @@ function isOfficeArchiveRole(userRole) {
   return OFFICE_ARCHIVE_ROLES.includes(userRole)
 }
 
+function usesOfficeDashboardFormat(userRole) {
+  return userRole === 'REGISTRAR'
+    || userRole === 'HOD'
+    || userRole === 'EXAMINATION_OFFICER'
+    || userRole === 'LIBRARIAN'
+}
+
 function isFacultyFolder(folder) {
   const code = String(folder?.code || '').toUpperCase()
   return /^FAC-[A-Z0-9]+$/.test(code)
@@ -603,8 +723,8 @@ function canStaffCreateArchiveSubfolder(parentFolder, userRole) {
   if (userRole === 'ADMIN') {
     return true
   }
-  // Registrar, Examination Office, and HOD manage documents from semester level downward.
-  if (isOfficeArchiveRole(userRole)) {
+  // Registrar, Examination Office, HOD, and Librarian manage documents from semester level downward.
+  if (usesStructureArchiveBrowse(userRole)) {
     return isSemesterOrDeeperFolder(parentFolder)
   }
   if (isNonAdminStaffRole(userRole)) {
@@ -614,7 +734,7 @@ function canStaffCreateArchiveSubfolder(parentFolder, userRole) {
 }
 
 function isOfficeStructureBrowseOnly(folder, userRole) {
-  return isOfficeArchiveRole(userRole) && !isSemesterOrDeeperFolder(folder)
+  return usesStructureArchiveBrowse(userRole) && !isSemesterOrDeeperFolder(folder)
 }
 
 function findFolderNode(nodes, folderId) {
@@ -1006,6 +1126,21 @@ function loadQuickAccessOpen() {
   }
 }
 
+function loadSidebarPanelOpen(storageKey, defaultOpen = true) {
+  if (typeof window === 'undefined') {
+    return defaultOpen
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (raw == null) {
+      return defaultOpen
+    }
+    return raw !== 'false'
+  } catch {
+    return defaultOpen
+  }
+}
+
 function activitySeenStorageKey(username) {
   return `${ACTIVITY_SEEN_KEY_PREFIX}${String(username || 'anon').trim().toLowerCase()}`
 }
@@ -1098,10 +1233,120 @@ function formatLongDate(value) {
   }).format(new Date(value))
 }
 
+function DashboardSessionMeta({ lastSignIn }) {
+  return (
+    <span className="dash-meta">
+      <span className="dash-meta-date">{formatLongDate(new Date())}</span>
+      {lastSignIn ? (
+        <>
+          <span className="dash-meta-sep" aria-hidden="true" />
+          <span className="dash-meta-signin">Signed in {lastSignIn}</span>
+        </>
+      ) : null}
+    </span>
+  )
+}
+
 function todayInputValue() {
   const date = new Date()
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
   return localDate.toISOString().slice(0, 10)
+}
+
+function formatDisplayDate(isoDate) {
+  const value = String(isoDate || todayInputValue()).trim()
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) {
+    return value
+  }
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+function resolveFolderUploadPlacement(folder) {
+  if (!folder) {
+    return {
+      faculty: '',
+      department: '',
+      academicYear: '',
+      semester: '',
+      semesterFolderId: null
+    }
+  }
+  const chain = [
+    ...(folder.breadcrumbs || []),
+    { id: folder.id, name: folder.name, code: folder.code }
+  ]
+  let faculty = ''
+  let department = ''
+  let academicYear = ''
+  let semester = ''
+  let semesterFolderId = null
+  for (const crumb of chain) {
+    const code = String(crumb.code || '').toUpperCase()
+    const name = String(crumb.name || '').trim()
+    if (/^FAC-[A-Z0-9]+$/.test(code)) {
+      faculty = name
+    }
+    if (/^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$/.test(code)) {
+      department = name
+    }
+    if (/-AY-\d{8}$/.test(code) || /^\d{4}-\d{4}$/.test(name)) {
+      academicYear = name
+    }
+    if ((code.includes('-SEM-') && !code.includes('-STU-')) || /^\d{4}\/\d$/.test(name)) {
+      semester = name
+      semesterFolderId = crumb.id ?? null
+    }
+  }
+  return { faculty, department, academicYear, semester, semesterFolderId }
+}
+
+function formatUploadPlacementSummary(placement) {
+  return [
+    placement?.faculty,
+    placement?.department,
+    placement?.academicYear,
+    placement?.semester
+  ].filter(Boolean).join(' / ')
+}
+
+function applyUploadPlacementContext(form, placement) {
+  return {
+    ...form,
+    faculty: placement?.faculty || form.faculty,
+    department: placement?.department || form.department,
+    academicYear: placement?.academicYear || form.academicYear,
+    semester: placement?.semester || form.semester
+  }
+}
+
+function applyExistingStudentPlacement(form, profile) {
+  if (!profile?.studentNumber) {
+    return form
+  }
+  return {
+    ...form,
+    studentNumber: profile.studentNumber,
+    studentName: profile.studentName || form.studentName,
+    faculty: profile.faculty || form.faculty,
+    department: profile.department || form.department,
+    academicYear: profile.academicYear || form.academicYear,
+    semester: profile.semester || form.semester
+  }
+}
+
+function formatExistingStudentPlacement(profile) {
+  return [
+    profile?.faculty,
+    profile?.department,
+    profile?.academicYear,
+    profile?.semester
+  ].filter(Boolean).join(' / ')
 }
 
 function buildDefaultUploadForm() {
@@ -1143,14 +1388,12 @@ function getExamPaperTypeMeta(value) {
   }
 }
 
-function buildExamTitle(form, studentNumber) {
-  const examType = getExamPaperTypeMeta(form.examType)
+function buildPlacementUploadTitle(form, studentNumber) {
   return [
-    examType.label,
-    String(form.course || '').trim(),
+    getCategoryMeta(form.category).label,
+    String(studentNumber || '').trim(),
     String(form.academicYear || '').trim(),
-    String(form.semester || '').trim(),
-    String(studentNumber || '').trim()
+    String(form.semester || '').trim()
   ].filter(Boolean).join(' - ')
 }
 
@@ -1412,23 +1655,14 @@ function ArchiveTreePanel({
   onOpenFolder,
   onDeleteFolder,
   onFolderContextMenu,
-  onAddFolder,
-  allowAddFolder = true,
   allowDeleteFolder = true,
-  treeFilter,
-  onTreeFilterChange,
-  treeFilterOpen,
-  onToggleTreeFilter,
-  title = 'Archive Tree'
+  title = 'Archive Tree',
+  collapsible = false,
+  collapseStorageKey = 'auca-archive-tree-open',
+  embedded = false
 }) {
   const [expandedIds, setExpandedIds] = useState(() => collectDefaultExpandedIds(nodes))
-  const visibleNodes = filterTreeNodes(nodes, treeFilter)
-
-  useEffect(() => {
-    if (treeFilter.trim()) {
-      setExpandedIds(collectDefaultExpandedIds(filterTreeNodes(nodes, treeFilter), 0, new Set()))
-    }
-  }, [treeFilter, nodes])
+  const [sectionOpen, setSectionOpen] = useState(() => loadSidebarPanelOpen(collapseStorageKey, true))
 
   useEffect(() => {
     setExpandedIds((current) => {
@@ -1454,48 +1688,80 @@ function ArchiveTreePanel({
     })
   }, [])
 
-  return (
-    <div className="sidebar-section archive-tree">
-      <div className="section-head archive-tree-head">
-        <p className="eyebrow">{title}</p>
-        <div className="section-actions">
-          {allowAddFolder ? (
-            <button type="button" className="ghost-icon" aria-label="Add folder" onClick={onAddFolder}>
-              <FolderPlusIcon className="icon" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={`ghost-icon ${treeFilterOpen ? 'active' : ''}`}
-            aria-label="Filter folders"
-            aria-pressed={treeFilterOpen}
-            onClick={onToggleTreeFilter}
-          >
-            <FilterIcon className="icon" />
-          </button>
-        </div>
-      </div>
-      {treeFilterOpen ? (
-        <div className="archive-tree-filter">
-          <input
-            value={treeFilter}
-            onChange={(event) => onTreeFilterChange?.(event.target.value)}
-            placeholder="Filter folders..."
-            aria-label="Filter folders"
+  function toggleSectionOpen() {
+    setSectionOpen((current) => {
+      const next = !current
+      try {
+        window.localStorage.setItem(collapseStorageKey, String(next))
+      } catch {
+        // ignore storage failures
+      }
+      return next
+    })
+  }
+
+  if (embedded) {
+    return (
+      <div className="admin-office-tree-embedded">
+        <div className="archive-tree-scroll archive-tree-scroll-embedded">
+          <SidebarTree
+            nodes={nodes}
+            activeFolderId={activeFolderId}
+            onOpenFolder={onOpenFolder}
+            onDeleteFolder={onDeleteFolder}
+            onFolderContextMenu={onFolderContextMenu}
+            expandedIds={expandedIds}
+            onToggleExpand={onToggleExpand}
+            allowDeleteFolder={allowDeleteFolder}
           />
         </div>
-      ) : null}
-      <div className="archive-tree-scroll">
-        <SidebarTree
-          nodes={visibleNodes}
-          activeFolderId={activeFolderId}
-          onOpenFolder={onOpenFolder}
-          onDeleteFolder={onDeleteFolder}
-          onFolderContextMenu={onFolderContextMenu}
-          expandedIds={expandedIds}
-          onToggleExpand={onToggleExpand}
-          allowDeleteFolder={allowDeleteFolder}
-        />
+      </div>
+    )
+  }
+
+  const treeContent = (
+    <div className="archive-tree-scroll">
+      <SidebarTree
+        nodes={nodes}
+        activeFolderId={activeFolderId}
+        onOpenFolder={onOpenFolder}
+        onDeleteFolder={onDeleteFolder}
+        onFolderContextMenu={onFolderContextMenu}
+        expandedIds={expandedIds}
+        onToggleExpand={onToggleExpand}
+        allowDeleteFolder={allowDeleteFolder}
+      />
+    </div>
+  )
+
+  if (!collapsible) {
+    return (
+      <div className="sidebar-section archive-tree">
+        <div className="section-head archive-tree-head">
+          <p className="eyebrow">{title}</p>
+        </div>
+        {treeContent}
+      </div>
+    )
+  }
+
+  return (
+    <div className={`sidebar-section archive-tree sidebar-collapsible archive-tree-collapsible ${sectionOpen ? 'is-open' : 'is-collapsed'}`}>
+      <button
+        type="button"
+        className="quick-access-toggle sidebar-collapsible-toggle archive-tree-head"
+        aria-expanded={sectionOpen}
+        onClick={toggleSectionOpen}
+      >
+        <span className="eyebrow">{title}</span>
+        <span className={`quick-access-chevron ${sectionOpen ? 'is-open' : ''}`} aria-hidden="true">
+          <ChevronDownIcon className="icon" />
+        </span>
+      </button>
+      <div className={`quick-access-panel ${sectionOpen ? 'is-open' : ''}`}>
+        <div className="sidebar-collapsible-body archive-tree-body">
+          {treeContent}
+        </div>
       </div>
     </div>
   )
@@ -1507,8 +1773,20 @@ function getRouteFromHash() {
   }
 
   const hash = window.location.hash || ''
+  const mobileScanMatch = hash.match(/^#\/mobile-scan\/([a-f0-9]+)$/i)
+  if (mobileScanMatch) {
+    return {
+      view: 'mobile-scan',
+      folderId: null,
+      scanToken: mobileScanMatch[1]
+    }
+  }
+
   const folderMatch = hash.match(/^#\/folders\/(\d+)$/)
   if (folderMatch) {
+    if (!loadStoredSession()) {
+      return { view: 'dashboard', folderId: null }
+    }
     return {
       view: 'folder',
       folderId: Number(folderMatch[1])
@@ -1522,12 +1800,130 @@ function navigateToHash(path) {
   if (typeof window === 'undefined') {
     return
   }
+  if (String(path || '').includes('/folders/') && !loadStoredSession()) {
+    window.location.hash = ''
+    return
+  }
   window.location.hash = path
 }
 
 function ActivityDot({ category }) {
   const tone = String(category || '').toUpperCase()
   return <span className={`activity-dot ${tone.toLowerCase()}`} />
+}
+
+function DashboardActivityRow({ entry }) {
+  return (
+    <tr>
+      <td>
+        <div className="file-cell">
+          <ActivityDot category={entry.category} />
+          <div>
+            <strong>{entry.message}</strong>
+          </div>
+        </div>
+      </td>
+      <td>{entry.actor}</td>
+      <td>
+        <span className="document-chip">{activityCategoryLabel(entry.category)}</span>
+      </td>
+      <td>{formatDateTime(entry.createdAt)}</td>
+    </tr>
+  )
+}
+
+function DashboardActivityGroup({ label, entries }) {
+  if (!entries?.length) {
+    return null
+  }
+  return (
+    <>
+      <tr className="dash-activity-group-row">
+        <td colSpan="4">{label}</td>
+      </tr>
+      {entries.map((entry) => (
+        <DashboardActivityRow key={entry.id} entry={entry} />
+      ))}
+    </>
+  )
+}
+
+function ProfileMenu({
+  avatarLabel,
+  departmentLabel,
+  studentNumber,
+  isStudent,
+  storageUsedBytes,
+  storageLimitBytes,
+  storagePercent,
+  onLogout,
+  formatBytes
+}) {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) {
+      return undefined
+    }
+    const closeMenu = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setOpen(false)
+      }
+    }
+    window.addEventListener('click', closeMenu)
+    return () => {
+      window.removeEventListener('click', closeMenu)
+    }
+  }, [open])
+
+  return (
+    <div className="topbar-profile-wrap" ref={menuRef}>
+      <button
+        type="button"
+        className={`topbar-profile-trigger profile-chip ${open ? 'is-open' : ''}`}
+        aria-expanded={open}
+        aria-haspopup="true"
+        onClick={(event) => {
+          event.stopPropagation()
+          setOpen((current) => !current)
+        }}
+      >
+        <div className="avatar avatar-sm">{avatarLabel}</div>
+        <div className="profile-copy">
+          <strong className="topbar-profile-office">{departmentLabel}</strong>
+        </div>
+        <span className={`topbar-profile-chevron ${open ? 'is-open' : ''}`} aria-hidden="true">
+          <ChevronDownIcon className="icon" />
+        </span>
+      </button>
+
+      {open ? (
+        <div className="topbar-profile-menu" role="menu">
+          {isStudent && studentNumber ? (
+            <div className="topbar-profile-meta">
+              <p className="topbar-profile-id">Student ID: {studentNumber}</p>
+            </div>
+          ) : null}
+
+          <div className="topbar-profile-storage">
+            <p className="eyebrow">{isStudent ? 'Personal storage' : 'Department storage'}</p>
+            <div className="storage-meter">
+              <div className="storage-fill" style={{ width: `${storagePercent}%` }} />
+            </div>
+            <div className="storage-copy">
+              <span>{formatBytes(storageUsedBytes)} used</span>
+              <span>{formatBytes(storageLimitBytes)}</span>
+            </div>
+          </div>
+
+          <button type="button" className="ghost-btn logout-btn topbar-profile-logout" onClick={onLogout}>
+            Sign out
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function LoginScreen({ form, onChange, onSubmit, busy, error }) {
@@ -1647,7 +2043,6 @@ function ConfirmDialog({
       >
         <div className="modal-head">
           <div>
-            <p className="eyebrow">Please confirm</p>
             <h2 id="confirm-dialog-title">{title}</h2>
           </div>
         </div>
@@ -1702,6 +2097,48 @@ function ConfirmDialog({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function DocumentContextMenu({
+  open,
+  x,
+  y,
+  documentItem,
+  busy,
+  onOpenInNewWindow,
+  onDownload,
+  onClose
+}) {
+  if (!open || !documentItem) {
+    return null
+  }
+
+  return (
+    <div
+      className="folder-context-menu document-context-menu"
+      style={{ top: `${y}px`, left: `${x}px` }}
+      role="menu"
+      onClick={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        disabled={busy}
+        onClick={() => { onOpenInNewWindow?.(documentItem); onClose?.() }}
+      >
+        Open PDF in new window
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        disabled={busy}
+        onClick={() => { onDownload?.(documentItem); onClose?.() }}
+      >
+        Download file
+      </button>
     </div>
   )
 }
@@ -1790,7 +2227,8 @@ function FolderView({
   onOpenSearch,
   onNotify,
   onDataChange,
-  onArchivedChange
+  onArchivedChange,
+  addressBarActions
 }) {
   const [viewMode, setViewMode] = useState('grid')
   const [sortBy, setSortBy] = useState('modified')
@@ -1802,6 +2240,7 @@ function FolderView({
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
+  const [documentContextMenu, setDocumentContextMenu] = useState(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareTargetRole, setShareTargetRole] = useState('')
   const [sharePermission, setSharePermission] = useState('READ_ONLY')
@@ -1811,37 +2250,55 @@ function FolderView({
   // Registrar / Exam / HOD: browse shell above semester; document tools from semester down.
   // Department level also unlocks Download + Share so content can be mirrored across departments.
   const isStructureBrowseOnly = isOfficeStructureBrowseOnly(folder, userRole) && !isDepartmentFolder(folder)
-  const showDepartmentShareTools = isOfficeArchiveRole(userRole) && isDepartmentFolder(folder)
+  const showDepartmentShareTools = usesStructureArchiveBrowse(userRole) && isDepartmentFolder(folder)
+  const canAddAcademicYear = canAddAcademicYearRole(userRole) && isDepartmentFolder(folder)
   const canCreateFolder = isStudent
     ? canStudentCreateInFolder(folder)
     : !isStructureBrowseOnly && !showDepartmentShareTools && canStaffCreateArchiveSubfolder(folder, userRole)
   const showFypSubmit = isStudent && isStudentFinalYearProjectFolder(folder)
   const canUpload = isStudent
     ? canStudentUploadInFolder(folder)
-    : isOfficeArchiveRole(userRole)
+    : usesStructureArchiveBrowse(userRole)
       ? isSemesterOrDeeperFolder(folder)
       : !isProtectedArchiveStructureFolder(folder)
   const canDownload = isStudent
     ? true
-    : isOfficeArchiveRole(userRole)
+    : usesStructureArchiveBrowse(userRole)
       ? (isSemesterOrDeeperFolder(folder) || isDepartmentFolder(folder))
       : !isProtectedArchiveStructureFolder(folder)
   const canShare = !isStudent && (
-    isOfficeArchiveRole(userRole)
+    usesStructureArchiveBrowse(userRole)
       ? (isSemesterOrDeeperFolder(folder) || isDepartmentFolder(folder))
       : !isProtectedArchiveStructureFolder(folder)
   )
   const canReplace = !isStudent && isSemesterOrDeeperFolder(folder)
+  const canImport = !isStudent && isSemesterOrDeeperFolder(folder) && isOfficeArchiveRole(userRole)
   const canFilterDocuments = isOfficeArchiveRole(userRole)
     ? isSemesterOrDeeperFolder(folder)
     : !isStudent
   const replaceInputRef = useRef(null)
+  const importInputRef = useRef(null)
+  const [importBusy, setImportBusy] = useState(false)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
     setSelectedDocumentIds(new Set())
     setFilterOpen(false)
+    setDocumentContextMenu(null)
   }, [folder?.id])
+
+  useEffect(() => {
+    if (!documentContextMenu) {
+      return undefined
+    }
+    const close = () => setDocumentContextMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [documentContextMenu])
 
   function closeConfirm() {
     if (confirmBusy) {
@@ -1879,6 +2336,22 @@ function FolderView({
     })
   }
 
+  async function handleDownloadDocument(documentItem) {
+    if (!documentItem?.id || openingDocumentId) {
+      return
+    }
+
+    setOpeningDocumentId(documentItem.id)
+    try {
+      await downloadDocument(documentItem.id)
+      onNotify?.(`Downloading ${documentItem.fileName || documentItem.title || 'document'}...`)
+    } catch (err) {
+      onNotify?.(err.message || 'Unable to download document.')
+    } finally {
+      setOpeningDocumentId(null)
+    }
+  }
+
   async function handleOpenDocument(documentItem) {
     if (!documentItem?.id || openingDocumentId) {
       return
@@ -1902,13 +2375,27 @@ function FolderView({
       toggleDocumentSelection(documentItem.id)
       return
     }
-    handleOpenDocument(documentItem)
+    setSelectedFolderIds(new Set())
+    setSelectedDocumentIds(new Set([documentItem.id]))
+  }
+
+  function handleDocumentContextMenu(event, documentItem) {
+    event.preventDefault()
+    event.stopPropagation()
+    setSelectedFolderIds(new Set())
+    setSelectedDocumentIds(new Set([documentItem.id]))
+    setDocumentContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      document: documentItem
+    })
   }
 
   function handleDocumentKeyDown(event, documentItem) {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
-      handleOpenDocument(documentItem)
+      setSelectedFolderIds(new Set())
+      setSelectedDocumentIds(new Set([documentItem.id]))
     }
   }
 
@@ -1970,7 +2457,8 @@ function FolderView({
   }
 
   const children = [...(folder.children || [])].sort((left, right) => {
-    if (sortBy === 'name') {
+    const useStructureOrder = isFacultyFolder(folder) || isDepartmentFolder(folder) || isAcademicYearFolder(folder)
+    if (sortBy === 'name' || useStructureOrder) {
       return String(left.name || '').localeCompare(String(right.name || ''))
     }
     return Number(right.itemCount || 0) - Number(left.itemCount || 0)
@@ -2017,7 +2505,30 @@ function FolderView({
   const selectedDocuments = getSelectedDocuments(documents)
   const selectedFolders = getSelectedFolders(children)
   const selectionCount = selectedFolderIds.size + selectedDocumentIds.size
-  const sortLabel = sortBy === 'name' ? 'Sort: Name' : 'Sort: Modified'
+  const showExplorerFilter = !isStructureBrowseOnly && !showDepartmentShareTools
+  const filterIsActive = filterType !== 'all' || sortBy !== 'modified'
+
+  function handleAddAcademicYearClick() {
+    openConfirm({
+      title: 'Add academic year',
+      message: `Add a new academic year under "${folder.name}". Default semesters will be created automatically (for example 2029/1, 2029/2, 2029/3).`,
+      confirmLabel: 'Add year',
+      inputLabel: 'Academic year',
+      inputPlaceholder: '2029-2030',
+      onConfirm: async (academicYear) => {
+        const formatError = validateAcademicYearFormat(academicYear)
+        if (formatError) {
+          throw new Error(formatError)
+        }
+        const created = await addDepartmentAcademicYear(folder.id, String(academicYear).trim())
+        onNotify?.(`Academic year "${created.name}" added with default semesters.`)
+        await onDataChange?.()
+        if (created?.id) {
+          onOpenFolder?.(created.id)
+        }
+      }
+    })
+  }
 
   function handleNewFolderClick() {
     setNewFolderName('')
@@ -2057,6 +2568,197 @@ function FolderView({
         onUpload?.()
       }
     })
+  }
+
+  async function runFolderImport(payload) {
+    setImportBusy(true)
+    try {
+      const result = await importFolderArchive(folder.id, payload)
+      const skippedNote = result.skippedCount
+        ? ` ${result.skippedCount} item${result.skippedCount === 1 ? '' : 's'} skipped.`
+        : ''
+      onNotify?.(
+        `Imported ${result.importedCount} document${result.importedCount === 1 ? '' : 's'} into "${folder.name}". `
+        + `ZIP archives are unzipped here — open folders below to browse the real content.${skippedNote}`
+      )
+      await onDataChange?.()
+    } catch (err) {
+      onNotify?.(err.message || 'Import failed.')
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  async function collectDirectoryFiles(directoryHandle, parentPath = '') {
+    const files = []
+    const paths = []
+    for await (const [name, handle] of directoryHandle.entries()) {
+      const nextPath = parentPath ? `${parentPath}/${name}` : name
+      if (handle.kind === 'directory') {
+        const nested = await collectDirectoryFiles(handle, nextPath)
+        files.push(...nested.files)
+        paths.push(...nested.paths)
+      } else if (handle.kind === 'file') {
+        files.push(await handle.getFile())
+        paths.push(nextPath)
+      }
+    }
+    return { files, paths }
+  }
+
+  function isArchivePath(path) {
+    const lower = String(path || '').toLowerCase()
+    return lower.endsWith('.zip') || lower.endsWith('.jar') || lower.endsWith('.7z')
+  }
+
+  function isIgnoredImportPath(path) {
+    const lower = String(path || '').toLowerCase()
+    return lower.endsWith('.ds_store')
+      || lower.endsWith('thumbs.db')
+      || lower.includes('__macosx/')
+  }
+
+  function openImportFilePicker() {
+    const input = importInputRef.current
+    if (!input) {
+      return
+    }
+    input.value = ''
+    input.removeAttribute('webkitdirectory')
+    input.removeAttribute('directory')
+    input.accept = '.zip,application/zip,application/x-zip-compressed'
+    input.multiple = false
+    input.click()
+  }
+
+  function openImportFolderPicker() {
+    const input = importInputRef.current
+    if (!input) {
+      return
+    }
+    input.value = ''
+    input.setAttribute('webkitdirectory', '')
+    input.setAttribute('directory', '')
+    input.removeAttribute('accept')
+    input.multiple = true
+    input.click()
+  }
+
+  async function pickImportFolder() {
+    if (typeof window.showDirectoryPicker === 'function') {
+      try {
+        const directoryHandle = await window.showDirectoryPicker({ mode: 'read' })
+        const collected = await collectDirectoryFiles(directoryHandle)
+        if (!collected.files.length) {
+          onNotify?.('The selected folder is empty.')
+          return
+        }
+        if (collected.paths.some(isArchivePath)) {
+          onNotify?.('Select a ZIP file directly instead of a folder that contains archives.')
+          return
+        }
+        const importable = collected.files.filter((file, index) => !isIgnoredImportPath(collected.paths[index]))
+        if (!importable.length) {
+          onNotify?.('The selected folder does not contain any importable documents.')
+          return
+        }
+        await runFolderImport({
+          files: importable,
+          paths: importable.map((file, index) => collected.paths[index])
+        })
+      } catch (error) {
+        if (error?.name !== 'AbortError') {
+          onNotify?.(error.message || 'Unable to read the selected folder.')
+        }
+      }
+      return
+    }
+    openImportFolderPicker()
+  }
+
+  function startImportDocumentsPicker() {
+    if (importBusy) {
+      return
+    }
+
+    const input = importInputRef.current
+    if (!input) {
+      return
+    }
+
+    let selected = false
+    const onWindowFocus = () => {
+      window.removeEventListener('focus', onWindowFocus)
+      window.setTimeout(async () => {
+        if (selected || importBusy || input.files?.length) {
+          return
+        }
+        await pickImportFolder()
+      }, 400)
+    }
+
+    const onInputChange = async (event) => {
+      selected = true
+      window.removeEventListener('focus', onWindowFocus)
+      input.removeEventListener('change', onInputChange)
+      await handleImportInputSelected(event)
+    }
+
+    window.addEventListener('focus', onWindowFocus)
+    input.addEventListener('change', onInputChange)
+    openImportFilePicker()
+  }
+
+  function handleImportDocumentsClick() {
+    if (importBusy) {
+      return
+    }
+
+    openConfirm({
+      title: 'Import documents',
+      message: 'Import documents accepts a ZIP archive or folder. ZIP files are unzipped into this semester folder — student subfolders and documents appear here so you can navigate and open the real content without leaving the archive.',
+      confirmLabel: 'Choose ZIP or folder',
+      onConfirm: async () => {
+        startImportDocumentsPicker()
+      }
+    })
+  }
+
+  async function handleImportInputSelected(event) {
+    const fileList = Array.from(event.target.files || [])
+    event.target.value = ''
+    if (!fileList.length) {
+      return
+    }
+
+    const singleZip = fileList.length === 1 && fileList[0].name.toLowerCase().endsWith('.zip')
+    if (singleZip) {
+      await runFolderImport({ archive: fileList[0] })
+      return
+    }
+
+    const folderSelection = fileList.some((file) => {
+      const path = String(file.webkitRelativePath || '')
+      return path.includes('/')
+    })
+    if (folderSelection || fileList.length > 1) {
+      if (fileList.some((file) => isArchivePath(file.webkitRelativePath || file.name))) {
+        onNotify?.('Select a ZIP file directly instead of a folder that contains archives.')
+        return
+      }
+      const importable = fileList.filter((file) => !isIgnoredImportPath(file.webkitRelativePath || file.name))
+      if (!importable.length) {
+        onNotify?.('The selected folder does not contain any importable documents.')
+        return
+      }
+      await runFolderImport({
+        files: importable,
+        paths: importable.map((file) => file.webkitRelativePath || file.name)
+      })
+      return
+    }
+
+    onNotify?.('Select a ZIP archive or a folder with documents inside.')
   }
 
   function handleOpenSelectedFolder() {
@@ -2185,6 +2887,11 @@ function FolderView({
     if (!file || selected.length !== 1) {
       return
     }
+    const validation = await validateReplacementFile(file)
+    if (!validation.ok) {
+      onNotify?.(validation.message)
+      return
+    }
     const documentItem = selected[0]
     openConfirm({
       title: 'Replace document file',
@@ -2201,21 +2908,6 @@ function FolderView({
 
   function handleFilterClick() {
     setFilterOpen((current) => !current)
-  }
-
-  function handleSortClick() {
-    const nextSort = sortBy === 'modified' ? 'name' : 'modified'
-    openConfirm({
-      title: 'Change sort order',
-      message: nextSort === 'name'
-        ? 'Sort items alphabetically by name?'
-        : 'Sort items by last modified date?',
-      confirmLabel: nextSort === 'name' ? 'Sort by name' : 'Sort by modified',
-      onConfirm: async () => {
-        setSortBy(nextSort)
-        onNotify?.(nextSort === 'name' ? 'Sorted by name.' : 'Sorted by last modified.')
-      }
-    })
   }
 
   return (
@@ -2330,6 +3022,11 @@ function FolderView({
             <strong>{folder.name}</strong>
           )}
         </div>
+        {addressBarActions ? (
+          <div className="explorer-address-actions">
+            {addressBarActions}
+          </div>
+        ) : null}
       </div>
 
       <div className="explorer-toolbar">
@@ -2351,6 +3048,12 @@ function FolderView({
                 <FolderIcon className="icon" />
                 Open
               </button>
+              {canAddAcademicYear ? (
+                <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleAddAcademicYearClick}>
+                  <FolderPlusIcon className="icon" />
+                  Add academic year
+                </button>
+              ) : null}
               {canDownload ? (
                 <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDownloadClick}>
                   <DownloadIcon className="icon" />
@@ -2387,6 +3090,17 @@ function FolderView({
                   Upload
                 </button>
               ) : null}
+              {canImport ? (
+                <button
+                  type="button"
+                  className="ghost-btn explorer-tool-btn"
+                  disabled={importBusy}
+                  onClick={handleImportDocumentsClick}
+                >
+                  <FolderPlusIcon className="icon" />
+                  {importBusy ? 'Importing…' : 'Import documents'}
+                </button>
+              ) : null}
               {canDownload ? (
                 <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleDownloadClick}>
                   <DownloadIcon className="icon" />
@@ -2405,15 +3119,12 @@ function FolderView({
                   Replace
                 </button>
               ) : null}
-              {canFilterDocuments ? (
+              {showExplorerFilter ? (
                 <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleFilterClick}>
                   <FilterIcon className="icon" />
-                  Filter{filterOpen ? ' ✓' : ''}
+                  Filter{filterOpen || filterIsActive ? ' ✓' : ''}
                 </button>
               ) : null}
-              <button type="button" className="ghost-btn explorer-tool-btn" onClick={handleSortClick}>
-                {sortLabel}
-              </button>
               <button type="button" className="ghost-btn explorer-tool-btn" onClick={onRefresh}>
                 <RefreshIcon className="icon" />
                 Refresh
@@ -2421,8 +3132,14 @@ function FolderView({
               <input
                 ref={replaceInputRef}
                 type="file"
+                accept="application/pdf,.pdf,application/zip,.zip"
                 hidden
                 onChange={handleReplaceFileSelected}
+              />
+              <input
+                ref={importInputRef}
+                type="file"
+                hidden
               />
             </>
           )}
@@ -2454,26 +3171,53 @@ function FolderView({
 
       {filterOpen ? (
         <div className="explorer-filter-bar">
-          {[
-            { value: 'all', label: 'All items' },
-            { value: 'folders', label: 'Folders only' },
-            { value: 'documents', label: 'Documents only' },
-            ...(userRole === 'REGISTRAR'
-              ? []
-              : [
-                { value: 'approved', label: 'Approved' },
-                { value: 'pending', label: 'Pending' }
-              ])
-          ].map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={`explorer-filter-chip ${filterType === option.value ? 'active' : ''}`}
-              onClick={() => setFilterType(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
+          <div className="explorer-filter-group">
+            <span className="explorer-filter-group-label">Show</span>
+            <div className="explorer-filter-group-options">
+              {[
+                { value: 'all', label: 'All items' },
+                { value: 'folders', label: 'Folders only' },
+                ...(canFilterDocuments
+                  ? [
+                    { value: 'documents', label: 'Documents only' },
+                    ...(userRole === 'REGISTRAR'
+                      ? []
+                      : [
+                        { value: 'approved', label: 'Approved' },
+                        { value: 'pending', label: 'Pending' }
+                      ])
+                  ]
+                  : [])
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`explorer-filter-chip ${filterType === option.value ? 'active' : ''}`}
+                  onClick={() => setFilterType(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="explorer-filter-group">
+            <span className="explorer-filter-group-label">Sort</span>
+            <div className="explorer-filter-group-options">
+              {[
+                { value: 'modified', label: 'Last modified' },
+                { value: 'name', label: 'Name' }
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`explorer-filter-chip ${sortBy === option.value ? 'active' : ''}`}
+                  onClick={() => setSortBy(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button type="button" className="explorer-filter-close" onClick={() => setFilterOpen(false)}>
             Close
           </button>
@@ -2487,7 +3231,9 @@ function FolderView({
           {isFacultyFolder(folder)
             ? 'Open a department, then an academic year and semester to manage documents.'
             : isDepartmentFolder(folder)
-              ? 'Open an academic year, then a semester folder to upload, share, or manage documents.'
+              ? (canAddAcademicYearRole(userRole)
+                ? 'Add an academic year here, or open an existing year and semester to manage documents.'
+                : 'Open an academic year, then a semester folder to upload, share, or manage documents.')
               : isAcademicYearFolder(folder)
                 ? 'Open a semester folder to unlock New folder, Upload, Download, Share, Replace, and Filter.'
                 : 'Browse into a semester folder to manage documents.'}
@@ -2502,7 +3248,7 @@ function FolderView({
         </p>
       ) : visibleDocuments.length ? (
         <p className="explorer-hint">
-          Click a document to open it. Right-click folders to rename, copy, move, or paste. <kbd>Ctrl</kbd>+click to select items for download or delete.
+          Click to select a document. Right-click for open and download options. <kbd>Ctrl</kbd>+click to multi-select for bulk download or delete.
         </p>
       ) : null}
 
@@ -2629,8 +3375,9 @@ function FolderView({
             tabIndex={0}
             className={`explorer-item explorer-file ${selectedDocumentIds.has(document.id) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
             onClick={(event) => handleDocumentClick(event, document)}
+            onContextMenu={(event) => handleDocumentContextMenu(event, document)}
             onKeyDown={(event) => handleDocumentKeyDown(event, document)}
-            title="Click to open. Ctrl+click to select."
+            title="Click to select. Right-click for open and download."
           >
             <ExplorerStatusBadge status={document.status} userRole={userRole} />
             <div className="explorer-item-icon file">
@@ -2665,6 +3412,17 @@ function FolderView({
           </div>
         ) : null}
       </div>
+
+      <DocumentContextMenu
+        open={Boolean(documentContextMenu)}
+        x={documentContextMenu?.x || 0}
+        y={documentContextMenu?.y || 0}
+        documentItem={documentContextMenu?.document}
+        busy={Boolean(openingDocumentId)}
+        onOpenInNewWindow={handleOpenDocument}
+        onDownload={handleDownloadDocument}
+        onClose={() => setDocumentContextMenu(null)}
+      />
     </section>
   )
 }
@@ -2677,7 +3435,49 @@ function looksLikeStudentId(query) {
   return /[\d]/.test(trimmed) && /^[\w./-]+$/.test(trimmed)
 }
 
-function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onOpenFolder, onClear, mode = 'documents' }) {
+function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onDownloadDocument, onOpenFolder, onClear, mode = 'documents' }) {
+  const [documentContextMenu, setDocumentContextMenu] = useState(null)
+  const [openingDocumentId, setOpeningDocumentId] = useState(null)
+
+  useEffect(() => {
+    if (!documentContextMenu) {
+      return undefined
+    }
+    const close = () => setDocumentContextMenu(null)
+    window.addEventListener('click', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', close)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', close)
+    }
+  }, [documentContextMenu])
+
+  async function handleOpenSearchDocument(documentId) {
+    if (!documentId || openingDocumentId) {
+      return
+    }
+    setOpeningDocumentId(documentId)
+    try {
+      await onOpenDocument?.(documentId)
+    } finally {
+      setOpeningDocumentId(null)
+    }
+  }
+
+  async function handleDownloadSearchDocument(documentId) {
+    if (!documentId || openingDocumentId) {
+      return
+    }
+    setOpeningDocumentId(documentId)
+    try {
+      await onDownloadDocument?.(documentId)
+    } finally {
+      setOpeningDocumentId(null)
+    }
+  }
+
   if (!query) {
     return null
   }
@@ -2743,13 +3543,26 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                     key={fileRow.id}
                     className={`document-row ${isDocument ? 'search-hit-document' : ''}`}
                     onClick={() => {
-                      if (isDocument) {
-                        onOpenDocument?.(fileRow.id)
-                      } else if (fileRow.folderId) {
+                      if (!isDocument && fileRow.folderId) {
                         onOpenFolder?.(fileRow.folderId)
                       }
                     }}
-                    title={isDocument ? 'Open document' : 'Open archive location'}
+                    onContextMenu={(event) => {
+                      if (!isDocument) {
+                        return
+                      }
+                      event.preventDefault()
+                      setDocumentContextMenu({
+                        x: event.clientX,
+                        y: event.clientY,
+                        document: {
+                          id: fileRow.id,
+                          fileName: fileRow.fileName,
+                          title: fileRow.title
+                        }
+                      })
+                    }}
+                    title={isDocument ? 'Right-click for open and download options' : 'Open archive location'}
                   >
                     <td>
                       <div className="file-cell">
@@ -2807,16 +3620,30 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                     <td>
                       <div className="archive-row-actions">
                         {isDocument ? (
-                          <button
-                            type="button"
-                            className="dash-text-btn"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              onOpenDocument?.(fileRow.id)
-                            }}
-                          >
-                            Open file
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              className="dash-text-btn"
+                              disabled={openingDocumentId === fileRow.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                handleOpenSearchDocument(fileRow.id)
+                              }}
+                            >
+                              Open file
+                            </button>
+                            <button
+                              type="button"
+                              className="dash-text-btn"
+                              disabled={openingDocumentId === fileRow.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                handleDownloadSearchDocument(fileRow.id)
+                              }}
+                            >
+                              Download
+                            </button>
+                          </>
                         ) : null}
                         {fileRow.folderId ? (
                           <button
@@ -2849,12 +3676,23 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
           </tbody>
         </table>
       </div>
+      <DocumentContextMenu
+        open={Boolean(documentContextMenu)}
+        x={documentContextMenu?.x || 0}
+        y={documentContextMenu?.y || 0}
+        documentItem={documentContextMenu?.document}
+        busy={Boolean(openingDocumentId)}
+        onOpenInNewWindow={(documentItem) => handleOpenSearchDocument(documentItem.id)}
+        onDownload={(documentItem) => handleDownloadSearchDocument(documentItem.id)}
+        onClose={() => setDocumentContextMenu(null)}
+      />
     </section>
   )
 }
 
 function App() {
-  const [session, setSession] = useState(loadStoredSession)
+  const [session, setSession] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [loginForm, setLoginForm] = useState({
@@ -2870,9 +3708,10 @@ function App() {
   const [searchBusy, setSearchBusy] = useState(false)
   const [studentSearchProfile, setStudentSearchProfile] = useState(null)
   const [selectedCategory, setSelectedCategory] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
+  const [uploadSourceMode, setUploadSourceMode] = useState('file')
   const [studentFypWizardOpen, setStudentFypWizardOpen] = useState(false)
   const [studentFypEditId, setStudentFypEditId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
@@ -2883,11 +3722,10 @@ function App() {
   const [sharedItems, setSharedItems] = useState([])
   const [sharedBusy, setSharedBusy] = useState(false)
   const [sharedCount, setSharedCount] = useState(0)
-  const [treeFilterOpen, setTreeFilterOpen] = useState(false)
-  const [treeFilter, setTreeFilter] = useState('')
   const [quickAccessOpen, setQuickAccessOpen] = useState(loadQuickAccessOpen)
-  const [adminOffices, setAdminOffices] = useState([])
+  const [adminOffices, setAdminOffices] = useState(() => buildAdminOffices([], {}, []))
   const [selectedAdminOffice, setSelectedAdminOffice] = useState(null)
+  const [adminOfficePanel, setAdminOfficePanel] = useState('tree')
   const [adminOfficesBusy, setAdminOfficesBusy] = useState(false)
   const [archiveItems, setArchiveItems] = useState([])
   const [archiveBusy, setArchiveBusy] = useState(false)
@@ -2916,6 +3754,18 @@ function App() {
       noticeTimerRef.current = null
     }, 2000)
   }, [])
+
+  const handleDownloadDocumentById = useCallback(async (documentId) => {
+    if (!documentId) {
+      return
+    }
+    try {
+      await downloadDocument(documentId)
+      showNotice('Downloading document...')
+    } catch (err) {
+      showNotice(err.message || 'Unable to download document.')
+    }
+  }, [showNotice])
 
   useEffect(() => () => {
     if (noticeTimerRef.current) {
@@ -2958,9 +3808,50 @@ function App() {
 
   const [form, setForm] = useState(buildDefaultUploadForm)
   const [file, setFile] = useState(null)
+  const [filePreviewOpen, setFilePreviewOpen] = useState(false)
+  const [filePreviewUrl, setFilePreviewUrl] = useState('')
+  const uploadFileInputRef = useRef(null)
   const roleConfig = getRoleDashboardConfig(session?.role)
   const visibleDocumentCategories = getVisibleDocumentCategories(session?.role)
   const documentTypeLocked = visibleDocumentCategories.length === 1
+
+  useEffect(() => {
+    let active = true
+
+    async function bootstrapAuth() {
+      const stored = loadStoredSession()
+      if (!stored) {
+        clearProtectedHash()
+        if (active) {
+          setSession(null)
+          setAuthChecked(true)
+        }
+        return
+      }
+
+      try {
+        await getDashboard()
+        if (active) {
+          setSession(stored)
+        }
+      } catch {
+        clearStoredSession()
+        clearProtectedHash()
+        if (active) {
+          setSession(null)
+        }
+      } finally {
+        if (active) {
+          setAuthChecked(true)
+        }
+      }
+    }
+
+    bootstrapAuth()
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!session) {
@@ -2981,7 +3872,8 @@ function App() {
       } catch (err) {
         if (!active) return
         setDashboard(emptyDashboard)
-        setError('Dashboard data is unavailable until the API and database are reachable.')
+        const detail = err?.message ? ` (${err.message})` : ''
+        setError(`Dashboard data is unavailable until the API and database are reachable.${detail}`)
       } finally {
         if (active) setLoading(false)
       }
@@ -2997,11 +3889,17 @@ function App() {
       return undefined
     }
 
-    const syncRoute = () => setRoute(getRouteFromHash())
+    const syncRoute = () => {
+      if (!session) {
+        clearProtectedHash()
+      }
+      setRoute(getRouteFromHash())
+    }
+
     syncRoute()
     window.addEventListener('hashchange', syncRoute)
     return () => window.removeEventListener('hashchange', syncRoute)
-  }, [])
+  }, [session])
 
   useEffect(() => {
     if (!session) {
@@ -3065,6 +3963,20 @@ function App() {
   }, [session])
 
   useEffect(() => {
+    if (!file) {
+      setFilePreviewUrl('')
+      setFilePreviewOpen(false)
+      return undefined
+    }
+
+    const url = URL.createObjectURL(file)
+    setFilePreviewUrl(url)
+    return () => {
+      URL.revokeObjectURL(url)
+    }
+  }, [file])
+
+  useEffect(() => {
     if (!file || !modalOpen) {
       return undefined
     }
@@ -3080,7 +3992,8 @@ function App() {
       category: form.category,
       course: String(form.course || '').trim(),
       faculty: String(form.faculty || '').trim(),
-      department: String(form.department || '').trim()
+      department: String(form.department || '').trim(),
+      fileName: file.name
     }
 
     scanDocument(file, context)
@@ -3111,7 +4024,8 @@ function App() {
     form.category,
     form.course,
     form.faculty,
-    form.department
+    form.department,
+    file?.name
   ])
 
   useEffect(() => {
@@ -3261,18 +4175,35 @@ function App() {
       return
     }
 
+    setAdminOffices(buildAdminOffices([], {}, []))
+
     let active = true
     async function loadAdminOffices(silent = false) {
       if (!silent) {
         setAdminOfficesBusy(true)
       }
       try {
-        const adminData = await getAdminDashboard()
+        let adminData = { users: [], usersByRole: {} }
+        let officeData = []
+        try {
+          adminData = await getAdminDashboard()
+        } catch {
+          // dashboard optional for office list fallback
+        }
+        try {
+          officeData = await getAdminOffices()
+        } catch {
+          // offices API optional; buildAdminOffices still returns standard offices
+        }
         if (!active) {
           return
         }
-        const offices = buildAdminOffices(adminData?.users || [], adminData?.usersByRole || {})
-        setAdminOffices(offices)
+        const offices = buildAdminOffices(
+          adminData?.users || [],
+          adminData?.usersByRole || {},
+          officeData || []
+        )
+        setAdminOffices(offices.length ? offices : buildAdminOffices([], {}, []))
         setSelectedAdminOffice((current) => {
           if (!current) {
             return null
@@ -3281,7 +4212,7 @@ function App() {
         })
       } catch {
         if (active && !silent) {
-          setAdminOffices([])
+          setAdminOffices(buildAdminOffices([], {}, []))
         }
       } finally {
         if (active) {
@@ -3381,7 +4312,7 @@ function App() {
       try {
         const archiveTree = dashboard?.archiveTree || []
         const folderMatches = searchArchiveTreeMatches(archiveTree, settledSearchQuery)
-        const registrarMode = session.role === 'REGISTRAR'
+        const registrarMode = usesOfficeDashboardFormat(session.role)
 
         if (looksLikeStudentId(settledSearchQuery)) {
           try {
@@ -3445,7 +4376,7 @@ function App() {
           const archiveTree = dashboard?.archiveTree || []
           const folderMatches = searchArchiveTreeMatches(archiveTree, settledSearchQuery)
           setSearchResults(
-            session.role === 'REGISTRAR'
+            usesOfficeDashboardFormat(session.role)
               ? buildRegistrarSearchResults([], folderMatches, archiveTree, settledSearchQuery)
               : folderMatches
           )
@@ -3497,9 +4428,7 @@ function App() {
     setAuthError('')
     try {
       const account = await login(username, password)
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(account))
-      }
+      saveStoredSession(account)
       setSession(account)
       setLoginForm({
         username: account.username || '',
@@ -3513,8 +4442,8 @@ function App() {
   }
 
   function handleLogout() {
+    clearStoredSession()
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(AUTH_SESSION_KEY)
       window.location.hash = ''
     }
     setSession(null)
@@ -3549,13 +4478,17 @@ function App() {
     setFolderLoading(false)
   }
 
-  if (!session) {
+  if (route.view === 'mobile-scan' && route.scanToken) {
+    return <MobileScanPage token={route.scanToken} />
+  }
+
+  if (!authChecked || !session) {
     return (
       <LoginScreen
         form={loginForm}
         onChange={setLoginForm}
         onSubmit={handleLogin}
-        busy={authBusy}
+        busy={authBusy || !authChecked}
         error={authError}
       />
     )
@@ -3569,27 +4502,35 @@ function App() {
     ? getCategoryMeta(selectedCategory)
     : null
   const archiveList = archiveRevision >= 0 ? archiveItems : []
-  const rawActivities = (activities.length ? activities : (data.departmentActivity || []))
-    .filter((entry) => session.role !== 'HOD' || (!String(entry.actor || '').toLowerCase().includes('librarian') && !String(entry.message || '').toLowerCase().includes('librarian')))
+  const rawActivities = activities.length ? activities : (data.departmentActivity || [])
   const dashboardActivities = rawActivities
-    .filter((entry) => dashboardView !== 'recent' || isWithinDays(entry.createdAt, 7))
+    .filter((entry) => dashboardView !== 'recent' || isToday(entry.createdAt))
   const recentActivityCount = rawActivities
-    .filter((entry) => isWithinDays(entry.createdAt, 7)).length
+    .filter((entry) => isToday(entry.createdAt)).length
+  const groupedDashboardActivities = groupActivitiesByRecency(dashboardActivities)
   const storagePercent = data.storageLimitBytes
     ? Math.min(100, (data.storageUsedBytes / data.storageLimitBytes) * 100)
     : 0
   const isExamOfficer = session.role === 'EXAMINATION_OFFICER'
+  const usesPlacementUpload = usesSemesterFolderUpload(session.role)
   const isStudent = session.role === 'STUDENT'
   const isRegistrar = session.role === 'REGISTRAR'
   const isHod = session.role === 'HOD'
   const isLibrarian = session.role === 'LIBRARIAN'
   const isAdmin = session.role === 'ADMIN'
-  const hideHeaderBrowse = isRegistrar || isExamOfficer || isHod || isLibrarian
+  const adminArchiveTree = isAdmin && selectedAdminOffice
+    ? filterArchiveTreeForOffice(data.archiveTree || [], selectedAdminOffice)
+    : []
+  const adminArchiveTreeTitle = selectedAdminOffice
+    ? `${adminOffices.find((office) => office.role === selectedAdminOffice)?.label || 'Office'} archive tree`
+    : 'Archive Tree'
+  const hideHeaderBrowse = usesOfficeDashboardFormat(session.role) || isLibrarian
+  const showOfficeDashboardFormat = usesOfficeDashboardFormat(session.role)
   const isStaffUser = !isStudent
   const isFolderRoute = route.view === 'folder'
-  const showStaffDashboardSearch = isRegistrar && !isFolderRoute
-  const hideFolderSearch = isOfficeArchiveRole(session.role) && !isSemesterOrDeeperFolder(folderDetail)
-  const staffArchiveTree = stripLibrarianReviewFolders(data.archiveTree || [])
+  const showStaffDashboardSearch = showOfficeDashboardFormat && !isFolderRoute
+  const hideFolderSearch = usesStructureArchiveBrowse(session.role) && !isSemesterOrDeeperFolder(folderDetail)
+  const staffArchiveTree = prepareStaffArchiveTree(data.archiveTree || [], session.role)
   const activeFolderId = isFolderRoute ? route.folderId : null
   const folderNav = folderNavRef.current
   const canGoBackFolder = folderNav.index > 0
@@ -3598,10 +4539,19 @@ function App() {
   const studentNeedsProfile = studentEntryMode === 'new'
     || Boolean(studentLookupResult && (!studentLookupResult.faculty || !studentLookupResult.department))
   const selectedDepartmentOptions = getDepartmentOptions(form.faculty)
-  const selectedExamTypeMeta = isExamOfficer ? getExamPaperTypeMeta(form.examType) : null
   const archiveSemesterOptions = semesterOptionsForAcademicYear(form.academicYear)
-  const examTitlePreview = isExamOfficer
-    ? buildExamTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
+  const uploadPlacement = usesPlacementUpload ? resolveFolderUploadPlacement(folderDetail) : null
+  const uploadPlacementSummary = formatUploadPlacementSummary(uploadPlacement)
+  const effectiveUploadPlacementSummary = studentEntryMode === 'existing'
+    ? formatUploadPlacementSummary({
+        faculty: form.faculty,
+        department: form.department,
+        academicYear: form.academicYear,
+        semester: form.semester
+      })
+    : uploadPlacementSummary
+  const uploadTitlePreview = usesPlacementUpload
+    ? buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
     : getCategoryMeta(form.category).label
 
   async function handleDecision(taskId, decision, reviewNote = '') {
@@ -3644,6 +4594,25 @@ function App() {
     try {
       const data = await lookupStudent(trimmed)
       if (!data.found) {
+        if (usesPlacementUpload) {
+          setStudentLookupResult(null)
+          setStudentLookupQuery(trimmed)
+          setStudentEntryMode('new')
+          setStudentLookupError('')
+          setStudentLookupInfo(
+            uploadPlacementSummary
+              ? `No archive found for ${trimmed}. Enter the student name to link this ID under ${uploadPlacementSummary}.`
+              : `No archive found for ${trimmed}. Enter the student name to link this ID.`
+          )
+          if (populateForm) {
+            setForm((current) => applyUploadPlacementContext({
+              ...current,
+              studentNumber: trimmed,
+              studentName: ''
+            }, uploadPlacement))
+          }
+          return null
+        }
         const formatError = validateStudentIdForNewEntry(trimmed)
         setStudentLookupResult(null)
         setStudentLookupQuery(trimmed)
@@ -3679,6 +4648,8 @@ function App() {
         studentName: data.studentName,
         faculty: data.faculty,
         department: data.department,
+        academicYear: data.academicYear,
+        semester: data.semester,
         folderId: data.folderId,
         documentCount: data.documentCount || 0,
         documents: data.documents || []
@@ -3687,15 +4658,24 @@ function App() {
       setStudentLookupQuery(trimmed)
       setStudentEntryMode('existing')
       setStudentLookupError('')
-      setStudentLookupInfo('')
+      const existingPlacement = formatExistingStudentPlacement(profile)
+      setStudentLookupInfo(
+        existingPlacement
+          ? `Existing student found. Upload will go to ${existingPlacement}.`
+          : ''
+      )
       if (populateForm) {
-        setForm((current) => applyStudentIdDefaults({
-          ...current,
-          studentNumber: profile.studentNumber,
-          studentName: profile.studentName || current.studentName,
-          faculty: profile.faculty || current.faculty || '',
-          department: profile.department || current.department || ''
-        }, profile.studentNumber))
+        if (usesPlacementUpload) {
+          setForm((current) => applyExistingStudentPlacement(current, profile))
+        } else {
+          setForm((current) => applyStudentIdDefaults({
+            ...current,
+            studentNumber: profile.studentNumber,
+            studentName: profile.studentName || current.studentName,
+            faculty: profile.faculty || current.faculty || '',
+            department: profile.department || current.department || ''
+          }, profile.studentNumber))
+        }
       }
       return profile
     } catch (err) {
@@ -4099,6 +5079,7 @@ function App() {
 
   function openAdminOffice(role) {
     setSelectedAdminOffice(role)
+    setAdminOfficePanel('tree')
     setDashboardView('default')
     setSearchQuery('')
     setStudentSearchProfile(null)
@@ -4111,13 +5092,6 @@ function App() {
     : isStudent
       ? quickAccess.filter((item) => item.action !== 'archive')
       : staffQuickAccess
-  const treeAddParent = folderDetail?.id === activeFolderId
-    ? folderDetail
-    : (activeFolderId ? findFolderNode(staffArchiveTree, activeFolderId) : null)
-  const allowTreeAddFolder = isStudent
-    ? true
-    : canStaffCreateArchiveSubfolder(treeAddParent, session.role)
-
   function openFolder(folderId) {
     if (!folderId) {
       return
@@ -4196,6 +5170,81 @@ function App() {
     }
   }
 
+  function clearSelectedUploadFile() {
+    setFile(null)
+    setScanResult(null)
+    setScanError('')
+    setFilePreviewOpen(false)
+    if (uploadFileInputRef.current) {
+      uploadFileInputRef.current.value = ''
+    }
+  }
+
+  async function handleUploadFileSelect(nextFile, inputElement) {
+    setScanResult(null)
+    setScanError('')
+    setFilePreviewOpen(false)
+    if (!nextFile) {
+      setFile(null)
+      return
+    }
+    const validation = await validatePdfFile(nextFile)
+    if (!validation.ok) {
+      setFile(null)
+      setScanError(validation.message)
+      if (inputElement) {
+        inputElement.value = ''
+      }
+      return
+    }
+    setFile(nextFile)
+    const pages = await countPdfPages(nextFile)
+    if (pages) {
+      setForm((current) => ({ ...current, pageCount: pages }))
+    }
+  }
+
+  function openUploadModal() {
+    const placement = usesPlacementUpload ? resolveFolderUploadPlacement(folderDetail) : null
+    if (usesPlacementUpload) {
+      if (!placement?.faculty || !placement?.department || !placement?.academicYear || !placement?.semester) {
+        showNotice('Open a semester folder under a department to upload. Documents follow the folder you are viewing.')
+        return
+      }
+    }
+    setUploadSourceMode('file')
+    setScanResult(null)
+    setScanError('')
+    setScanBusy(false)
+    setFilePreviewOpen(false)
+    clearSelectedUploadFile()
+    setStudentLookupResult(null)
+    setStudentLookupError('')
+    setStudentLookupInfo('')
+    setStudentEntryMode('idle')
+    setForm({
+      ...buildDefaultUploadForm(),
+      category: roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || buildDefaultUploadForm().category,
+      uploadedBy: session?.fullName || session?.username || '',
+      faculty: placement?.faculty || '',
+      department: placement?.department || '',
+      academicYear: placement?.academicYear || '',
+      semester: placement?.semester || '',
+      issueDate: todayInputValue()
+    })
+    setModalOpen(true)
+  }
+
+  function closeUploadModal() {
+    setModalOpen(false)
+    setUploadSourceMode('file')
+    setScanResult(null)
+    setScanError('')
+    setScanBusy(false)
+    setFilePreviewOpen(false)
+    clearSelectedUploadFile()
+  }
+
   async function handleUpload(event) {
     event.preventDefault()
     if (!file) {
@@ -4218,7 +5267,7 @@ function App() {
       showNotice('Student uploads are limited to 5 MB per file.')
       return
     }
-    if (!isStudent) {
+    if (!isStudent && !usesPlacementUpload) {
       const normalizedId = normalizeStudentId(form.studentNumber)
       if (!normalizedId) {
         showNotice('Student ID is required.')
@@ -4237,54 +5286,61 @@ function App() {
         return
       }
     }
-    if (studentNeedsProfile && (!form.faculty || !form.department)) {
+    if (usesPlacementUpload) {
+      const normalizedId = normalizeStudentId(form.studentNumber)
+      if (!normalizedId) {
+        showNotice('Student ID is required.')
+        return
+      }
+    }
+    if (studentNeedsProfile && !usesPlacementUpload && (!form.faculty || !form.department)) {
       showNotice('Please select the faculty and department for this new student entry.')
       return
     }
-    if (!isStudent && !isExamOfficer) {
-      if (!String(form.academicYear || '').trim() || !String(form.semester || '').trim()) {
-        showNotice('Please select the academic year and semester for archive placement.')
-        return
-      }
+    if (usesPlacementUpload && studentEntryMode === 'new' && !String(form.studentName || '').trim()) {
+      showNotice('Enter the student name to link this new student ID.')
+      return
     }
-    if (isExamOfficer) {
-      const examTypeMeta = selectedExamTypeMeta || getExamPaperTypeMeta(form.examType)
-      const marksValue = Number(form.marks)
-      const requiredFields = [
-        form.academicYear,
-        form.semester,
-        form.course,
-        form.examRoom
-      ].every((value) => String(value || '').trim())
-      if (!form.examType || !requiredFields || form.marks === '' || Number.isNaN(marksValue)) {
-        showNotice('Please complete the exam type, year, semester, course, room, and marks fields.')
-        return
-      }
-      if (marksValue < 0 || marksValue > examTypeMeta.maxMarks) {
-        showNotice(`Marks must be between 0 and ${examTypeMeta.maxMarks} for ${examTypeMeta.label}.`)
-        return
-      }
+    if (usesPlacementUpload && (!form.faculty || !form.department || !form.academicYear || !form.semester)) {
+      showNotice('Upload placement could not be determined. Open a semester folder under a department and try again.')
+      return
     }
     setUploadBusy(true)
     try {
-      const marksValue = form.marks === '' ? null : Number(form.marks)
-      const payload = {
-        ...form,
-        studentNumber: normalizeStudentId(form.studentNumber),
-        title: isExamOfficer
-          ? buildExamTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
-          : getCategoryMeta(form.category).label,
-        pageCount: Number(form.pageCount),
-        marks: marksValue,
-        examType: isExamOfficer ? form.examType : null,
-        academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
-        semester: isStudent ? null : String(form.semester || '').trim() || null,
-        course: isExamOfficer ? String(form.course || '').trim() : null,
-        examRoom: isExamOfficer ? String(form.examRoom || '').trim() : null
-      }
+      const studentNumber = normalizeStudentId(form.studentNumber)
+      const resolvedPageCount = Number(scanResult?.pageCount || form.pageCount) || 1
+      const payload = usesPlacementUpload
+        ? {
+            studentNumber,
+            studentName: form.studentName,
+            faculty: form.faculty,
+            department: form.department,
+            uploadedBy: form.uploadedBy,
+            category: form.category,
+            pageCount: resolvedPageCount,
+            academicYear: String(form.academicYear || '').trim() || null,
+            semester: String(form.semester || '').trim() || null,
+            issueDate: todayInputValue(),
+            title: buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || studentNumber),
+            description: null,
+            tags: null,
+            examType: isExamOfficer ? '' : null,
+            course: isExamOfficer ? '' : null,
+            marks: isExamOfficer ? null : null,
+            examRoom: isExamOfficer ? '' : null
+          }
+        : {
+            ...form,
+            studentNumber,
+            title: getCategoryMeta(form.category).label,
+            pageCount: resolvedPageCount,
+            marks: form.marks === '' ? null : Number(form.marks),
+            academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
+            semester: isStudent ? null : String(form.semester || '').trim() || null
+          }
       await submitUpload(payload, file)
       showNotice('Document uploaded successfully.')
-      setModalOpen(false)
+      closeUploadModal()
       setFile(null)
       setScanResult(null)
       setScanError('')
@@ -4299,6 +5355,20 @@ function App() {
       setUploadBusy(false)
     }
   }
+
+  const profileMenu = (
+    <ProfileMenu
+      avatarLabel={avatarLabel}
+      departmentLabel={departmentLabel}
+      studentNumber={session.studentNumber}
+      isStudent={isStudent}
+      storageUsedBytes={data.storageUsedBytes}
+      storageLimitBytes={data.storageLimitBytes}
+      storagePercent={storagePercent}
+      onLogout={handleLogout}
+      formatBytes={formatBytes}
+    />
+  )
 
   return (
     <div className="app-shell">
@@ -4326,7 +5396,7 @@ function App() {
                   {sidebarQuickAccess.map((item) => {
                     const Icon = item.icon
                     const isActive = !isFolderRoute && (
-                      (item.action === 'dashboard' && dashboardView === 'default')
+                      (item.action === 'dashboard' && dashboardView === 'default' && !selectedAdminOffice)
                       || (item.action === 'recent' && dashboardView === 'recent')
                       || (item.action === 'archive' && dashboardView === 'archive')
                       || (item.action === 'shared' && dashboardView === 'shared')
@@ -4394,7 +5464,7 @@ function App() {
                   <button
                     key={office.role}
                     type="button"
-                    className={`office-link ${selectedAdminOffice === office.role && !isFolderRoute && dashboardView === 'default' ? 'active' : ''}`}
+                    className={`office-link ${selectedAdminOffice === office.role ? 'active' : ''}`}
                     onClick={() => openAdminOffice(office.role)}
                     title={office.summary}
                   >
@@ -4427,41 +5497,9 @@ function App() {
               onOpenFolder={openFolder}
               onDeleteFolder={handleTreeDeleteFolder}
               onFolderContextMenu={handleFolderContextMenu}
-              onAddFolder={handleTreeAddFolder}
-              allowAddFolder={allowTreeAddFolder}
-              allowDeleteFolder={session.role !== 'REGISTRAR'}
-              treeFilter={treeFilter}
-              onTreeFilterChange={setTreeFilter}
-              treeFilterOpen={treeFilterOpen}
-              onToggleTreeFilter={() => setTreeFilterOpen((current) => !current)}
+              allowDeleteFolder={false}
             />
           ) : null}
-
-          <div className="sidebar-bottom">
-            <div className="sidebar-footer">
-              <p className="eyebrow">{isStudent ? 'Personal storage' : 'Department Storage'}</p>
-              <div className="storage-meter">
-                <div className="storage-fill" style={{ width: `${storagePercent}%` }} />
-              </div>
-              <div className="storage-copy">
-                <span>{formatBytes(data.storageUsedBytes)} used</span>
-                <span>{formatBytes(data.storageLimitBytes)}</span>
-              </div>
-            </div>
-
-            <div className="sidebar-account sidebar-account-compact">
-              <div className="sidebar-account-row">
-                <div className="avatar avatar-sm">{avatarLabel}</div>
-                <div className="profile-copy">
-                  <strong>{session.fullName || data.userName || 'Archive user'}</strong>
-                  <span>{session.roleLabel || roleConfig.roleLabel}</span>
-                </div>
-                <button type="button" className="sidebar-logout-link" onClick={handleLogout}>
-                  Logout
-                </button>
-              </div>
-            </div>
-          </div>
         </aside>
 
         <main className="main-panel">
@@ -4500,9 +5538,10 @@ function App() {
               busy={searchBusy || (Boolean(searchQuery.trim()) && searchQuery.trim() !== settledSearchQuery)}
               results={searchResults}
               studentProfile={studentSearchProfile}
-              mode={session.role === 'REGISTRAR' ? 'registrar' : 'documents'}
+              mode={usesOfficeDashboardFormat(session.role) ? 'registrar' : 'documents'}
               onClear={() => setSearchQuery('')}
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+              onDownloadDocument={handleDownloadDocumentById}
               onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
             />
           ) : null}
@@ -4514,7 +5553,7 @@ function App() {
               userRole={session.role}
               studentNumber={session.studentNumber}
               onOpenFolder={openFolder}
-              onUpload={() => setModalOpen(true)}
+              onUpload={openUploadModal}
               onSubmitFinalYearProject={() => {
                 setStudentFypEditId(null)
                 setStudentFypWizardOpen(true)
@@ -4531,9 +5570,10 @@ function App() {
               onNotify={showNotice}
               onDataChange={refreshExplorerData}
               onArchivedChange={handleArchivedChange}
+              addressBarActions={profileMenu}
             />
           ) : isAdmin && dashboardView === 'default' ? (
-            <div className="dashboard-workspace">
+            <div className={`dashboard-workspace${selectedAdminOffice ? ' dashboard-workspace-admin-office' : ' dashboard-workspace-admin'}`}>
               <header className="dash-header dash-header-staff">
                 <div className="dash-header-copy">
                   <nav className="dash-crumbs" aria-label="Breadcrumb">
@@ -4542,10 +5582,15 @@ function App() {
                     <strong>{selectedAdminOffice ? (adminOffices.find((office) => office.role === selectedAdminOffice)?.label || 'Office') : dashboardLabel}</strong>
                   </nav>
                   <h1>{selectedAdminOffice ? (adminOffices.find((office) => office.role === selectedAdminOffice)?.label || 'Office') : dashboardLabel}</h1>
-                  <span className="dash-meta">
-                    {formatLongDate(new Date())}
-                    {data.lastSignIn ? ` · Signed in ${data.lastSignIn}` : ''}
-                  </span>
+                </div>
+                <div
+                  className={`dash-header-meta-center${showOfficeDashboardFormat ? ' dash-header-meta-lower' : ''}`}
+                  aria-label="Session details"
+                >
+                  <DashboardSessionMeta lastSignIn={data.lastSignIn} />
+                </div>
+                <div className="dash-header-actions">
+                  {profileMenu}
                 </div>
               </header>
               {showStaffDashboardSearch && !selectedAdminOffice ? (
@@ -4579,17 +5624,65 @@ function App() {
                   studentProfile={studentSearchProfile}
                   onClear={() => setSearchQuery('')}
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+                  onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                 />
               ) : null}
               {selectedAdminOffice ? (
-                <AdminOfficeView
-                  officeRole={selectedAdminOffice}
-                  archiveTree={data.archiveTree || []}
-                  onNotify={showNotice}
-                  onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId)}
-                  onBack={() => setSelectedAdminOffice(null)}
-                />
+                <div className="admin-office-workspace">
+                  <div className="admin-office-panel-bar">
+                    <div className="admin-dashboard-tabs">
+                      <button
+                        type="button"
+                        className={`admin-dashboard-tab ${adminOfficePanel === 'tree' ? 'active' : ''}`}
+                        onClick={() => setAdminOfficePanel('tree')}
+                      >
+                        Archive tree
+                      </button>
+                      <button
+                        type="button"
+                        className={`admin-dashboard-tab ${adminOfficePanel === 'activity' ? 'active' : ''}`}
+                        onClick={() => setAdminOfficePanel('activity')}
+                      >
+                        Live activity
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost-btn admin-office-back"
+                      onClick={() => setSelectedAdminOffice(null)}
+                    >
+                      Back to system dashboard
+                    </button>
+                  </div>
+                  {adminOfficePanel === 'tree' ? (
+                    <div className="admin-card admin-office-tree-card admin-office-tree-primary">
+                      <div className="admin-activity-head">
+                        <div>
+                          <h2>{adminArchiveTreeTitle}</h2>
+                          <p>Browse archive folders for this office.</p>
+                        </div>
+                      </div>
+                      <ArchiveTreePanel
+                        nodes={adminArchiveTree}
+                        activeFolderId={activeFolderId}
+                        onOpenFolder={openFolder}
+                        onDeleteFolder={handleTreeDeleteFolder}
+                        onFolderContextMenu={handleFolderContextMenu}
+                        allowDeleteFolder={false}
+                        embedded
+                      />
+                    </div>
+                  ) : (
+                    <AdminOfficeView
+                      officeRole={selectedAdminOffice}
+                      onNotify={showNotice}
+                      onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId)}
+                      onBack={() => setSelectedAdminOffice(null)}
+                      onShowArchiveTree={() => setAdminOfficePanel('tree')}
+                    />
+                  )}
+                </div>
               ) : (
                 <AdminDashboard onNotify={showNotice} />
               )}
@@ -4614,6 +5707,7 @@ function App() {
                 }
               }}
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+              profileMenu={profileMenu}
             />
           ) : (
             <div className="dashboard-workspace">
@@ -4622,22 +5716,15 @@ function App() {
                   <nav className="dash-crumbs" aria-label="Breadcrumb">
                     <span>Archive</span>
                     <ChevronRightIcon className="icon small" />
-                    <span>Recent activity</span>
-                    <ChevronRightIcon className="icon small" />
-                    <strong>{selectedCategoryMeta?.label || dashboardLabel}</strong>
+                    <strong>{showOfficeDashboardFormat ? dashboardLabel : (selectedCategoryMeta?.label || dashboardLabel)}</strong>
                   </nav>
                   <h1>{dashboardLabel}</h1>
                 </div>
-                <div className="dash-header-meta-center" aria-label="Session details">
-                  <span className="dash-meta">
-                    <span className="dash-meta-date">{formatLongDate(new Date())}</span>
-                    {data.lastSignIn ? (
-                      <>
-                        <span className="dash-meta-sep" aria-hidden="true" />
-                        <span className="dash-meta-signin">Signed in {data.lastSignIn}</span>
-                      </>
-                    ) : null}
-                  </span>
+                <div
+                  className={`dash-header-meta-center${showOfficeDashboardFormat ? ' dash-header-meta-lower' : ''}`}
+                  aria-label="Session details"
+                >
+                  <DashboardSessionMeta lastSignIn={data.lastSignIn} />
                 </div>
                 <div className="dash-header-actions">
                   {!hideHeaderBrowse ? (
@@ -4655,12 +5742,13 @@ function App() {
                       Browse
                     </button>
                   ) : null}
-                  {!isRegistrar && !isHod ? (
-                    <button className="primary-btn dash-action-btn" type="button" onClick={() => setModalOpen(true)}>
+                  {!showOfficeDashboardFormat && !isHod ? (
+                    <button className="primary-btn dash-action-btn" type="button" onClick={openUploadModal}>
                       <UploadIcon className="icon" />
                       Upload
                     </button>
                   ) : null}
+                  {profileMenu}
                 </div>
               </header>
 
@@ -4671,8 +5759,8 @@ function App() {
                     <input
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
-                      placeholder="Type a file name or ID — matching documents appear when you finish typing..."
-                      aria-label="Search archive documents and locations"
+                      placeholder="Search by letter, number, student ID, folder, or file across departments..."
+                      aria-label="Archive search across departments"
                     />
                     {searchQuery ? (
                       <button
@@ -4697,11 +5785,12 @@ function App() {
                   mode="registrar"
                   onClear={() => setSearchQuery('')}
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+                  onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                 />
               ) : null}
 
-              {visibleDocumentCategories.length && !isRegistrar ? (
+              {visibleDocumentCategories.length && !showOfficeDashboardFormat ? (
                 <nav className="dash-filters" aria-label="Activity areas">
                   <button
                     type="button"
@@ -4733,16 +5822,16 @@ function App() {
                 </nav>
               ) : null}
 
-              <section className={`dash-metrics ${isRegistrar ? 'dash-metrics-registrar' : ''}`}>
+              <section className={`dash-metrics ${showOfficeDashboardFormat ? 'dash-metrics-registrar' : ''}`}>
                 <StatCard label="Uploaded this week" value={data.recentlyUploaded} caption="new files" accent="upload" />
-                {!isRegistrar ? (
+                {!showOfficeDashboardFormat ? (
                   <StatCard label="Pending approvals" value={data.pendingApprovals} caption="in your queue" accent="approvals" />
                 ) : null}
                 <StatCard label="Department files" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
                 <StatCard label="Storage" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
               </section>
 
-              <section className="dash-grid">
+              <section className={`dash-grid ${showOfficeDashboardFormat ? 'dash-grid-single' : ''}`}>
                 <div className="dash-panel dash-panel-main">
                   <div className="dash-panel-head">
                     <div>
@@ -4763,10 +5852,10 @@ function App() {
                           : dashboardView === 'shared'
                             ? 'Folders and files shared with your role. Open an item to view it with the granted permission.'
                             : dashboardView === 'recent'
-                              ? 'Actions recorded in the last 7 days.'
+                              ? 'Actions recorded today. Older activity stays in Department activity.'
                               : selectedCategoryMeta
-                                ? `Recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
-                                : 'Recent actions across your department workspace.'}
+                                ? `Recent actions for ${selectedCategoryMeta.label.toLowerCase()}, including earlier days.`
+                                : 'Full activity history for your department, including items that leave Recent activity after today.'}
                       </p>
                     </div>
                     <div className="dash-panel-actions">
@@ -4925,28 +6014,21 @@ function App() {
                             <td colSpan="4" className="empty-state">Loading activity...</td>
                           </tr>
                         ) : dashboardActivities.length ? (
-                          dashboardActivities.filter((entry) => session.role !== 'HOD' || (!String(entry.actor || '').toLowerCase().includes('librarian') && !String(entry.message || '').toLowerCase().includes('librarian'))).map((entry) => (
-                            <tr key={entry.id}>
-                              <td>
-                                <div className="file-cell">
-                                  <ActivityDot category={entry.category} />
-                                  <div>
-                                    <strong>{entry.message}</strong>
-                                  </div>
-                                </div>
-                              </td>
-                              <td>{entry.actor}</td>
-                              <td>
-                                <span className="document-chip">{activityCategoryLabel(entry.category)}</span>
-                              </td>
-                              <td>{formatDateTime(entry.createdAt)}</td>
-                            </tr>
-                          ))
+                          dashboardView === 'recent' ? (
+                            dashboardActivities.map((entry) => (
+                              <DashboardActivityRow key={entry.id} entry={entry} />
+                            ))
+                          ) : (
+                            <>
+                              <DashboardActivityGroup label="Today" entries={groupedDashboardActivities.today} />
+                              <DashboardActivityGroup label="Earlier" entries={groupedDashboardActivities.earlier} />
+                            </>
+                          )
                         ) : (
                           <tr>
                             <td colSpan="4" className="empty-state">
                               {dashboardView === 'recent'
-                                ? 'No activity recorded in the last 7 days.'
+                                ? 'No activity recorded today. Older actions remain in Department activity.'
                                 : selectedCategoryMeta
                                   ? `No recent actions for ${selectedCategoryMeta.label.toLowerCase()}.`
                                   : 'No activity recorded yet.'}
@@ -4958,6 +6040,7 @@ function App() {
                   </div>
                 </div>
 
+                {!showOfficeDashboardFormat ? (
                 <aside className="dash-panel dash-panel-side">
                   <div className="dash-panel-head dash-panel-head-inline">
                     <h2>Approvals</h2>
@@ -5006,65 +6089,8 @@ function App() {
                       <p className="dash-side-empty">Nothing waiting for approval.</p>
                     )}
                   </div>
-
-                  <div className="dash-side-block">
-                    <div className="dash-panel-head dash-panel-head-inline">
-                      <h3>Student lookup</h3>
-                      <span className="dash-count">{studentLookupResult?.documentCount || 0}</span>
-                    </div>
-                    <div className="lookup-form">
-                      <input
-                        value={studentLookupQuery}
-                        onChange={(event) => {
-                          setStudentLookupQuery(event.target.value)
-                          setStudentLookupError('')
-                          setStudentLookupInfo('')
-                        }}
-                        placeholder="Student ID"
-                      />
-                      <button
-                        type="button"
-                        className="primary-btn lookup-button"
-                        onClick={() => lookupStudentArchive(studentLookupQuery)}
-                        disabled={studentLookupBusy}
-                      >
-                        {studentLookupBusy ? 'Searching...' : 'Search student'}
-                      </button>
-                    </div>
-                    {studentLookupError ? <div className="lookup-error">{studentLookupError}</div> : null}
-                    {!studentLookupError && studentLookupInfo ? <div className="lookup-info">{studentLookupInfo}</div> : null}
-                    {studentLookupResult ? (
-                      <div className="lookup-result">
-                        <button
-                          type="button"
-                          className="lookup-summary lookup-summary-link"
-                          onClick={() => handleOpenArchiveFolder(studentLookupResult.folderId, studentLookupResult.studentNumber)}
-                          title="Open student archive folder"
-                        >
-                          <strong>{studentLookupResult.studentName}</strong>
-                          <span>{studentLookupResult.studentNumber}</span>
-                          <span>{studentLookupResult.documentCount} documents</span>
-                          <span className="lookup-open-folder">Open folder</span>
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="dash-side-block dash-side-block-muted">
-                    <h3>Recent activity</h3>
-                    <div className="dash-activity-list">
-                      {(data.departmentActivity || []).map((entry) => (
-                        <div key={entry.id} className="dash-activity-row">
-                          <ActivityDot category={entry.category} />
-                          <div>
-                            <strong>{entry.message}</strong>
-                            <span>{entry.actor} - {formatDate(entry.createdAt)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                 </aside>
+                ) : null}
               </section>
 
               {error ? <div className="banner warning">{error}</div> : null}
@@ -5151,31 +6177,170 @@ function App() {
       ) : null}
 
       {modalOpen ? (
-        <div className="modal-backdrop" onClick={() => setModalOpen(false)} role="presentation">
-          <div className="modal" onClick={(event) => event.stopPropagation()} role="presentation">
-            <div className="modal-head">
-              <div>
-                <p className="eyebrow">Upload Document</p>
-                <h2>Add a new record to the archive</h2>
+        <div className="modal-backdrop" onClick={closeUploadModal} role="presentation">
+          <div className={`modal upload-modal${usesPlacementUpload ? ' upload-modal-compact' : ''}`} onClick={(event) => event.stopPropagation()} role="presentation">
+            <div className="modal-head upload-modal-head">
+              <div className="upload-modal-intro">
+                {!usesPlacementUpload ? (
+                  <div className="upload-modal-icon" aria-hidden="true">
+                    <UploadIcon className="icon" />
+                  </div>
+                ) : null}
+                <div>
+                  {!usesPlacementUpload ? <p className="eyebrow">Upload Document</p> : null}
+                  <h2>Add a new record to the archive</h2>
+                  {!usesPlacementUpload ? (
+                    <p className="upload-modal-subtitle">
+                      {isStudent
+                        ? 'Submit your final year project for librarian review.'
+                        : 'Complete the form and attach a PDF to store it in the archive.'}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-              <button className="ghost-icon" type="button" onClick={() => setModalOpen(false)}>
+              <button className="ghost-icon" type="button" onClick={closeUploadModal} aria-label="Close upload dialog">
                 <XIcon className="icon" />
               </button>
             </div>
 
             <form className="upload-form" onSubmit={handleUpload}>
-              <div className="title-banner">
-                <div>
-                  <p className="eyebrow">{isExamOfficer ? 'Exam title' : 'Document title'}</p>
-                  <strong>{examTitlePreview}</strong>
-                  <span>
-                    {isExamOfficer
-                      ? 'Auto-generated from the exam type, course, year, semester, and student ID.'
-                      : 'Auto-generated from the selected document type.'}
-                  </span>
-                </div>
-                <span className="title-chip">{isExamOfficer ? selectedExamTypeMeta?.label || 'Exam' : getCategoryMeta(form.category).value}</span>
-              </div>
+
+              {usesPlacementUpload ? (
+                <section className="upload-student-panel">
+                  <label className="lookup-field">
+                    <span>Student ID</span>
+                    <div className="lookup-input-row">
+                      <input
+                        value={form.studentNumber}
+                        onChange={(event) => {
+                          const nextNumber = normalizeStudentId(event.target.value)
+                          setForm(applyUploadPlacementContext({ ...form, studentNumber: nextNumber }, uploadPlacement))
+                          setStudentLookupError('')
+                          setStudentLookupInfo('')
+                          setStudentLookupResult(null)
+                          setStudentEntryMode('idle')
+                        }}
+                        onBlur={() => {
+                          if (form.studentNumber.trim()) {
+                            lookupStudentArchive(form.studentNumber, { populateForm: true })
+                          }
+                        }}
+                        placeholder="e.g. 25883, 25678965 or 20251SEN001"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        className="ghost-btn lookup-action"
+                        onClick={() => lookupStudentArchive(form.studentNumber, { populateForm: true })}
+                        disabled={studentLookupBusy}
+                      >
+                        {studentLookupBusy ? 'Checking...' : 'Find'}
+                      </button>
+                    </div>
+                    {studentLookupError && form.studentNumber.trim() ? <small className="lookup-hint error">{studentLookupError}</small> : null}
+                    {studentLookupInfo && form.studentNumber.trim() ? <small className="lookup-hint info">{studentLookupInfo}</small> : null}
+                  </label>
+
+                  {studentLookupResult?.studentNumber === String(form.studentNumber || '').trim() ? (
+                    <div className="upload-student-found">
+                      <div>
+                        <strong>{studentLookupResult.studentName}</strong>
+                        <span>
+                          {studentLookupResult.studentNumber}
+                          {formatExistingStudentPlacement(studentLookupResult)
+                            ? ` · ${formatExistingStudentPlacement(studentLookupResult)}`
+                            : form.department
+                              ? ` · ${form.department}`
+                              : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghost-btn tiny-btn"
+                        onClick={() => handleOpenArchiveFolder(studentLookupResult.folderId, studentLookupResult.studentNumber)}
+                      >
+                        Open folder
+                      </button>
+                    </div>
+                  ) : studentEntryMode === 'new' && form.studentNumber.trim() ? (
+                    <>
+                      <label>
+                        <span>Student name (link this ID)</span>
+                        <input
+                          value={form.studentName}
+                          onChange={(event) => setForm({ ...form, studentName: event.target.value })}
+                          placeholder="Full name for this student ID"
+                        />
+                      </label>
+                      {!form.faculty || !form.department ? (
+                        <p className="inline-note">
+                          {uploadPlacementSummary
+                            ? `This student will be linked under ${uploadPlacementSummary}.`
+                            : 'Faculty and department follow the folder you opened for upload.'}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {usesPlacementUpload ? (
+                <section className="exam-details-panel">
+                  <div className="exam-details-head">
+                    <div>
+                      <p className="eyebrow">Upload Details</p>
+                      {effectiveUploadPlacementSummary ? (
+                        <strong className="upload-placement-summary">{effectiveUploadPlacementSummary}</strong>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="exam-details-grid upload-context-grid">
+                    <div className="upload-context-field">
+                      <span>Faculty</span>
+                      <strong>{form.faculty || '—'}</strong>
+                    </div>
+                    <div className="upload-context-field">
+                      <span>Department</span>
+                      <strong>{form.department || '—'}</strong>
+                    </div>
+                    <div className="upload-context-field">
+                      <span>Academic year</span>
+                      <strong>{form.academicYear || '—'}</strong>
+                    </div>
+                    <div className="upload-context-field">
+                      <span>Semester</span>
+                      <strong>{form.semester || '—'}</strong>
+                    </div>
+                    <div className="upload-context-field">
+                      <span>Date</span>
+                      <strong>{formatDisplayDate(form.issueDate)}</strong>
+                    </div>
+                  </div>
+
+                  {!documentTypeLocked ? (
+                    <label className="upload-type-field">
+                      <span>Document type</span>
+                      <select
+                        value={form.category}
+                        onChange={(event) => setForm({ ...form, category: event.target.value })}
+                      >
+                        {visibleDocumentCategories.map((category) => (
+                          <option key={category.value} value={category.value}>
+                            {category.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  {form.academicYear && form.semester && (form.studentNumber?.trim() || studentLookupResult?.studentNumber) ? (
+                    <p className="upload-generated-title">
+                      Generated title: <strong>{uploadTitlePreview}</strong>
+                    </p>
+                  ) : null}
+                </section>
+              ) : null}
 
               {isStudent ? (
                 <div className="student-upload-banner">
@@ -5188,7 +6353,7 @@ function App() {
                 </div>
               ) : null}
 
-              {studentLookupResult && !isStudent ? (
+              {studentLookupResult && !isStudent && !usesPlacementUpload ? (
                 <div className="student-summary-bar">
                   <div className="student-summary-copy">
                     <p className="eyebrow">Student profile</p>
@@ -5210,29 +6375,7 @@ function App() {
                 </div>
               ) : null}
 
-              {isExamOfficer ? (
-                <div className="exam-path-banner">
-                  <div>
-                    <p className="eyebrow">Archive folder path</p>
-                    <strong>
-                      {[
-                        form.department || 'Department',
-                        String(form.academicYear || '').trim(),
-                        String(form.semester || '').trim(),
-                        String(form.studentNumber || '').trim(),
-                        selectedExamTypeMeta?.label,
-                        String(form.course || '').trim()
-                      ].filter(Boolean).join(' / ')}
-                    </strong>
-                    <span>Documents are stored under the department year, semester, student, and exam folders.</span>
-                  </div>
-                  <span className="title-chip">
-                    {selectedExamTypeMeta?.maxMarks ? `Max ${selectedExamTypeMeta.maxMarks}` : 'Marks'}
-                  </span>
-                </div>
-              ) : null}
-
-              {!isStudent && !isExamOfficer ? (
+              {!isStudent && !usesPlacementUpload ? (
                 <section className="exam-details-panel">
                   <div className="exam-details-head">
                     <div>
@@ -5245,24 +6388,14 @@ function App() {
                   </div>
 
                   <div className="exam-details-grid">
-                    <label>
-                      <span>Academic year</span>
-                      <select
-                        value={form.academicYear}
-                        onChange={(event) => setForm((current) => ({
-                          ...current,
-                          academicYear: event.target.value,
-                          semester: ''
-                        }))}
-                      >
-                        <option value="">Select academic year</option>
-                        {ACADEMIC_YEARS.map((year) => (
-                          <option key={year} value={year}>
-                            {year}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <AcademicYearField
+                      value={form.academicYear}
+                      onChange={(year) => setForm((current) => ({
+                        ...current,
+                        academicYear: year,
+                        semester: ''
+                      }))}
+                    />
                     <label>
                       <span>Semester</span>
                       <select
@@ -5282,8 +6415,8 @@ function App() {
                 </section>
               ) : null}
 
-              <div className="form-grid">
-                {!isStudent ? (
+              <div className={`form-grid${usesPlacementUpload ? ' form-grid-compact' : ''}`}>
+                {!isStudent && !usesPlacementUpload ? (
                   <label className="lookup-field">
                     <span>Student ID</span>
                     <div className="lookup-input-row">
@@ -5297,7 +6430,7 @@ function App() {
                           setStudentLookupResult(null)
                           setStudentEntryMode('idle')
                         }}
-                        placeholder="e.g. 20251SEN001 or 25876"
+                        placeholder="e.g. 20251SEN001, 25883 or 25678965"
                       />
                       <button
                         type="button"
@@ -5317,7 +6450,7 @@ function App() {
                     {studentLookupInfo && form.studentNumber.trim() ? <small className="lookup-hint info">{studentLookupInfo}</small> : null}
                   </label>
                 ) : null}
-                {!isStudent ? (
+                {!isStudent && !usesPlacementUpload ? (
                   <label>
                     <span>Student name</span>
                     <input
@@ -5327,65 +6460,66 @@ function App() {
                     />
                   </label>
                 ) : null}
-                {documentTypeLocked ? (
-                  <div className="title-banner locked-category">
-                    <div>
-                      <p className="eyebrow">Document type</p>
-                      <strong>{getCategoryMeta(form.category).label}</strong>
-                      <span>
-                        {isExamOfficer
-                          ? 'This role only uploads exam papers.'
-                          : isStudent
+                {!usesPlacementUpload ? (
+                  documentTypeLocked ? (
+                    <div className="upload-role-note">
+                      <div>
+                        <p className="eyebrow">Document type</p>
+                        <strong>{getCategoryMeta(form.category).label}</strong>
+                        <span>
+                          {isStudent
                             ? 'Students can only upload final year project documents.'
                             : 'This role only uploads this document category.'}
-                      </span>
+                        </span>
+                      </div>
                     </div>
-                    <span className="title-chip">Locked</span>
-                  </div>
-                ) : (
+                  ) : (
+                    <label>
+                      <span>Document type</span>
+                      <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
+                        {studentDocumentCategories.map((category) => (
+                          <option key={category.value} value={category.value}>
+                            {category.label}
+                          </option>
+                        ))}
+                      </select>
+                      <small className="lookup-hint">
+                        {`Title will default to ${getCategoryMeta(form.category).label}.`}
+                      </small>
+                    </label>
+                  )
+                ) : null}
+                {!usesPlacementUpload ? (
                   <label>
-                    <span>Document type</span>
-                    <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
-                      {studentDocumentCategories.map((category) => (
-                        <option key={category.value} value={category.value}>
-                          {category.label}
-                        </option>
-                      ))}
-                    </select>
-                    <small className="lookup-hint">
-                      {isExamOfficer
-                        ? 'Title is generated from the exam type, course, year, semester, and student ID.'
-                        : `Title will default to ${getCategoryMeta(form.category).label}.`}
-                    </small>
+                    <span>Page count</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={form.pageCount}
+                      onChange={(event) => setForm({ ...form, pageCount: event.target.value })}
+                    />
                   </label>
-                )}
-                <label>
-                  <span>Page count</span>
-                  <input
-                    type="number"
-                    min="1"
-                    value={form.pageCount}
-                    onChange={(event) => setForm({ ...form, pageCount: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{isExamOfficer ? 'Exam date' : 'Issue date'}</span>
-                  <input
-                    type="date"
-                    value={form.issueDate}
-                    onChange={(event) => setForm({ ...form, issueDate: event.target.value })}
-                  />
-                </label>
+                ) : null}
+                {!usesPlacementUpload ? (
+                  <label>
+                    <span>Issue date</span>
+                    <input
+                      type="date"
+                      value={form.issueDate}
+                      onChange={(event) => setForm({ ...form, issueDate: event.target.value })}
+                    />
+                  </label>
+                ) : null}
                 <label>
                   <span>Uploaded by</span>
                   <input
                     value={form.uploadedBy}
                     onChange={(event) => setForm({ ...form, uploadedBy: event.target.value })}
                     placeholder="Will default from your account"
-                    readOnly={isStudent}
+                    readOnly={isStudent || usesPlacementUpload}
                   />
                 </label>
-                {!isExamOfficer ? (
+                {!usesPlacementUpload ? (
                   <label>
                     <span>Tags</span>
                     <input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="Optional" />
@@ -5393,103 +6527,7 @@ function App() {
                 ) : null}
               </div>
 
-              {isExamOfficer ? (
-                <section className="exam-details-panel">
-                  <div className="exam-details-head">
-                    <div>
-                      <p className="eyebrow">Exam details</p>
-                      <strong>Capture the paper metadata once and keep it searchable.</strong>
-                    </div>
-                    <span className="inline-note">
-                      {selectedExamTypeMeta?.summary || 'Choose the exam type first so marks validation is applied automatically.'}
-                    </span>
-                  </div>
-
-                  <div className="exam-details-grid">
-                    <label>
-                      <span>Exam type</span>
-                      <select
-                        value={form.examType}
-                        onChange={(event) => setForm((current) => ({
-                          ...current,
-                          examType: event.target.value
-                        }))}
-                      >
-                        {examPaperTypes.map((examType) => (
-                          <option key={examType.value} value={examType.value}>
-                            {examType.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Academic year</span>
-                      <select
-                        value={form.academicYear}
-                        onChange={(event) => setForm((current) => ({
-                          ...current,
-                          academicYear: event.target.value,
-                          semester: ''
-                        }))}
-                      >
-                        <option value="">Select academic year</option>
-                        {ACADEMIC_YEARS.map((year) => (
-                          <option key={year} value={year}>
-                            {year}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Semester</span>
-                      <select
-                        value={form.semester}
-                        onChange={(event) => setForm((current) => ({ ...current, semester: event.target.value }))}
-                        disabled={!form.academicYear}
-                      >
-                        <option value="">Select semester</option>
-                        {archiveSemesterOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>Course</span>
-                      <input
-                        value={form.course}
-                        onChange={(event) => setForm((current) => ({ ...current, course: event.target.value }))}
-                        placeholder="e.g. Software Engineering"
-                      />
-                    </label>
-                    <label>
-                      <span>Marks</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max={selectedExamTypeMeta?.maxMarks || 40}
-                        value={form.marks}
-                        onChange={(event) => setForm((current) => ({ ...current, marks: event.target.value }))}
-                        placeholder={`0 - ${selectedExamTypeMeta?.maxMarks || 40}`}
-                      />
-                      <small className="lookup-hint">
-                        {selectedExamTypeMeta ? `Must be between 0 and ${selectedExamTypeMeta.maxMarks}.` : 'Select an exam type to see the mark limit.'}
-                      </small>
-                    </label>
-                    <label>
-                      <span>Room</span>
-                      <input
-                        value={form.examRoom}
-                        onChange={(event) => setForm((current) => ({ ...current, examRoom: event.target.value }))}
-                        placeholder="e.g. Room A2"
-                      />
-                    </label>
-                  </div>
-                </section>
-              ) : null}
-
-              {studentNeedsProfile ? (
+              {studentNeedsProfile && !usesPlacementUpload ? (
                 <section className="student-profile-panel">
                   <div>
                     <p className="eyebrow">
@@ -5551,34 +6589,117 @@ function App() {
                 </section>
               ) : null}
 
-              {studentLookupResult && !studentNeedsProfile ? (
+              {studentLookupResult && !studentNeedsProfile && !usesPlacementUpload ? (
                 <p className="inline-note">
                   Stored faculty and department will be reused automatically for this student.
                 </p>
               ) : null}
 
-              {!isExamOfficer ? (
+              {!usesPlacementUpload ? (
                 <label className="full-width">
                   <span>Description</span>
                   <textarea rows="4" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
                 </label>
               ) : null}
 
-              <label className="full-width file-picker">
-                <span>File</span>
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  onChange={(event) => {
-                    const nextFile = event.target.files?.[0] || null
-                    setFile(nextFile)
+              <section className="upload-source-tabs" aria-label="Upload source">
+                <button
+                  type="button"
+                  className={`upload-source-tab ${uploadSourceMode === 'file' ? 'active' : ''}`}
+                  onClick={() => setUploadSourceMode('file')}
+                >
+                  Upload PDF
+                </button>
+                <button
+                  type="button"
+                  className={`upload-source-tab ${uploadSourceMode === 'phone' ? 'active' : ''}`}
+                  onClick={() => setUploadSourceMode('phone')}
+                >
+                  Phone scanner
+                </button>
+              </section>
+
+              {uploadSourceMode === 'phone' ? (
+                <UploadPhoneScanPanel
+                  onNotify={showNotice}
+                  onImport={(importedFile, pageCount) => {
+                    setUploadSourceMode('file')
+                    setFile(importedFile)
                     setScanResult(null)
                     setScanError('')
+                    if (pageCount) {
+                      setForm((current) => ({ ...current, pageCount }))
+                    }
                   }}
                 />
-              </label>
+              ) : null}
 
-              {file ? (
+              {uploadSourceMode === 'file' ? (
+              <div className="upload-file-section full-width">
+                <span className="upload-file-label">File</span>
+                <input
+                  ref={uploadFileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="upload-file-input-hidden"
+                  onChange={async (event) => {
+                    const nextFile = event.target.files?.[0] || null
+                    await handleUploadFileSelect(nextFile, event.target)
+                  }}
+                />
+                {!file ? (
+                  <button
+                    type="button"
+                    className="upload-file-choose"
+                    onClick={() => uploadFileInputRef.current?.click()}
+                  >
+                    Choose PDF
+                  </button>
+                ) : (
+                  <div className="upload-file-card">
+                    <div className="upload-file-card-copy">
+                      <strong>{file.name}</strong>
+                      <span>
+                        {formatBytes(file.size)}
+                        {form.pageCount ? ` · ${form.pageCount} page${Number(form.pageCount) === 1 ? '' : 's'}` : ''}
+                      </span>
+                    </div>
+                    <div className="upload-file-card-actions">
+                      <button
+                        type="button"
+                        className="ghost-btn tiny-btn"
+                        onClick={() => setFilePreviewOpen((current) => !current)}
+                      >
+                        {filePreviewOpen ? 'Hide preview' : 'Preview'}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-btn tiny-btn"
+                        onClick={() => uploadFileInputRef.current?.click()}
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-btn tiny-btn"
+                        onClick={clearSelectedUploadFile}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    {filePreviewOpen && filePreviewUrl ? (
+                      <iframe
+                        className="upload-file-preview"
+                        src={filePreviewUrl}
+                        title={`Preview ${file.name}`}
+                      />
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              ) : null}
+
+              {uploadSourceMode === 'file' && file ? (
                 <div className={`upload-scan-panel ${scanBusy ? 'is-scanning' : scanResult?.verified ? 'is-verified' : scanResult ? 'is-rejected' : ''}`}>
                   {scanBusy ? (
                     <>
@@ -5617,13 +6738,17 @@ function App() {
               ) : null}
 
               <div className="modal-actions">
-                <button type="button" className="ghost-btn" onClick={() => setModalOpen(false)}>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={closeUploadModal}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="primary-btn"
-                  disabled={uploadBusy || scanBusy || (file && !scanResult?.verified)}
+                  disabled={!file || uploadBusy || scanBusy || !scanResult?.verified}
                 >
                   <UploadIcon className="icon" />
                   {uploadBusy ? 'Uploading...' : 'Upload to archive'}

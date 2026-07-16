@@ -7,9 +7,12 @@ import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.ExamPaperType;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
+import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.dto.DocumentDetailResponse;
 import com.auca.archive.dto.DocumentListItemResponse;
+import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.UploadDocumentRequest;
+import com.auca.archive.util.FileSignatureValidator;
 import com.auca.archive.model.ApprovalTaskEntity;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
@@ -293,6 +296,18 @@ public class DocumentService {
             String rawRole,
             String rawStudentNumber
     ) throws IOException {
+        return upload(request, file, coverPhoto, rawRole, rawStudentNumber, RequestActor.empty());
+    }
+
+    @Transactional
+    public DocumentDetailResponse upload(
+            UploadDocumentRequest request,
+            MultipartFile file,
+            MultipartFile coverPhoto,
+            String rawRole,
+            String rawStudentNumber,
+            RequestActor requestActor
+    ) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String sessionStudentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, sessionStudentNumber);
@@ -314,15 +329,16 @@ public class DocumentService {
                 request.studentNumber(),
                 request.studentName(),
                 request.faculty(),
-                request.department()
+                request.department(),
+                usesArchivePlacementContext(role)
         );
-        FolderEntity folder = archiveTreeService.resolveUploadFolder(request, student, examPaperType);
+        FolderEntity folder = archiveTreeService.resolveUploadFolder(request, student, examPaperType, role);
 
-        Path studentRoot = archiveTreeService.resolveStoragePath(storageRoot, request, student, examPaperType);
+        Path studentRoot = archiveTreeService.resolveStoragePath(storageRoot, request, student, examPaperType, role);
         Files.createDirectories(studentRoot);
 
         String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
-                ? (isStudentProjectZip(request, file) ? "project.zip" : "document.pdf")
+                ? (isStudentProjectZip(request, file, fileBytes) ? "project.zip" : "document.pdf")
                 : file.getOriginalFilename();
         String storedName = UUID.randomUUID() + "_" + sanitizeFileName(originalName);
         Path target = studentRoot.resolve(storedName);
@@ -342,6 +358,7 @@ public class DocumentService {
         entity.setStudentNumber(student.getStudentNumber());
         entity.setDepartment(resolveDepartment(student, request));
         entity.setUploadedBy(request.uploadedBy().trim());
+        entity.setUploadedByRole(role);
         entity.setDescription(trimToNull(request.description()));
         entity.setTags(trimToNull(request.tags()));
         entity.setGithubUrl(projectLinkValidator.normalizeGithubUrl(request.githubUrl()));
@@ -357,18 +374,18 @@ public class DocumentService {
         entity.setEncrypted(fileEncryptionService.isEnabled());
         entity.setEncryptionIv(encrypted.ivBase64());
         entity.setMimeType(file.getContentType() == null || file.getContentType().isBlank()
-                ? (isStudentProjectZip(request, file) ? "application/zip" : "application/pdf")
+                ? (isStudentProjectZip(request, file, fileBytes) ? "application/zip" : "application/pdf")
                 : file.getContentType());
         entity.setFolderId(folder.getId());
         entity.setSizeBytes(file.getSize());
-        entity.setPageCount(request.pageCount() == null || request.pageCount() < 1 ? 1 : request.pageCount());
+        entity.setPageCount(resolvePdfPageCount(fileBytes, request.pageCount()));
         entity.setIssueDate(request.issueDate() == null ? java.time.LocalDate.now() : request.issueDate());
         entity.setStarred(Boolean.FALSE);
         boolean studentFypSubmission = role == UserRole.STUDENT
                 && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT;
         // Registrar and other office uploads enter the archive immediately (no pending gate).
         entity.setStatus(studentFypSubmission ? DocumentStatus.PENDING : DocumentStatus.APPROVED);
-        entity.setType(isStudentProjectZip(request, file) ? DocumentType.ZIP : DocumentType.PDF);
+        entity.setType(isStudentProjectZip(request, file, fileBytes) ? DocumentType.ZIP : DocumentType.PDF);
         entity.setCategory(request.category());
         entity.setCreatedAt(LocalDateTime.now());
         entity.setModifiedAt(LocalDateTime.now());
@@ -379,7 +396,9 @@ public class DocumentService {
             activityService.recordAction(
                     "Submitted final year project \"" + saved.getTitle() + "\" for librarian approval",
                     saved.getOwnerName(),
-                    ActivityCategory.UPLOAD
+                    ActivityCategory.UPLOAD,
+                    activityService.enrichScope(scopeForDocument(saved, UserRole.STUDENT, UserRole.LIBRARIAN), requestActor),
+                    requestActor
             );
         } else {
             syncSearchIndex(saved);
@@ -388,7 +407,9 @@ public class DocumentService {
                     saved.getUploadedBy() == null || saved.getUploadedBy().isBlank()
                             ? (role == null ? "Archive user" : role.name())
                             : saved.getUploadedBy(),
-                    ActivityCategory.UPLOAD
+                    ActivityCategory.UPLOAD,
+                    activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
+                    requestActor
             );
         }
         return toDetail(saved);
@@ -523,7 +544,9 @@ public class DocumentService {
         activityService.recordAction(
                 "Updated final year project \"" + saved.getTitle() + "\" (pending librarian approval)",
                 saved.getOwnerName(),
-                ActivityCategory.UPLOAD
+                ActivityCategory.UPLOAD,
+                activityService.enrichScope(scopeForDocument(saved, UserRole.STUDENT, UserRole.LIBRARIAN), RequestActor.empty()),
+                RequestActor.empty()
         );
         return toDetail(saved);
     }
@@ -537,6 +560,19 @@ public class DocumentService {
         } catch (IOException ignored) {
             // Best-effort cleanup of replaced files.
         }
+    }
+
+    private ActivityScope scopeForDocument(DocumentEntity document, UserRole sourceRole, UserRole targetRole) {
+        if (document == null) {
+            return ActivityScope.empty();
+        }
+        return ActivityScope.builder()
+                .sourceRole(sourceRole)
+                .targetRole(targetRole)
+                .academicDepartment(document.getDepartment())
+                .documentCategory(document.getCategory())
+                .studentNumber(document.getStudentNumber())
+                .build();
     }
 
     private List<DocumentEntity> searchDocumentsFromStore(String trimmed, StudentDocumentCategory category) {
@@ -657,6 +693,17 @@ public class DocumentService {
             String rawRole,
             String actorName
     ) throws IOException {
+        return replaceDocumentFile(id, file, rawRole, actorName, RequestActor.empty());
+    }
+
+    @Transactional
+    public DocumentDetailResponse replaceDocumentFile(
+            Long id,
+            MultipartFile file,
+            String rawRole,
+            String actorName,
+            RequestActor requestActor
+    ) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         if (role == UserRole.STUDENT) {
             throw new IllegalArgumentException("Students cannot replace staff archive documents here");
@@ -675,6 +722,8 @@ public class DocumentService {
             throw new IllegalArgumentException("Replacement file is empty");
         }
 
+        DocumentType replacementType = resolveReplacementType(fileBytes);
+
         String originalName = file.getOriginalFilename() == null ? "document.pdf" : file.getOriginalFilename();
         Path previousPath = entity.getFilePath() == null || entity.getFilePath().isBlank()
                 ? null
@@ -691,7 +740,7 @@ public class DocumentService {
 
         entity.setFileName(sanitizeFileName(originalName));
         entity.setFilePath(targetPath.toString());
-        entity.setMimeType(file.getContentType() == null ? "application/octet-stream" : file.getContentType());
+        entity.setMimeType(replacementType == DocumentType.ZIP ? "application/zip" : "application/pdf");
         entity.setSizeBytes((long) fileBytes.length);
         entity.setEncrypted(fileEncryptionService.isEnabled());
         entity.setEncryptionIv(encrypted.ivBase64());
@@ -699,11 +748,14 @@ public class DocumentService {
         if (actorName != null && !actorName.isBlank()) {
             entity.setUploadedBy(actorName);
         }
-        if (originalName.toLowerCase(Locale.ROOT).endsWith(".zip")
-                || String.valueOf(file.getContentType()).toLowerCase(Locale.ROOT).contains("zip")) {
-            entity.setType(DocumentType.ZIP);
-        } else if (originalName.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
-            entity.setType(DocumentType.PDF);
+        entity.setType(replacementType);
+        if (replacementType == DocumentType.PDF) {
+            try (PDDocument pdfDocument = PDDocument.load(fileBytes)) {
+                if (pdfDocument.getNumberOfPages() < 1) {
+                    throw new IllegalArgumentException("Replacement PDF has no pages.");
+                }
+                entity.setPageCount(pdfDocument.getNumberOfPages());
+            }
         }
 
         DocumentEntity saved = documentRepository.save(entity);
@@ -717,14 +769,21 @@ public class DocumentService {
         syncSearchIndex(saved);
         activityService.recordAction(
                 "Replaced file for \"" + saved.getTitle() + "\"",
-                actorName == null || actorName.isBlank() ? role.name() : actorName,
-                ActivityCategory.UPLOAD
+                requestActor.resolvedActorLabel(actorName == null || actorName.isBlank() ? role.name() : actorName),
+                ActivityCategory.UPLOAD,
+                activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
+                requestActor
         );
         return toDetail(saved);
     }
 
     @Transactional
     public void archiveDocument(Long id, String rawRole) {
+        archiveDocument(id, rawRole, RequestActor.empty());
+    }
+
+    @Transactional
+    public void archiveDocument(Long id, String rawRole, RequestActor requestActor) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         DocumentEntity entity = documentRepository.findById(id)
                 .filter(document -> !document.isArchivedForRemoval())
@@ -739,7 +798,9 @@ public class DocumentService {
         activityService.recordAction(
                 "Moved \"" + entity.getTitle() + "\" to archive pending admin confirmation",
                 entity.getArchivedBy(),
-                ActivityCategory.ARCHIVE
+                ActivityCategory.ARCHIVE,
+                activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
+                requestActor
         );
     }
 
@@ -795,12 +856,8 @@ public class DocumentService {
                     : "Document file is too large");
         }
 
-        String originalName = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase();
-        if (isStudentProjectZip(request, file)) {
-            if (!(originalName.endsWith(".zip") || "application/zip".equalsIgnoreCase(file.getContentType())
-                    || "application/x-zip-compressed".equalsIgnoreCase(file.getContentType()))) {
-                throw new IllegalArgumentException("Final year project books must be uploaded as a ZIP file containing the PDF");
-            }
+        if (isStudentProjectZip(request, file, fileBytes)) {
+            FileSignatureValidator.requireZip(fileBytes);
             if (trimToNull(request.projectTitle()) == null && trimToNull(request.title()) == null) {
                 throw new IllegalArgumentException("Project title is required");
             }
@@ -810,9 +867,7 @@ public class DocumentService {
             return;
         }
 
-        if (!originalName.endsWith(".pdf")) {
-            throw new IllegalArgumentException("Only PDF documents are supported");
-        }
+        FileSignatureValidator.requirePdf(fileBytes);
         if (request.pageCount() == null || request.pageCount() < 1) {
             throw new IllegalArgumentException("Page count is required");
         }
@@ -822,32 +877,71 @@ public class DocumentService {
 
         try (PDDocument pdfDocument = PDDocument.load(fileBytes)) {
             int actualPages = pdfDocument.getNumberOfPages();
-            if (!request.pageCount().equals(actualPages)) {
-                throw new IllegalArgumentException("Page count must match the uploaded PDF. Expected "
-                        + request.pageCount() + " pages but found " + actualPages + ".");
+            if (actualPages < 1) {
+                throw new IllegalArgumentException("PDF has no pages");
             }
 
-            int pageNumber = 1;
-            for (PDPage page : pdfDocument.getPages()) {
-                if (!isNormalPageSize(page.getMediaBox())) {
-                    throw new IllegalArgumentException("Only A4 or Letter page sizes are allowed. Page "
-                            + pageNumber + " is not a normal size.");
-                }
-                pageNumber++;
-            }
+            validatePageSizes(pdfDocument, role);
 
-            documentScanService.requireVerified(fileBytes, request);
+            documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename());
         }
     }
 
-    private boolean isStudentProjectZip(UploadDocumentRequest request, MultipartFile file) {
+    private int resolvePdfPageCount(byte[] fileBytes, Integer requested) {
+        try (PDDocument document = PDDocument.load(fileBytes)) {
+            int actualPages = document.getNumberOfPages();
+            if (actualPages > 0) {
+                return actualPages;
+            }
+        } catch (IOException ignored) {
+            // Fall back to the client-provided count.
+        }
+        return requested == null || requested < 1 ? 1 : requested;
+    }
+
+    private void validatePageSizes(PDDocument pdfDocument, UserRole role) {
+        int invalidPages = 0;
+        for (PDPage page : pdfDocument.getPages()) {
+            if (!isNormalPageSize(page.getMediaBox())) {
+                invalidPages += 1;
+            }
+        }
+        if (invalidPages == 0) {
+            return;
+        }
+        if (invalidPages == pdfDocument.getNumberOfPages()) {
+            throw new IllegalArgumentException("PDF pages must use A4 or Letter size.");
+        }
+        if (role != UserRole.STUDENT && invalidPages <= pdfDocument.getNumberOfPages() / 2) {
+            return;
+        }
+        throw new IllegalArgumentException("Only A4 or Letter page sizes are allowed. "
+                + invalidPages + " page(s) use an unsupported size.");
+    }
+
+    private DocumentType resolveReplacementType(byte[] fileBytes) {
+        if (FileSignatureValidator.isZip(fileBytes)) {
+            FileSignatureValidator.requireZip(fileBytes);
+            return DocumentType.ZIP;
+        }
+        if (FileSignatureValidator.isPdf(fileBytes)) {
+            FileSignatureValidator.requirePdf(fileBytes);
+            return DocumentType.PDF;
+        }
+        throw new IllegalArgumentException("Replacement file must be a PDF or ZIP archive.");
+    }
+
+    private boolean isStudentProjectZip(UploadDocumentRequest request, MultipartFile file, byte[] fileBytes) {
         if (request == null || request.category() != StudentDocumentCategory.FINAL_YEAR_PROJECT) {
             return false;
         }
+        if (fileBytes != null && FileSignatureValidator.isZip(fileBytes)) {
+            return true;
+        }
         String originalName = file == null || file.getOriginalFilename() == null
                 ? ""
-                : file.getOriginalFilename().toLowerCase();
-        String contentType = file == null || file.getContentType() == null ? "" : file.getContentType().toLowerCase();
+                : file.getOriginalFilename().toLowerCase(Locale.ROOT);
+        String contentType = file == null || file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
         return originalName.endsWith(".zip")
                 || contentType.contains("zip");
     }
@@ -862,6 +956,7 @@ public class DocumentService {
             throw new IllegalArgumentException("Face photo must be 2 MB or smaller");
         }
         byte[] bytes = coverPhoto.getBytes();
+        FileSignatureValidator.requireImage(bytes);
         try (java.io.ByteArrayInputStream input = new java.io.ByteArrayInputStream(bytes)) {
             java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(input);
             if (image == null) {
@@ -899,19 +994,24 @@ public class DocumentService {
             return null;
         }
 
-        ExamPaperType examPaperType = ExamPaperType.from(request.examType());
         String academicYear = trimToNull(request.academicYear());
         String semester = trimToNull(request.semester());
-        String course = trimToNull(request.course());
-        String room = trimToNull(request.examRoom());
-        Integer marks = request.marks();
-
         if (academicYear == null) {
             throw new IllegalArgumentException("Academic year is required for exam papers");
         }
         if (semester == null) {
             throw new IllegalArgumentException("Semester is required for exam papers");
         }
+
+        if (request.examType() == null || request.examType().isBlank()) {
+            return null;
+        }
+
+        ExamPaperType examPaperType = ExamPaperType.from(request.examType());
+        String course = trimToNull(request.course());
+        String room = trimToNull(request.examRoom());
+        Integer marks = request.marks();
+
         if (course == null) {
             throw new IllegalArgumentException("Course is required for exam papers");
         }
@@ -942,6 +1042,17 @@ public class DocumentService {
                     + sanitizeCodeSegment(request.semester())
                     + "-"
                     + sanitizeCodeSegment(request.course())
+                    + "-"
+                    + cleanStudentNumber
+                    + "-"
+                    + suffix;
+        }
+        if (isExamUpload(request)) {
+            return request.category().getFolderCode()
+                    + "-"
+                    + sanitizeCodeSegment(request.academicYear())
+                    + "-"
+                    + sanitizeCodeSegment(request.semester())
                     + "-"
                     + cleanStudentNumber
                     + "-"
@@ -1079,6 +1190,13 @@ public class DocumentService {
         return rawStudentNumber.trim();
     }
 
+    private boolean usesArchivePlacementContext(UserRole role) {
+        return role == UserRole.REGISTRAR
+                || role == UserRole.EXAMINATION_OFFICER
+                || role == UserRole.HOD
+                || role == UserRole.LIBRARIAN;
+    }
+
     private boolean isExamUpload(UploadDocumentRequest request) {
         return request.category() == StudentDocumentCategory.EXAMINATION_DOCUMENTS;
     }
@@ -1099,6 +1217,13 @@ public class DocumentService {
         }
         if (explicitTitle != null) {
             return explicitTitle;
+        }
+        if (isExamUpload(request)) {
+            StringBuilder builder = new StringBuilder(request.category().getDisplayName());
+            appendTitleSegment(builder, request.academicYear());
+            appendTitleSegment(builder, request.semester());
+            appendTitleSegment(builder, student.getStudentNumber());
+            return builder.toString();
         }
         return request.category().getDisplayName();
     }

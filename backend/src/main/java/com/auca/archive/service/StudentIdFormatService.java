@@ -13,14 +13,18 @@ import java.util.regex.Pattern;
 @Service
 public class StudentIdFormatService {
     public static final String FORMAT_HINT = "YYYY + semester(1-3) + DEPT + SEQ (example: 20251SENG041)";
-    public static final String LEGACY_FORMAT_HINT = "5-digit number (example: 25876)";
+    public static final String LEGACY_FORMAT_HINT = "5-10 digit number (example: 25876 or 25678965)";
     public static final String FOLDER_NAME_HINT = FORMAT_HINT;
 
     private static final Pattern MODERN_ID_PATTERN = Pattern.compile(
             "^(\\d{4})([123])([A-Z]{3,4})(\\d{3})$",
             Pattern.CASE_INSENSITIVE
     );
-    private static final Pattern LEGACY_ID_PATTERN = Pattern.compile("^\\d{5}$");
+    private static final Pattern LEGACY_ID_PATTERN = Pattern.compile("^\\d{5,10}$");
+    private static final Pattern MODERN_ID_SEARCH = Pattern.compile(
+            "(\\d{4})([123])([A-Z]{3,4})(\\d{3})",
+            Pattern.CASE_INSENSITIVE
+    );
 
     private static final Map<String, String> DEPARTMENT_BY_CODE = Map.ofEntries(
             Map.entry("SEN", "Software Engineering"),
@@ -129,6 +133,35 @@ public class StudentIdFormatService {
                         + department.trim());
             }
         });
+    }
+
+    public Optional<String> findRecognizedIdInFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return Optional.empty();
+        }
+        String base = fileName.replaceAll("\\.[^.]+$", "").trim();
+        if (base.isEmpty()) {
+            return Optional.empty();
+        }
+        String normalized = base.matches("\\d+") ? base : base.toUpperCase(Locale.ROOT);
+        if (isRecognizedFormat(normalized)) {
+            return Optional.of(normalized);
+        }
+        return findRecognizedIdInText(base);
+    }
+
+    public Optional<String> findRecognizedIdInText(String text) {
+        if (text == null || text.isBlank()) {
+            return Optional.empty();
+        }
+        Matcher matcher = MODERN_ID_SEARCH.matcher(text);
+        while (matcher.find()) {
+            String candidate = matcher.group().toUpperCase(Locale.ROOT);
+            if (isModernFormat(candidate)) {
+                return Optional.of(candidate);
+            }
+        }
+        return Optional.empty();
     }
 
     public Map<String, String> departmentCodes() {

@@ -2,6 +2,7 @@ package com.auca.archive.service;
 
 import com.auca.archive.dto.DocumentScanContext;
 import com.auca.archive.dto.DocumentScanResponse;
+import com.auca.archive.util.FileSignatureValidator;
 import com.auca.archive.dto.UploadDocumentRequest;
 import net.sourceforge.tess4j.Tesseract;
 import net.sourceforge.tess4j.TesseractException;
@@ -59,7 +60,7 @@ public class DocumentScanService {
     public DocumentScanService(
             @Value("${archive.document-scan.enabled:true}") boolean scanEnabled,
             @Value("${archive.document-scan.min-text-chars:60}") int minTextCharsBeforeOcr,
-            @Value("${archive.document-scan.max-ocr-pages:2}") int maxOcrPages,
+            @Value("${archive.document-scan.max-ocr-pages:10}") int maxOcrPages,
             @Value("${archive.document-scan.ocr-dpi:150}") float ocrDpi,
             @Value("${archive.ocr.enabled:true}") boolean ocrEnabled,
             @Value("${archive.ocr.tessdata-path:}") String tessDataPath
@@ -77,16 +78,14 @@ public class DocumentScanService {
             throw new IllegalArgumentException("Document file is required");
         }
 
-        String originalName = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
-        if (!originalName.endsWith(".pdf")) {
-            throw new IllegalArgumentException("Only PDF documents can be scanned");
-        }
-
         byte[] fileBytes = file.getBytes();
-        return scanPdf(fileBytes, context);
+        FileSignatureValidator.requirePdf(fileBytes);
+        DocumentScanContext enriched = enrichContext(context, file.getOriginalFilename());
+        return scanPdf(fileBytes, enriched);
     }
 
     public DocumentScanResponse scanPdf(byte[] fileBytes, DocumentScanContext context) throws IOException {
+        DocumentScanContext enriched = enrichContext(context, context == null ? null : context.fileName());
         try (PDDocument document = PDDocument.load(fileBytes)) {
             int pageCount = document.getNumberOfPages();
             String extractedText = extractText(document);
@@ -102,7 +101,7 @@ public class DocumentScanService {
                 }
             }
 
-            ScanEvaluation evaluation = evaluate(extractedText, context);
+            ScanEvaluation evaluation = evaluate(extractedText, enriched);
             String preview = buildPreview(extractedText);
             String summary = evaluation.verified()
                     ? "This file looks like a valid AUCA archive document."
@@ -119,24 +118,52 @@ public class DocumentScanService {
         }
     }
 
-    public void requireVerified(byte[] fileBytes, UploadDocumentRequest request) throws IOException {
+    public void requireVerified(byte[] fileBytes, UploadDocumentRequest request, String originalFileName) throws IOException {
         if (!scanEnabled) {
             return;
         }
 
-        DocumentScanContext context = new DocumentScanContext(
+        DocumentScanContext context = enrichContext(new DocumentScanContext(
                 request.studentNumber(),
                 request.studentName(),
                 request.category() == null ? null : request.category().name(),
                 request.course(),
                 request.faculty(),
-                request.department()
-        );
+                request.department(),
+                originalFileName
+        ), originalFileName);
 
         DocumentScanResponse scan = scanPdf(fileBytes, context);
         if (!scan.verified()) {
             throw new IllegalArgumentException(scan.summary());
         }
+    }
+
+    private DocumentScanContext enrichContext(DocumentScanContext context, String fileName) {
+        String resolvedFileName = fileName;
+        if (context != null && context.fileName() != null && !context.fileName().isBlank()) {
+            resolvedFileName = context.fileName();
+        }
+        if (context == null) {
+            return new DocumentScanContext(
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    resolvedFileName
+            );
+        }
+        return new DocumentScanContext(
+                context.studentNumber(),
+                context.studentName(),
+                context.category(),
+                context.course(),
+                context.faculty(),
+                context.department(),
+                resolvedFileName
+        );
     }
 
     private String extractText(PDDocument document) throws IOException {

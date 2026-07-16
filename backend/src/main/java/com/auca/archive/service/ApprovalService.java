@@ -3,11 +3,17 @@ package com.auca.archive.service;
 import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.ApprovalStatus;
 import com.auca.archive.domain.DocumentStatus;
+import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.domain.UserRole;
+import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.dto.ApprovalDecisionRequest;
+import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.ApprovalTaskResponse;
 import com.auca.archive.dto.DocumentDetailResponse;
 import com.auca.archive.model.ApprovalTaskEntity;
+import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.repository.ApprovalTaskRepository;
+import com.auca.archive.repository.DocumentRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
@@ -18,15 +24,18 @@ public class ApprovalService {
     private final ApprovalTaskRepository approvalTaskRepository;
     private final DocumentService documentService;
     private final ActivityService activityService;
+    private final DocumentRepository documentRepository;
 
     public ApprovalService(
             ApprovalTaskRepository approvalTaskRepository,
             DocumentService documentService,
-            ActivityService activityService
+            ActivityService activityService,
+            DocumentRepository documentRepository
     ) {
         this.approvalTaskRepository = approvalTaskRepository;
         this.documentService = documentService;
         this.activityService = activityService;
+        this.documentRepository = documentRepository;
     }
 
     public List<ApprovalTaskResponse> pending() {
@@ -38,18 +47,35 @@ public class ApprovalService {
 
     @Transactional
     public ApprovalTaskResponse decide(Long id, ApprovalDecisionRequest request) {
+        return decide(id, request, RequestActor.empty());
+    }
+
+    @Transactional
+    public ApprovalTaskResponse decide(Long id, ApprovalDecisionRequest request, RequestActor requestActor) {
         ApprovalTaskEntity task = approvalTaskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + id));
         String decision = request.decision().trim().toLowerCase();
         String note = request.note() == null ? "" : request.note().trim();
+        DocumentEntity linkedDocument = task.getDocumentId() == null
+                ? null
+                : documentRepository.findById(task.getDocumentId()).orElse(null);
+        ActivityScope approvalScope = ActivityScope.builder()
+                .sourceRole(UserRole.LIBRARIAN)
+                .targetRole(UserRole.LIBRARIAN)
+                .documentCategory(StudentDocumentCategory.FINAL_YEAR_PROJECT)
+                .academicDepartment(linkedDocument == null ? null : linkedDocument.getDepartment())
+                .studentNumber(linkedDocument == null ? null : linkedDocument.getStudentNumber())
+                .build();
         if ("approve".equals(decision)) {
             task.setStatus(ApprovalStatus.APPROVED);
             task.setNote(note.isBlank() ? "Approved by librarian" : note);
             documentService.updateStatus(task.getDocumentId(), DocumentStatus.APPROVED, task.getNote(), null);
             activityService.recordAction(
                     "Librarian approved final year project \"" + task.getDocumentTitle() + "\"",
-                    "Librarian",
-                    ActivityCategory.APPROVAL
+                    requestActor.resolvedActorLabel("Librarian"),
+                    ActivityCategory.APPROVAL,
+                    activityService.enrichScope(approvalScope, requestActor),
+                    requestActor
             );
         } else if ("reject".equals(decision)) {
             if (note.isBlank()) {
@@ -60,8 +86,10 @@ public class ApprovalService {
             documentService.updateStatus(task.getDocumentId(), DocumentStatus.REJECTED, note, null);
             activityService.recordAction(
                     "Librarian rejected final year project \"" + task.getDocumentTitle() + "\"",
-                    "Librarian",
-                    ActivityCategory.APPROVAL
+                    requestActor.resolvedActorLabel("Librarian"),
+                    ActivityCategory.APPROVAL,
+                    activityService.enrichScope(approvalScope, requestActor),
+                    requestActor
             );
         } else {
             throw new IllegalArgumentException("Decision must be approve or reject");

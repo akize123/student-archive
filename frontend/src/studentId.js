@@ -1,5 +1,5 @@
 export const STUDENT_ID_FORMAT_HINT = 'YYYY + semester(1-3) + DEPT + SEQ (example: 20251SENG041)'
-export const LEGACY_STUDENT_ID_FORMAT_HINT = '5-digit number (example: 25876)'
+export const LEGACY_STUDENT_ID_FORMAT_HINT = '5-10 digit number (example: 25876 or 25678965)'
 export const STUDENT_ID_FORMATS_HINT = `${STUDENT_ID_FORMAT_HINT} or ${LEGACY_STUDENT_ID_FORMAT_HINT}`
 export const STAFF_FOLDER_NAME_HINT = STUDENT_ID_FORMAT_HINT
 
@@ -35,7 +35,8 @@ export const STUDENT_DEPARTMENT_CODES = {
 }
 
 const MODERN_ID_PATTERN = /^(\d{4})([123])([A-Z]{3,4})(\d{3})$/i
-const LEGACY_ID_PATTERN = /^\d{5}$/
+const MODERN_ID_IN_TEXT = /(\d{4})([123])([a-z]{3,4})(\d{3})/i
+const LEGACY_ID_PATTERN = /^\d{5,10}$/
 
 export function normalizeStudentId(value) {
   const trimmed = String(value || '').trim()
@@ -174,6 +175,21 @@ export function validateStudentIdDepartmentMatch(value, department) {
     return `Student ID code ${parsed.departmentCode} belongs to ${parsed.departmentName}, not ${department}.`
   }
   return ''
+}
+
+export function extractStudentIdFromFileName(fileName) {
+  const base = String(fileName || '').replace(/\.[^.]+$/, '').trim()
+  if (!base) {
+    return null
+  }
+  if (isLegacyStudentId(base) || isModernStudentId(base)) {
+    return normalizeStudentId(base)
+  }
+  const modernMatch = base.match(MODERN_ID_IN_TEXT)
+  if (modernMatch) {
+    return normalizeStudentId(modernMatch[0])
+  }
+  return null
 }
 
 export function applyStudentIdDefaults(currentForm, studentId) {

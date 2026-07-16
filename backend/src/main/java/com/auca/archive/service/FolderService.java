@@ -1,14 +1,17 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.SharePermission;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
+import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.dto.DocumentListItemResponse;
 import com.auca.archive.dto.FolderBreadcrumbResponse;
 import com.auca.archive.dto.FolderDetailResponse;
 import com.auca.archive.dto.FolderNodeResponse;
+import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.ShareFolderResponse;
 import com.auca.archive.dto.SharedItemResponse;
 import com.auca.archive.model.DocumentEntity;
@@ -56,6 +59,7 @@ public class FolderService {
     private final ActivityService activityService;
     private final FileEncryptionService fileEncryptionService;
     private final StudentIdFormatService studentIdFormatService;
+    private final AcademicTermService academicTermService;
     private final ObjectProvider<ArchiveTreeService> archiveTreeService;
     private final Path storageRoot;
 
@@ -68,6 +72,7 @@ public class FolderService {
             ActivityService activityService,
             FileEncryptionService fileEncryptionService,
             StudentIdFormatService studentIdFormatService,
+            AcademicTermService academicTermService,
             ObjectProvider<ArchiveTreeService> archiveTreeService,
             @Value("${archive.storage-root:storage}") String storageRoot
     ) {
@@ -79,6 +84,7 @@ public class FolderService {
         this.activityService = activityService;
         this.fileEncryptionService = fileEncryptionService;
         this.studentIdFormatService = studentIdFormatService;
+        this.academicTermService = academicTermService;
         this.archiveTreeService = archiveTreeService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
     }
@@ -140,6 +146,21 @@ public class FolderService {
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found: " + id));
     }
 
+    public String resolveAcademicDepartmentFromFolderId(Long folderId) {
+        if (folderId == null) {
+            return null;
+        }
+        FolderEntity current = folderRepository.findById(folderId).orElse(null);
+        while (current != null) {
+            if (isDepartmentFolder(current)) {
+                return current.getName();
+            }
+            Long parentId = current.getParentId();
+            current = parentId == null ? null : folderRepository.findById(parentId).orElse(null);
+        }
+        return null;
+    }
+
     public FolderDetailResponse getFolderDetail(Long id, String rawRole) {
         return getFolderDetail(id, rawRole, null);
     }
@@ -183,15 +204,35 @@ public class FolderService {
                     .map(this::toListItem)
                     .toList();
         } else {
-            children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+            List<FolderEntity> rawChildren = childrenByParent.getOrDefault(folder.getId(), List.of());
+            boolean flattenStudentRoot = role != null
+                    && role != UserRole.STUDENT
+                    && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode());
+
+            children = rawChildren.stream()
                     .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
+                    .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isStudentDefaultFolderCode(child.getCode()))
                     .sorted(Comparator.comparing(FolderEntity::getName))
                     .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, isFolderVisibleByParent(folder, role, studentNumber)).stream())
                     .toList();
 
-            List<DocumentEntity> folderDocuments = isArchiveProjectFolder(folder)
-                    ? collectDocumentsUnderFolder(folder.getId(), childrenByParent)
-                    : documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId());
+            List<DocumentEntity> folderDocuments;
+            if (flattenStudentRoot) {
+                folderDocuments = new ArrayList<>(
+                        documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())
+                );
+                for (FolderEntity child : rawChildren) {
+                    if (ArchiveTreeService.isStudentDefaultFolderCode(child.getCode())) {
+                        folderDocuments.addAll(
+                                documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(child.getId())
+                        );
+                    }
+                }
+            } else if (isArchiveProjectFolder(folder)) {
+                folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
+            } else {
+                folderDocuments = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId());
+            }
 
             documents = folderDocuments.stream()
                     .filter(document -> isDocumentAccessible(document, role, studentNumber))
@@ -293,6 +334,71 @@ public class FolderService {
                 ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode()),
                 List.of()
         );
+    }
+
+    @Transactional
+    public FolderNodeResponse addAcademicYear(Long departmentFolderId, String rawAcademicYear, String rawRole) {
+        return addAcademicYear(departmentFolderId, rawAcademicYear, rawRole, RequestActor.empty());
+    }
+
+    @Transactional
+    public FolderNodeResponse addAcademicYear(
+            Long departmentFolderId,
+            String rawAcademicYear,
+            String rawRole,
+            RequestActor requestActor
+    ) {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        if (role != UserRole.REGISTRAR && role != UserRole.LIBRARIAN && role != UserRole.EXAMINATION_OFFICER) {
+            throw new IllegalArgumentException("Only the registrar office, examination office, or librarian can add academic years");
+        }
+
+        FolderEntity department = getFolderOrThrow(departmentFolderId);
+        if (!isFolderAccessible(department, role, null)) {
+            throw new IllegalArgumentException("Folder not found: " + departmentFolderId);
+        }
+        if (!isDepartmentFolder(department)) {
+            throw new IllegalArgumentException("Academic years can only be added under a department folder");
+        }
+        requireShareAtLeast(department, role, null, SharePermission.WRITE);
+
+        String academicYear = academicTermService.normalizeAcademicYear(rawAcademicYear);
+        if (academicYear == null) {
+            throw new IllegalArgumentException("Academic year must use the format 2025-2026");
+        }
+
+        String academicYearCode = academicTermService.buildAcademicYearFolderCode(department.getCode(), academicYear);
+        if (folderRepository.findByCode(academicYearCode).isPresent()) {
+            throw new IllegalArgumentException("Academic year " + academicYear + " already exists in this department");
+        }
+
+        FolderEntity academicYearFolder = folderRepository.save(
+                new FolderEntity(academicYear, academicYearCode, department.getId())
+        );
+
+        int startYear = academicTermService.parseStartYear(academicYear);
+        for (int semester = 1; semester <= AcademicTermService.SEMESTERS_PER_YEAR; semester++) {
+            String semesterName = academicTermService.formatSemesterFolderName(startYear, semester);
+            String semesterCode = academicTermService.buildSemesterFolderCode(
+                    academicYearCode,
+                    startYear,
+                    semester
+            );
+            folderRepository.save(new FolderEntity(semesterName, semesterCode, academicYearFolder.getId()));
+        }
+
+        activityService.recordAction(
+                "Added academic year \"" + academicYear + "\" to " + department.getName(),
+                requestActor.resolvedActorLabel(role.name()),
+                ActivityCategory.SYNC,
+                activityService.enrichScope(ActivityScope.builder()
+                        .sourceRole(role)
+                        .academicDepartment(department.getName())
+                        .build(), requestActor),
+                requestActor
+        );
+
+        return toNode(academicYearFolder, role, null);
     }
 
     @Transactional
@@ -519,7 +625,18 @@ public class FolderService {
     }
 
     public ShareFolderResponse shareFolder(Long folderId, String targetRoleRaw, String permissionRaw, String actorRoleRaw, String actorName) {
-        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName);
+        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName, RequestActor.empty());
+    }
+
+    public ShareFolderResponse shareFolder(
+            Long folderId,
+            String targetRoleRaw,
+            String permissionRaw,
+            String actorRoleRaw,
+            String actorName,
+            RequestActor requestActor
+    ) {
+        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName, requestActor);
     }
 
     @Transactional
@@ -530,6 +647,19 @@ public class FolderService {
             String permissionRaw,
             String actorRoleRaw,
             String actorName
+    ) {
+        return shareItems(folderIds, documentIds, targetRoleRaw, permissionRaw, actorRoleRaw, actorName, RequestActor.empty());
+    }
+
+    @Transactional
+    public ShareFolderResponse shareItems(
+            List<Long> folderIds,
+            List<Long> documentIds,
+            String targetRoleRaw,
+            String permissionRaw,
+            String actorRoleRaw,
+            String actorName,
+            RequestActor requestActor
     ) {
         UserRole actorRole = accessService.resolveRole(actorRoleRaw);
         if (actorRole == UserRole.STUDENT) {
@@ -585,10 +715,24 @@ public class FolderService {
         }
 
         String targetLabel = roleLabel(targetRole);
+        String academicDepartment = null;
+        if (!uniqueFolderIds.isEmpty()) {
+            academicDepartment = resolveAcademicDepartmentFromFolderId(uniqueFolderIds.iterator().next());
+        } else if (!uniqueDocumentIds.isEmpty()) {
+            DocumentEntity firstDocument = documentRepository.findById(uniqueDocumentIds.iterator().next()).orElse(null);
+            if (firstDocument != null) {
+                academicDepartment = firstDocument.getDepartment() != null && !firstDocument.getDepartment().isBlank()
+                        ? firstDocument.getDepartment()
+                        : resolveAcademicDepartmentFromFolderId(firstDocument.getFolderId());
+            }
+        }
         activityService.recordShare(
                 firstName == null ? "archive items" : firstName,
                 actor,
-                targetRole
+                actorRole,
+                targetRole,
+                academicDepartment,
+                requestActor
         );
 
         StringBuilder message = new StringBuilder("Shared ");
@@ -841,11 +985,14 @@ public class FolderService {
     }
 
     public boolean isDocumentAccessible(DocumentEntity document, UserRole role, String studentNumber) {
-        if (role == UserRole.ADMIN || role == UserRole.LIBRARIAN) {
-            return true;
-        }
         if (document == null) {
             return false;
+        }
+        if (role == null) {
+            return true;
+        }
+        if (role == UserRole.ADMIN) {
+            return true;
         }
         if (role != null && folderShareRepository.findByDocumentIdAndTargetRole(document.getId(), role).isPresent()) {
             return true;
@@ -861,17 +1008,19 @@ public class FolderService {
                     .map(folder -> isSharedWithRole(folder, UserRole.STUDENT))
                     .orElse(false);
         }
-        if (role == null) {
-            return true;
-        }
-        // Pending/rejected final-year projects stay out of the shared staff archive until librarian approval.
+
         if (document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT
                 && document.getStatus() != DocumentStatus.APPROVED) {
+            if (role != UserRole.LIBRARIAN || !accessService.canViewOfficeDocument(document, role)) {
+                return false;
+            }
+        } else if (!accessService.canViewOfficeDocument(document, role)) {
             return false;
         }
+
         if (document.getFolderId() != null) {
             return folderRepository.findById(document.getFolderId())
-                    .map(folder -> isFolderAccessible(folder, role))
+                    .map(folder -> isFolderAccessible(folder, role, studentNumber))
                     .orElse(false);
         }
 
@@ -972,12 +1121,19 @@ public class FolderService {
             return children;
         }
 
+        long itemCount = countDocuments(folder, childrenByParent, role, studentNumber);
+        if (accessService.isOfficeStaffRole(role)
+                && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())
+                && itemCount == 0) {
+            return List.of();
+        }
+
         return List.of(new FolderNodeResponse(
                 folder.getId(),
                 folder.getName(),
                 folder.getCode(),
                 folder.getParentId(),
-                countDocuments(folder, childrenByParent, role, studentNumber),
+                itemCount,
                 ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
                         || isProtectedArchiveStructureFolder(folder)
                         || folder.getParentId() == null,
@@ -1420,6 +1576,7 @@ public class FolderService {
         copy.setStudentNumber(source.getStudentNumber());
         copy.setDepartment(source.getDepartment());
         copy.setUploadedBy(source.getUploadedBy());
+        copy.setUploadedByRole(source.getUploadedByRole());
         copy.setDescription(source.getDescription());
         copy.setTags(source.getTags());
         copy.setExamType(source.getExamType());

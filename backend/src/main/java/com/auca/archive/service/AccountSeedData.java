@@ -32,7 +32,7 @@ public class AccountSeedData implements CommandLineRunner {
         accountService.ensureAccount("admin", "System Administrator", "Admin@123", UserRole.ADMIN, UserRole.ADMIN.getDepartment());
         accountService.ensureAccount("registrar", "Registrar Office", "Registrar@123", UserRole.REGISTRAR, UserRole.REGISTRAR.getDepartment());
         accountService.ensureAccount("exam.officer", "Examination Officer", "Exam@123", UserRole.EXAMINATION_OFFICER, UserRole.EXAMINATION_OFFICER.getDepartment());
-        accountService.ensureAccount("hod", "Head of Department", "Hod@123", UserRole.HOD, UserRole.HOD.getDepartment());
+        accountService.ensureAccount("hod", "Head of Department", "Hod@123", UserRole.HOD, "Software Engineering");
         accountService.ensureAccount("librarian", "University Librarian", "Library@123", UserRole.LIBRARIAN, UserRole.LIBRARIAN.getDepartment());
 
         StudentEntity student = studentRepository.findByStudentNumber(DEMO_STUDENT_NUMBER)

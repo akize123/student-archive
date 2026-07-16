@@ -3,6 +3,7 @@ package com.auca.archive.service;
 import com.auca.archive.config.AucaFacultyCatalog;
 import com.auca.archive.domain.ExamPaperType;
 import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.UploadDocumentRequest;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.model.StudentEntity;
@@ -11,8 +12,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class ArchiveTreeService {
@@ -50,7 +53,7 @@ public class ArchiveTreeService {
 
     @Transactional
     public StudentWorkspace ensureStudentWorkspace(StudentEntity student) {
-        return ensureStudentWorkspace(student, null, null, null, null);
+        return ensureStudentWorkspace(student, null, null, null, null, true);
     }
 
     @Transactional
@@ -61,11 +64,30 @@ public class ArchiveTreeService {
             String academicYearOverride,
             String semesterOverride
     ) {
+        return ensureStudentWorkspace(
+                student,
+                facultyOverride,
+                departmentOverride,
+                academicYearOverride,
+                semesterOverride,
+                true
+        );
+    }
+
+    @Transactional
+    public StudentWorkspace ensureStudentWorkspace(
+            StudentEntity student,
+            String facultyOverride,
+            String departmentOverride,
+            String academicYearOverride,
+            String semesterOverride,
+            boolean createDefaultBuckets
+    ) {
         if (student == null || student.getStudentNumber() == null || student.getStudentNumber().isBlank()) {
             throw new IllegalArgumentException("Student profile is required to create the workspace");
         }
-        String faculty = requireText(student.getFaculty(), facultyOverride, "Faculty is required to create the student workspace");
-        String department = requireText(student.getDepartment(), departmentOverride, "Department is required to create the student workspace");
+        String faculty = preferOverride(facultyOverride, student.getFaculty(), "Faculty is required to create the student workspace");
+        String department = preferOverride(departmentOverride, student.getDepartment(), "Department is required to create the student workspace");
         FolderEntity studentFolder = resolveStudentRootFolder(
                 student.getStudentNumber(),
                 faculty,
@@ -73,6 +95,9 @@ public class ArchiveTreeService {
                 academicYearOverride,
                 semesterOverride
         );
+        if (!createDefaultBuckets) {
+            return new StudentWorkspace(studentFolder, studentFolder, studentFolder, studentFolder);
+        }
         FolderEntity official = folderService.resolveOrCreateFolder(
                 OFFICIAL_DOCUMENTS_NAME,
                 studentFolder.getCode() + "-" + OFFICIAL_DOCUMENTS_SUFFIX,
@@ -155,33 +180,35 @@ public class ArchiveTreeService {
     public FolderEntity resolveUploadFolder(
             UploadDocumentRequest request,
             StudentEntity student,
-            ExamPaperType examPaperType
+            ExamPaperType examPaperType,
+            UserRole role
     ) {
+        boolean staffPlacementUpload = role != null && role != UserRole.STUDENT;
+        StudentUploadPlacement placement = resolveStaffUploadPlacement(student, request, role);
         StudentWorkspace workspace = ensureStudentWorkspace(
                 student,
-                request.faculty(),
-                request.department(),
-                request.academicYear(),
-                request.semester()
+                placement.faculty(),
+                placement.department(),
+                placement.academicYear(),
+                placement.semester(),
+                !staffPlacementUpload
         );
+
+        if (staffPlacementUpload) {
+            return workspace.studentRoot();
+        }
 
         StudentDocumentCategory category = request.category();
         FolderEntity bucket = isOfficialCategory(category) ? workspace.officialDocuments() : workspace.myProjects();
+        return bucket;
+    }
 
-        if (category != StudentDocumentCategory.EXAMINATION_DOCUMENTS || examPaperType == null) {
-            return bucket;
-        }
-
-        FolderEntity typeFolder = folderService.resolveOrCreateFolder(
-                examPaperType.getDisplayName(),
-                bucket.getCode() + "-" + examPaperType.getFolderCode(),
-                bucket.getId()
-        );
-        return folderService.resolveOrCreateFolder(
-                trim(request.course()),
-                typeFolder.getCode() + "-" + sanitizeCode(request.course()),
-                typeFolder.getId()
-        );
+    public FolderEntity resolveUploadFolder(
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType
+    ) {
+        return resolveUploadFolder(request, student, examPaperType, null);
     }
 
     public Optional<Long> findStudentFolderId(StudentEntity student) {
@@ -235,37 +262,127 @@ public class ArchiveTreeService {
             Path storageRoot,
             UploadDocumentRequest request,
             StudentEntity student,
-            ExamPaperType examPaperType
+            ExamPaperType examPaperType,
+            UserRole role
     ) {
-        String faculty = requireText(student.getFaculty(), request.faculty(), "Faculty is required");
-        String department = requireText(student.getDepartment(), request.department(), "Department is required");
+        StudentUploadPlacement placement = resolveStaffUploadPlacement(student, request, role);
+        String faculty = preferOverride(placement.faculty(), student.getFaculty(), "Faculty is required");
+        String department = preferOverride(placement.department(), student.getDepartment(), "Department is required");
         String studentNumber = student.getStudentNumber();
 
         AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
                 studentNumber,
-                request.academicYear(),
-                request.semester()
+                placement.academicYear(),
+                placement.semester()
         );
 
-        String bucket = isOfficialCategory(request.category())
-                ? OFFICIAL_DOCUMENTS_SUFFIX
-                : FINAL_YEAR_PROJECT_SUFFIX;
-
-        Path studentRoot = storageRoot
+        Path studentBase = storageRoot
                 .resolve(sanitizePath(faculty))
                 .resolve(sanitizePath(department))
                 .resolve(sanitizePath(term.academicYear()))
                 .resolve(sanitizePath(term.semesterFolderName()))
-                .resolve(sanitizePath(studentNumber))
-                .resolve(sanitizePath(bucket));
+                .resolve(sanitizePath(studentNumber));
 
-        if (request.category() != StudentDocumentCategory.EXAMINATION_DOCUMENTS || examPaperType == null) {
-            return studentRoot;
+        if (role != null && role != UserRole.STUDENT) {
+            return studentBase;
         }
 
-        return studentRoot
-                .resolve(sanitizePath(examPaperType.getFolderCode()))
-                .resolve(sanitizePath(request.course()));
+        String bucket = isOfficialCategory(request.category())
+                ? OFFICIAL_DOCUMENTS_SUFFIX
+                : FINAL_YEAR_PROJECT_SUFFIX;
+        return studentBase.resolve(sanitizePath(bucket));
+    }
+
+    public StudentUploadPlacement resolveStudentUploadPlacement(StudentEntity student) {
+        if (student == null) {
+            return StudentUploadPlacement.empty();
+        }
+        Optional<StudentUploadPlacement> fromFolder = findStudentFolderId(student)
+                .flatMap(folderRepository::findById)
+                .map(this::parseUploadPlacementFromFolder);
+        if (fromFolder.isPresent()) {
+            return fromFolder.get();
+        }
+        return new StudentUploadPlacement(
+                trim(student.getFaculty()),
+                trim(student.getDepartment()),
+                null,
+                null
+        );
+    }
+
+    private StudentUploadPlacement resolveStaffUploadPlacement(
+            StudentEntity student,
+            UploadDocumentRequest request,
+            UserRole role
+    ) {
+        if (role == null || role == UserRole.STUDENT) {
+            return new StudentUploadPlacement(
+                    preferOverride(request.faculty(), student.getFaculty(), null),
+                    preferOverride(request.department(), student.getDepartment(), null),
+                    request.academicYear(),
+                    request.semester()
+            );
+        }
+
+        StudentUploadPlacement existing = resolveStudentUploadPlacement(student);
+        if (existing.hasArchiveLocation()) {
+            return existing;
+        }
+
+        return new StudentUploadPlacement(
+                preferOverride(request.faculty(), student.getFaculty(), null),
+                preferOverride(request.department(), student.getDepartment(), null),
+                request.academicYear(),
+                request.semester()
+        );
+    }
+
+    private StudentUploadPlacement parseUploadPlacementFromFolder(FolderEntity studentFolder) {
+        String faculty = "";
+        String department = "";
+        String academicYear = "";
+        String semester = "";
+        FolderEntity current = studentFolder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            String code = current.getCode() == null ? "" : current.getCode().toUpperCase(Locale.ROOT);
+            String name = current.getName() == null ? "" : current.getName().trim();
+            if (code.matches("^FAC-[A-Z0-9]+$")) {
+                faculty = name;
+            }
+            if (code.matches("^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$")) {
+                department = name;
+            }
+            if (code.matches(".*-AY-\\d{8}$") || name.matches("^\\d{4}-\\d{4}$")) {
+                academicYear = name;
+            }
+            if ((code.contains("-SEM-") && !code.contains("-STU-")) || name.matches("^\\d{4}/\\d$")) {
+                semester = name;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return new StudentUploadPlacement(faculty, department, academicYear, semester);
+    }
+
+    public Path resolveStoragePath(
+            Path storageRoot,
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType
+    ) {
+        return resolveStoragePath(storageRoot, request, student, examPaperType, null);
+    }
+
+    public static boolean isSemesterStudentRootFolder(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        String normalized = code.toUpperCase(Locale.ROOT);
+        return normalized.contains("-STU-") && !isStudentDefaultFolderCode(normalized);
     }
 
     public static boolean isStudentDefaultFolderCode(String code) {
@@ -386,6 +503,14 @@ public class ArchiveTreeService {
         return folderRepository.findByCode(departmentCode);
     }
 
+    private String preferOverride(String overrideValue, String studentValue, String message) {
+        String override = trim(overrideValue);
+        if (override != null) {
+            return override;
+        }
+        return requireText(studentValue, null, message);
+    }
+
     private String requireText(String primary, String fallback, String message) {
         String value = trim(primary);
         if (value == null) {
@@ -432,5 +557,23 @@ public class ArchiveTreeService {
             FolderEntity accepted,
             FolderEntity rejected
     ) {
+    }
+
+    public record StudentUploadPlacement(
+            String faculty,
+            String department,
+            String academicYear,
+            String semester
+    ) {
+        public static StudentUploadPlacement empty() {
+            return new StudentUploadPlacement(null, null, null, null);
+        }
+
+        public boolean hasArchiveLocation() {
+            return faculty != null && !faculty.isBlank()
+                    && department != null && !department.isBlank()
+                    && academicYear != null && !academicYear.isBlank()
+                    && semester != null && !semester.isBlank();
+        }
     }
 }
