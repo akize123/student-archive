@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getPublishedArchiveTree, getSessionProfile, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import AdminOfficeView from './components/AdminOfficeView'
 import { buildAdminOffices, filterArchiveTreeForOffice } from './adminOfficeUtils'
@@ -8,6 +8,7 @@ import MobileScanPage from './components/MobileScanPage'
 import UploadPhoneScanPanel from './components/UploadPhoneScanPanel'
 import LibrarianDashboard from './components/LibrarianDashboard'
 import StudentDashboard from './components/StudentDashboard'
+import StudentBookReservationControls from './components/StudentBookReservationControls'
 import StudentFypWizard from './components/StudentFypWizard'
 import ProjectCoverPhoto from './components/ProjectCoverPhoto'
 import BrandLogo from './components/BrandLogo'
@@ -177,6 +178,14 @@ const demoDashboard = {
 const quickAccess = [
   { label: 'Recent activity', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
+  { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' }
+]
+
+const studentQuickAccess = [
+  { label: 'Recent activity', icon: ClockIcon, count: null, action: 'recent' },
+  { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
+  { label: 'Department Archive', icon: FolderIcon, count: null, action: 'dept-archive' },
   { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' }
 ]
@@ -519,6 +528,33 @@ function saveStoredSession(account) {
   }
 }
 
+async function refreshStoredSession(stored) {
+  if (!stored?.id) {
+    return stored
+  }
+  try {
+    const profile = await getSessionProfile()
+    saveStoredSession(profile)
+    return profile
+  } catch {
+    return stored
+  }
+}
+
+function formatDashboardError(message) {
+  const text = String(message || '').trim()
+  if (text.includes('not linked to a student ID') || text.includes('Student ID is required')) {
+    return 'This student account is not linked to a student ID. Ask an administrator to add the student ID on the Users page, then sign out and sign in again.'
+  }
+  if (text.includes('Student profile not found') || text.includes('Faculty and department are required')) {
+    return 'Your student profile is incomplete. Ask an administrator to set a valid student ID (for example 20251SENG041) on the Users page.'
+  }
+  if (text) {
+    return `Unable to load dashboard data. (${text})`
+  }
+  return 'Dashboard data is unavailable until the API and database are reachable.'
+}
+
 function clearStoredSession() {
   const storage = readAuthStorage()
   if (storage) {
@@ -600,7 +636,7 @@ function canStudentCreateInFolder(folder) {
   if (code.includes('-SARC') || code.includes('LIB-FYP')) {
     return false
   }
-  return code.includes('-SOFF') || code.includes('-SMY')
+  return code.endsWith('-SOFF') || code.endsWith('-SMY')
 }
 
 function isStudentFinalYearProjectFolder(folder) {
@@ -609,7 +645,15 @@ function isStudentFinalYearProjectFolder(folder) {
   }
   const code = String(folder.code || '').toUpperCase()
   const name = String(folder.name || '').trim().toLowerCase()
-  return code.endsWith('-SMY') || name === 'final year project' || name === 'my projects'
+  return code.endsWith('-SMY') || code.endsWith('-SMY-PND') || name === 'final year project' || name === 'my projects'
+}
+
+function isPublishedArchiveFolder(folder) {
+  if (!folder) {
+    return false
+  }
+  const code = String(folder.code || '').toUpperCase()
+  return code.includes('-FYP-PUB')
 }
 
 function isStudentOfficialDocumentsFolder(folder) {
@@ -1571,6 +1615,29 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
   )
 }
 
+function StudentDepartmentArchiveNav({ onOpenDepartmentArchive, onNotify }) {
+  return (
+    <div className="sidebar-section student-folders-nav">
+      <div className="section-head">
+        <p className="eyebrow">Department archive</p>
+      </div>
+      <button
+        type="button"
+        className="student-folder-nav-button student-dept-archive-btn"
+        onClick={() => onOpenDepartmentArchive?.() || onNotify?.('Department archive is unavailable.')}
+      >
+        <span className="student-folder-nav-icon" aria-hidden="true">
+          <FolderIcon className="icon" />
+        </span>
+        <span className="student-folder-nav-copy">
+          <strong>Published FYP books</strong>
+          <em>Reserve &amp; read (20 min slots)</em>
+        </span>
+      </button>
+    </div>
+  )
+}
+
 function StudentDefaultFoldersNav({ nodes, activeFolderId, onOpenFolder, onNotify }) {
   const defaults = findStudentDefaultFolders(nodes)
   const folders = [
@@ -1927,7 +1994,6 @@ function ProfileMenu({
 }
 
 function LoginScreen({ form, onChange, onSubmit, busy, error }) {
-  const [showPassword, setShowPassword] = useState(false)
   const [forgotNotice, setForgotNotice] = useState('')
 
   return (
@@ -1947,15 +2013,14 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
             <p className="auth-portal-lead">Welcome! Please enter your details.</p>
 
             <div className="auth-field-group">
-              <label className="auth-field-label" htmlFor="auth-username">
-                Student ID / Teach Code
-              </label>
+            <label className="auth-field-label" htmlFor="auth-username">
+              UserName
+            </label>
               <div className="auth-input-shell">
                 <input
                   id="auth-username"
                   value={form.username}
                   onChange={(event) => onChange({ ...form, username: event.target.value })}
-                  placeholder="25883"
                   autoComplete="username"
                 />
               </div>
@@ -1971,7 +2036,6 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
                   type="password"
                   value={form.password}
                   onChange={(event) => onChange({ ...form, password: event.target.value })}
-                  placeholder="••••••••••"
                   autoComplete="current-password"
                 />
               </div>
@@ -1995,8 +2059,6 @@ function LoginScreen({ form, onChange, onSubmit, busy, error }) {
                 {busy ? 'Signing In...' : 'Sign In'}
               </button>
             </div>
-
-
           </form>
         </div>
       </section>
@@ -2228,6 +2290,7 @@ function FolderView({
   onNotify,
   onDataChange,
   onArchivedChange,
+  onReservationChange,
   addressBarActions
 }) {
   const [viewMode, setViewMode] = useState('grid')
@@ -2247,6 +2310,7 @@ function FolderView({
   const [shareBusy, setShareBusy] = useState(false)
   const shareDestinations = getShareDestinations(userRole)
   const isStudent = userRole === 'STUDENT'
+  const inPublishedArchive = isStudent && isPublishedArchiveFolder(folder)
   // Registrar / Exam / HOD: browse shell above semester; document tools from semester down.
   // Department level also unlocks Download + Share so content can be mirrored across departments.
   const isStructureBrowseOnly = isOfficeStructureBrowseOnly(folder, userRole) && !isDepartmentFolder(folder)
@@ -3246,6 +3310,10 @@ function FolderView({
         <p className="explorer-hint">
           This is an accepted project profile created after librarian approval.
         </p>
+      ) : inPublishedArchive ? (
+        <p className="explorer-hint">
+          Browse approved final year projects from your department. Reserve a book for a 20-minute slot (max 3 students per book) before downloading.
+        </p>
       ) : visibleDocuments.length ? (
         <p className="explorer-hint">
           Click to select a document. Right-click for open and download options. <kbd>Ctrl</kbd>+click to multi-select for bulk download or delete.
@@ -3386,6 +3454,18 @@ function FolderView({
             <div className="explorer-item-copy">
               <strong>{document.fileName || document.title}</strong>
               <span>{formatBytes(document.sizeBytes)}</span>
+              {inPublishedArchive ? (
+                <StudentBookReservationControls
+                  documentId={document.id}
+                  studentNumber={studentNumber}
+                  documentStudentNumber={document.studentNumber}
+                  category={document.category}
+                  status={document.status}
+                  inPublishedArchive={inPublishedArchive}
+                  onNotify={onNotify}
+                  onChanged={() => onReservationChange?.()}
+                />
+              ) : null}
             </div>
           </div>
         ))}
@@ -3722,6 +3802,7 @@ function App() {
   const [sharedItems, setSharedItems] = useState([])
   const [sharedBusy, setSharedBusy] = useState(false)
   const [sharedCount, setSharedCount] = useState(0)
+  const [reservationRefreshToken, setReservationRefreshToken] = useState(0)
   const [quickAccessOpen, setQuickAccessOpen] = useState(loadQuickAccessOpen)
   const [adminOffices, setAdminOffices] = useState(() => buildAdminOffices([], {}, []))
   const [selectedAdminOffice, setSelectedAdminOffice] = useState(null)
@@ -3830,9 +3911,10 @@ function App() {
       }
 
       try {
+        const sessionProfile = await refreshStoredSession(stored)
         await getDashboard()
         if (active) {
-          setSession(stored)
+          setSession(sessionProfile)
         }
       } catch {
         clearStoredSession()
@@ -3865,15 +3947,36 @@ function App() {
     setLoading(true)
     async function load() {
       try {
+        let activeSession = session
+        if (session.role === 'STUDENT' && !session.studentNumber && session.id) {
+          activeSession = await refreshStoredSession(session)
+          if (active && activeSession !== session) {
+            setSession(activeSession)
+          }
+        }
         const data = await getDashboard()
         if (!active) return
         setDashboard(data)
         setError('')
       } catch (err) {
         if (!active) return
+        if (session?.role === 'STUDENT' && session?.id) {
+          try {
+            const refreshed = await refreshStoredSession(session)
+            if (refreshed?.studentNumber) {
+              setSession(refreshed)
+              const data = await getDashboard()
+              if (!active) return
+              setDashboard(data)
+              setError('')
+              return
+            }
+          } catch {
+            // fall through to error state below
+          }
+        }
         setDashboard(emptyDashboard)
-        const detail = err?.message ? ` (${err.message})` : ''
-        setError(`Dashboard data is unavailable until the API and database are reachable.${detail}`)
+        setError(formatDashboardError(err?.message))
       } finally {
         if (active) setLoading(false)
       }
@@ -4429,9 +4532,10 @@ function App() {
     try {
       const account = await login(username, password)
       saveStoredSession(account)
-      setSession(account)
+      const refreshed = await refreshStoredSession(account)
+      setSession(refreshed)
       setLoginForm({
-        username: account.username || '',
+        username: refreshed.username || '',
         password: ''
       })
     } catch (err) {
@@ -5074,6 +5178,24 @@ function App() {
       } else {
         showNotice('No archive folders are available yet.')
       }
+      return
+    }
+    if (action === 'dept-archive') {
+      setDashboardView('default')
+      setSelectedAdminOffice(null)
+      setSelectedCategory('')
+      setSearchQuery('')
+      setStudentSearchProfile(null)
+      setSearchResults(null)
+      getPublishedArchiveTree()
+        .then((node) => {
+          if (node?.id) {
+            openFolder(node.id)
+          } else {
+            showNotice('Department archive is not ready yet.')
+          }
+        })
+        .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
     }
   }
 
@@ -5090,7 +5212,7 @@ function App() {
   const sidebarQuickAccess = isAdmin
     ? adminQuickAccess
     : isStudent
-      ? quickAccess.filter((item) => item.action !== 'archive')
+      ? studentQuickAccess.filter((item) => item.action !== 'archive')
       : staffQuickAccess
   function openFolder(folderId) {
     if (!folderId) {
@@ -5482,12 +5604,28 @@ function App() {
           ) : null}
 
           {!isAdmin && isStudent ? (
-            <StudentDefaultFoldersNav
-              nodes={data.archiveTree || []}
-              activeFolderId={activeFolderId}
-              onOpenFolder={openFolder}
-              onNotify={showNotice}
-            />
+            <>
+              <StudentDefaultFoldersNav
+                nodes={data.archiveTree || []}
+                activeFolderId={activeFolderId}
+                onOpenFolder={openFolder}
+                onNotify={showNotice}
+              />
+              <StudentDepartmentArchiveNav
+                onOpenDepartmentArchive={() => {
+                  getPublishedArchiveTree()
+                    .then((node) => {
+                      if (node?.id) {
+                        openFolder(node.id)
+                      } else {
+                        showNotice('Department archive is not ready yet.')
+                      }
+                    })
+                    .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
+                }}
+                onNotify={showNotice}
+              />
+            </>
           ) : null}
 
           {!isAdmin && !isStudent ? (
@@ -5570,6 +5708,7 @@ function App() {
               onNotify={showNotice}
               onDataChange={refreshExplorerData}
               onArchivedChange={handleArchivedChange}
+              onReservationChange={() => setReservationRefreshToken((value) => value + 1)}
               addressBarActions={profileMenu}
             />
           ) : isAdmin && dashboardView === 'default' ? (
@@ -5688,10 +5827,18 @@ function App() {
               )}
             </div>
           ) : isStudent && dashboardView === 'default' && !isFolderRoute ? (
+            <>
+              {error ? <div className="banner warning student-dashboard-error">{error}</div> : null}
+              {loading ? (
+                <section className="explorer-page explorer-page-loading">
+                  <p>Loading your student workspace…</p>
+                </section>
+              ) : (
             <StudentDashboard
               session={session}
               dashboard={data}
               onNotify={showNotice}
+              reservationRefreshToken={reservationRefreshToken}
               onCreateFolder={handleTreeAddFolder}
               onEditFinalYearProject={(documentId) => {
                 setStudentFypEditId(documentId)
@@ -5706,9 +5853,22 @@ function App() {
                   showNotice('Your Official Documents and Final Year Project folders will appear after the workspace is ready.')
                 }
               }}
+              onBrowseDepartmentArchive={() => {
+                getPublishedArchiveTree()
+                  .then((node) => {
+                    if (node?.id) {
+                      openFolder(node.id)
+                    } else {
+                      showNotice('Department archive is not ready yet.')
+                    }
+                  })
+                  .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
+              }}
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
               profileMenu={profileMenu}
             />
+              )}
+            </>
           ) : (
             <div className="dashboard-workspace">
               <header className="dash-header dash-header-staff">

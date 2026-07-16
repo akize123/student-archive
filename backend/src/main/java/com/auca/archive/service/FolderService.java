@@ -183,16 +183,7 @@ public class FolderService {
         List<FolderNodeResponse> children;
         List<DocumentListItemResponse> documents;
 
-        if (role == UserRole.LIBRARIAN && ArchiveTreeService.LIBRARY_ACCEPTED_CODE.equalsIgnoreCase(folder.getCode())) {
-            children = List.of();
-            documents = documentRepository.findAll().stream()
-                    .filter(document -> !document.isArchivedForRemoval())
-                    .filter(document -> document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT)
-                    .filter(document -> document.getStatus() == DocumentStatus.APPROVED)
-                    .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                    .map(this::toListItem)
-                    .toList();
-        } else if (role == UserRole.LIBRARIAN && ArchiveTreeService.LIBRARY_REJECTED_CODE.equalsIgnoreCase(folder.getCode())) {
+        if (role == UserRole.LIBRARIAN && ArchiveTreeService.LIBRARY_REJECTED_CODE.equalsIgnoreCase(folder.getCode())) {
             children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
                     .sorted(Comparator.comparing(FolderEntity::getName))
                     .map(child -> toNode(child, role, studentNumber))
@@ -231,7 +222,7 @@ public class FolderService {
             } else if (isArchiveProjectFolder(folder)) {
                 folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
             } else {
-                folderDocuments = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId());
+                folderDocuments = resolveFolderDocuments(folder, childrenByParent);
             }
 
             documents = folderDocuments.stream()
@@ -247,11 +238,101 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 breadcrumbs,
-                countDocuments(folder, childrenByParent, role, studentNumber)
-                        + (ArchiveTreeService.LIBRARY_ACCEPTED_CODE.equalsIgnoreCase(folder.getCode()) ? documents.size() : 0),
+                countDocuments(folder, childrenByParent, role, studentNumber),
                 children,
                 documents
         );
+    }
+
+    private List<DocumentEntity> resolveFolderDocuments(FolderEntity folder, Map<Long, List<FolderEntity>> childrenByParent) {
+        Long linkedDocumentId = ArchiveTreeService.parseLinkedDocumentIdFromFolderCode(folder.getCode());
+        if (linkedDocumentId != null && isDocumentMirrorFolder(folder)) {
+            return documentRepository.findById(linkedDocumentId)
+                    .filter(document -> !document.isArchivedForRemoval())
+                    .stream()
+                    .toList();
+        }
+        return documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId());
+    }
+
+    private boolean isDocumentMirrorFolder(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        String code = folder.getCode().toUpperCase(Locale.ROOT);
+        return code.contains("-STU-")
+                && (ArchiveTreeService.isLibrarianAcceptedFolderCode(code)
+                || ArchiveTreeService.isPublishedArchiveFolderCode(code));
+    }
+
+    public Optional<FolderNodeResponse> getStudentPublishedArchiveTree(String rawStudentNumber) {
+        UserRole role = UserRole.STUDENT;
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
+        ArchiveTreeService.StudentWorkspace workspace = ensureStudentWorkspace(studentNumber);
+        FolderEntity semesterFolder = folderRepository.findById(workspace.studentRoot().getParentId())
+                .orElseThrow(() -> new IllegalArgumentException("Semester folder not found for student workspace"));
+        FolderEntity acceptedRoot = archiveTreeService.getObject().ensureSemesterPublishedArchive(semesterFolder);
+        List<FolderEntity> folders = folderRepository.findAll();
+        Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
+        return Optional.of(buildPublishedArchiveNode(acceptedRoot, childrenByParent, studentNumber));
+    }
+
+    public Optional<Long> getStudentPublishedArchiveRootId(String rawStudentNumber) {
+        return getStudentPublishedArchiveTree(rawStudentNumber).map(FolderNodeResponse::id);
+    }
+
+    private FolderNodeResponse buildPublishedArchiveNode(
+            FolderEntity folder,
+            Map<Long, List<FolderEntity>> childrenByParent,
+            String studentNumber
+    ) {
+        List<FolderNodeResponse> children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+                .sorted(Comparator.comparing(FolderEntity::getName))
+                .map(child -> buildPublishedArchiveNode(child, childrenByParent, studentNumber))
+                .toList();
+        long documentCount = resolveFolderDocuments(folder, childrenByParent).stream()
+                .filter(document -> isDocumentAccessible(document, UserRole.STUDENT, studentNumber))
+                .count();
+        for (FolderNodeResponse child : children) {
+            documentCount += child.itemCount();
+        }
+        return new FolderNodeResponse(
+                folder.getId(),
+                folder.getName(),
+                folder.getCode(),
+                folder.getParentId(),
+                documentCount,
+                false,
+                children
+        );
+    }
+
+    public boolean isPublishedPeerDocument(DocumentEntity document, String studentNumber) {
+        if (document == null
+                || studentNumber == null
+                || studentNumber.isBlank()
+                || document.getCategory() != StudentDocumentCategory.FINAL_YEAR_PROJECT
+                || document.getStatus() != DocumentStatus.APPROVED
+                || accessService.isStudentDocument(document, studentNumber)) {
+            return false;
+        }
+        Optional<Long> studentSemesterId = resolveStudentSemesterId(studentNumber);
+        if (studentSemesterId.isEmpty()) {
+            return false;
+        }
+        String semesterPrefix = folderRepository.findById(studentSemesterId.get())
+                .map(FolderEntity::getCode)
+                .orElse("");
+        if (semesterPrefix.isBlank()) {
+            return false;
+        }
+        Long documentId = document.getId();
+        return folderRepository.findAll().stream()
+                .anyMatch(folder -> folder.getCode() != null
+                        && folder.getCode().startsWith(semesterPrefix)
+                        && ArchiveTreeService.isPublishedArchiveFolderCode(folder.getCode())
+                        && documentId.equals(ArchiveTreeService.parseLinkedDocumentIdFromFolderCode(folder.getCode())));
     }
 
     private List<DocumentEntity> collectDocumentsUnderFolder(Long folderId, Map<Long, List<FolderEntity>> childrenByParent) {
@@ -1001,6 +1082,9 @@ public class FolderService {
             if (accessService.isStudentDocument(document, studentNumber)) {
                 return true;
             }
+            if (isPublishedPeerDocument(document, studentNumber)) {
+                return true;
+            }
             if (document.getFolderId() == null) {
                 return false;
             }
@@ -1190,6 +1274,9 @@ public class FolderService {
             if (accessService.isStudentFolder(folder, studentNumber)) {
                 return true;
             }
+            if (isStudentPublishedArchiveFolder(folder, studentNumber)) {
+                return true;
+            }
             return isSharedWithRole(folder, UserRole.STUDENT);
         }
         // Library FYP Reviews is librarian-only; do not inherit visibility from AUCA root.
@@ -1326,8 +1413,40 @@ public class FolderService {
             return false;
         }
         String code = parent.getCode() == null ? "" : parent.getCode().toUpperCase(Locale.ROOT);
-        return ArchiveTreeService.isWithinStudentDefaultWorkspace(code)
-                && !code.contains("-" + ArchiveTreeService.ARCHIVE_PROJECT_SUFFIX);
+        return code.endsWith("-" + ArchiveTreeService.OFFICIAL_DOCUMENTS_SUFFIX)
+                || code.endsWith("-" + ArchiveTreeService.FINAL_YEAR_PROJECT_SUFFIX);
+    }
+
+    private boolean isStudentPublishedArchiveFolder(FolderEntity folder, String studentNumber) {
+        if (folder == null || studentNumber == null || !ArchiveTreeService.isPublishedArchiveFolderCode(folder.getCode())) {
+            return false;
+        }
+        Optional<Long> studentSemesterId = resolveStudentSemesterId(studentNumber);
+        return studentSemesterId.isPresent() && isUnderFolderTree(folder, studentSemesterId.get());
+    }
+
+    private Optional<Long> resolveStudentSemesterId(String studentNumber) {
+        try {
+            ArchiveTreeService.StudentWorkspace workspace = ensureStudentWorkspace(studentNumber);
+            return Optional.ofNullable(workspace.studentRoot().getParentId());
+        } catch (RuntimeException ex) {
+            return Optional.empty();
+        }
+    }
+
+    private boolean isUnderFolderTree(FolderEntity folder, Long ancestorId) {
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (Objects.equals(current.getId(), ancestorId)) {
+                return true;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return false;
     }
 
     private boolean isArchiveProjectFolder(FolderEntity folder) {

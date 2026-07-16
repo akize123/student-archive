@@ -24,8 +24,16 @@ public class ArchiveTreeService {
     public static final String OFFICIAL_DOCUMENTS_SUFFIX = "SOFF";
     public static final String FINAL_YEAR_PROJECT_NAME = "Final Year Project";
     public static final String FINAL_YEAR_PROJECT_SUFFIX = "SMY";
+    public static final String MY_PROJECTS_PENDING_NAME = "Pending";
+    public static final String MY_PROJECTS_PENDING_SUFFIX = "SMY-PND";
+    public static final String MY_PROJECTS_REJECTED_NAME = "Rejected";
+    public static final String MY_PROJECTS_REJECTED_SUFFIX = "SMY-REJ";
     public static final String ARCHIVE_PROJECT_NAME = "Archive project";
     public static final String ARCHIVE_PROJECT_SUFFIX = "SARC";
+    public static final String FYP_PUBLISHED_NAME = "FYP Published Archive";
+    public static final String FYP_PUBLISHED_SUFFIX = "FYP-PUB";
+    public static final String FYP_PUBLISHED_ACCEPTED_NAME = "Accepted";
+    public static final String FYP_PUBLISHED_ACCEPTED_SUFFIX = "FYP-PUB-ACC";
     public static final String LIBRARY_REVIEW_NAME = "Library FYP Reviews";
     public static final String LIBRARY_REVIEW_CODE = "LIB-FYP";
     public static final String LIBRARY_ACCEPTED_NAME = "Accepted";
@@ -96,7 +104,7 @@ public class ArchiveTreeService {
                 semesterOverride
         );
         if (!createDefaultBuckets) {
-            return new StudentWorkspace(studentFolder, studentFolder, studentFolder, studentFolder);
+            return new StudentWorkspace(studentFolder, studentFolder, studentFolder, studentFolder, studentFolder, studentFolder);
         }
         FolderEntity official = folderService.resolveOrCreateFolder(
                 OFFICIAL_DOCUMENTS_NAME,
@@ -108,12 +116,22 @@ public class ArchiveTreeService {
                 studentFolder.getCode() + "-" + FINAL_YEAR_PROJECT_SUFFIX,
                 studentFolder.getId()
         );
+        FolderEntity pending = folderService.resolveOrCreateFolder(
+                MY_PROJECTS_PENDING_NAME,
+                projects.getCode() + "-" + MY_PROJECTS_PENDING_SUFFIX,
+                projects.getId()
+        );
+        FolderEntity rejected = folderService.resolveOrCreateFolder(
+                MY_PROJECTS_REJECTED_NAME,
+                projects.getCode() + "-" + MY_PROJECTS_REJECTED_SUFFIX,
+                projects.getId()
+        );
         FolderEntity archiveProject = folderService.resolveOrCreateFolder(
                 ARCHIVE_PROJECT_NAME,
                 studentFolder.getCode() + "-" + ARCHIVE_PROJECT_SUFFIX,
                 studentFolder.getId()
         );
-        return new StudentWorkspace(studentFolder, official, projects, archiveProject);
+        return new StudentWorkspace(studentFolder, official, projects, pending, rejected, archiveProject);
     }
 
     @Transactional
@@ -164,6 +182,80 @@ public class ArchiveTreeService {
     }
 
     @Transactional
+    public FolderEntity placeRejectedProjectForStudent(StudentEntity student, String projectTitle, Long documentId) {
+        StudentWorkspace workspace = ensureStudentWorkspace(student);
+        String safeTitle = projectTitle == null || projectTitle.isBlank() ? "Rejected Project" : projectTitle.trim();
+        String label = safeTitle;
+        String code = workspace.myProjectsRejected().getCode()
+                + "-DOC-"
+                + (documentId == null ? "NEW" : documentId);
+        return folderService.resolveOrCreateFolder(label, code, workspace.myProjectsRejected().getId());
+    }
+
+    @Transactional
+    public FolderEntity placePublishedProject(StudentEntity student, String projectTitle, Long documentId) {
+        FolderEntity semesterFolder = resolveSemesterFolderForStudent(student);
+        FolderEntity acceptedRoot = ensureSemesterPublishedArchive(semesterFolder);
+        String label = (student.getStudentNumber() == null ? "Student" : student.getStudentNumber())
+                + " - "
+                + (projectTitle == null || projectTitle.isBlank() ? "Accepted Project" : projectTitle.trim());
+        String code = acceptedRoot.getCode()
+                + "-STU-"
+                + sanitizeCode(student.getStudentNumber())
+                + "-"
+                + (documentId == null ? "NEW" : documentId);
+        return folderService.resolveOrCreateFolder(label, code, acceptedRoot.getId());
+    }
+
+    @Transactional
+    public FolderEntity ensureSemesterPublishedArchive(FolderEntity semesterFolder) {
+        String publishedCode = semesterFolder.getCode() + "-" + FYP_PUBLISHED_SUFFIX;
+        FolderEntity publishedRoot = folderService.resolveOrCreateFolder(
+                FYP_PUBLISHED_NAME,
+                publishedCode,
+                semesterFolder.getId()
+        );
+        return folderService.resolveOrCreateFolder(
+                FYP_PUBLISHED_ACCEPTED_NAME,
+                publishedCode + "-ACC",
+                publishedRoot.getId()
+        );
+    }
+
+    public FolderEntity resolveSemesterFolderForStudent(StudentEntity student) {
+        StudentWorkspace workspace = ensureStudentWorkspace(student);
+        Long semesterId = workspace.studentRoot().getParentId();
+        if (semesterId == null) {
+            throw new IllegalArgumentException("Student workspace is missing semester placement");
+        }
+        return folderRepository.findById(semesterId)
+                .orElseThrow(() -> new IllegalArgumentException("Semester folder not found for student workspace"));
+    }
+
+    public static boolean isPublishedArchiveFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).contains("-" + FYP_PUBLISHED_SUFFIX);
+    }
+
+    public static Long parseLinkedDocumentIdFromFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        String normalized = code.trim();
+        int lastDash = normalized.lastIndexOf('-');
+        if (lastDash < 0 || lastDash >= normalized.length() - 1) {
+            return null;
+        }
+        try {
+            return Long.parseLong(normalized.substring(lastDash + 1));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    @Transactional
     public FolderEntity placeAcceptedProjectForLibrarian(StudentEntity student, String projectTitle, Long documentId) {
         LibrarianReviewFolders reviewFolders = ensureLibrarianReviewFolders();
         String label = (student.getStudentNumber() == null ? "Student" : student.getStudentNumber())
@@ -199,7 +291,10 @@ public class ArchiveTreeService {
         }
 
         StudentDocumentCategory category = request.category();
-        FolderEntity bucket = isOfficialCategory(category) ? workspace.officialDocuments() : workspace.myProjects();
+        if (category == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            return workspace.myProjectsPending();
+        }
+        FolderEntity bucket = isOfficialCategory(category) ? workspace.officialDocuments() : workspace.myProjectsPending();
         return bucket;
     }
 
@@ -392,7 +487,17 @@ public class ArchiveTreeService {
         String normalized = code.toUpperCase(Locale.ROOT);
         return normalized.endsWith("-" + OFFICIAL_DOCUMENTS_SUFFIX)
                 || normalized.endsWith("-" + FINAL_YEAR_PROJECT_SUFFIX)
-                || normalized.endsWith("-" + ARCHIVE_PROJECT_SUFFIX);
+                || normalized.endsWith("-" + ARCHIVE_PROJECT_SUFFIX)
+                || normalized.endsWith("-" + MY_PROJECTS_PENDING_SUFFIX)
+                || normalized.endsWith("-" + MY_PROJECTS_REJECTED_SUFFIX);
+    }
+
+    public static boolean isMyProjectsPendingFolderCode(String code) {
+        return code != null && code.toUpperCase(Locale.ROOT).endsWith("-" + MY_PROJECTS_PENDING_SUFFIX);
+    }
+
+    public static boolean isMyProjectsRejectedFolderCode(String code) {
+        return code != null && code.toUpperCase(Locale.ROOT).endsWith("-" + MY_PROJECTS_REJECTED_SUFFIX);
     }
 
     public static boolean isWithinStudentDefaultWorkspace(String code) {
@@ -402,6 +507,8 @@ public class ArchiveTreeService {
         String normalized = code.toUpperCase(Locale.ROOT);
         return normalized.contains("-" + OFFICIAL_DOCUMENTS_SUFFIX)
                 || normalized.contains("-" + FINAL_YEAR_PROJECT_SUFFIX)
+                || normalized.contains("-" + MY_PROJECTS_PENDING_SUFFIX)
+                || normalized.contains("-" + MY_PROJECTS_REJECTED_SUFFIX)
                 || normalized.contains("-" + ARCHIVE_PROJECT_SUFFIX);
     }
 
@@ -548,6 +655,8 @@ public class ArchiveTreeService {
             FolderEntity studentRoot,
             FolderEntity officialDocuments,
             FolderEntity myProjects,
+            FolderEntity myProjectsPending,
+            FolderEntity myProjectsRejected,
             FolderEntity archiveProject
     ) {
     }

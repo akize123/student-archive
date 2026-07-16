@@ -26,6 +26,12 @@ public record CreateUserRequest(
 
         List<String> privileges,
 
-        Boolean active
+        Boolean active,
+
+        String studentNumber,
+
+        String faculty,
+
+        String academicDepartment
 ) {
 }

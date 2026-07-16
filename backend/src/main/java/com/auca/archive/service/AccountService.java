@@ -12,21 +12,25 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.Locale;
+import java.util.Optional;
 
 @Service
 public class AccountService {
     private final AccountRepository accountRepository;
     private final PasswordHasher passwordHasher;
     private final AdminService adminService;
+    private final StudentAccountProvisioningService studentAccountProvisioningService;
 
     public AccountService(
             AccountRepository accountRepository,
             PasswordHasher passwordHasher,
-            AdminService adminService
+            AdminService adminService,
+            StudentAccountProvisioningService studentAccountProvisioningService
     ) {
         this.accountRepository = accountRepository;
         this.passwordHasher = passwordHasher;
         this.adminService = adminService;
+        this.studentAccountProvisioningService = studentAccountProvisioningService;
     }
 
     @Transactional
@@ -73,9 +77,39 @@ public class AccountService {
         }
 
         account.setLastLoginAt(LocalDateTime.now());
+        if (account.getRole() == UserRole.STUDENT) {
+            studentAccountProvisioningService.syncStudentAccount(account);
+        }
         accountRepository.save(account);
 
         return toLoginResponse(account);
+    }
+
+    public LoginResponse getSessionProfile(Long accountId) {
+        if (accountId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please sign in again.");
+        }
+        AccountEntity account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please sign in again."));
+        if (!Boolean.TRUE.equals(account.getActive())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account is inactive.");
+        }
+        if (account.getRole() == UserRole.STUDENT) {
+            studentAccountProvisioningService.syncStudentAccount(account);
+            accountRepository.save(account);
+        }
+        return toLoginResponse(account);
+    }
+
+    public Optional<String> resolveLinkedStudentNumber(Long accountId) {
+        if (accountId == null) {
+            return Optional.empty();
+        }
+        return accountRepository.findById(accountId)
+                .filter(account -> account.getRole() == UserRole.STUDENT)
+                .map(AccountEntity::getStudentNumber)
+                .filter(value -> value != null && !value.isBlank())
+                .map(value -> value.trim().toUpperCase(Locale.ROOT));
     }
 
     private LoginResponse toLoginResponse(AccountEntity account) {
