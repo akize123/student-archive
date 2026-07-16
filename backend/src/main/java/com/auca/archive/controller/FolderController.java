@@ -44,6 +44,15 @@ public class FolderController {
         this.folderImportService = folderImportService;
     }
 
+    @GetMapping("/published-archive/tree")
+    public FolderNodeResponse publishedArchiveTree(
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) {
+        return folderService.getStudentPublishedArchiveTree(studentNumber)
+                .orElseThrow(() -> new IllegalArgumentException("Published archive is unavailable for this student"));
+    }
+
     @GetMapping("/tree")
     public List<FolderNodeResponse> tree(
             @RequestHeader(value = "X-User-Role", required = false) String role,

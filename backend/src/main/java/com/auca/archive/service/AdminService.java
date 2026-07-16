@@ -81,6 +81,7 @@ public class AdminService {
     private final ActivityService activityService;
     private final ActivityEntryRepository activityEntryRepository;
     private final FolderService folderService;
+    private final StudentAccountProvisioningService studentAccountProvisioningService;
 
     public AdminService(
             AccountRepository accountRepository,
@@ -88,7 +89,8 @@ public class AdminService {
             ArchiveAccessService accessService,
             ActivityService activityService,
             ActivityEntryRepository activityEntryRepository,
-            FolderService folderService
+            FolderService folderService,
+            StudentAccountProvisioningService studentAccountProvisioningService
     ) {
         this.accountRepository = accountRepository;
         this.passwordHasher = passwordHasher;
@@ -96,6 +98,7 @@ public class AdminService {
         this.activityService = activityService;
         this.activityEntryRepository = activityEntryRepository;
         this.folderService = folderService;
+        this.studentAccountProvisioningService = studentAccountProvisioningService;
     }
 
     public AdminDashboardResponse getDashboard(String rawRole) {
@@ -138,6 +141,15 @@ public class AdminService {
         account.setPasswordHash(passwordHasher.hash(request.password()));
         account.setCreatedAt(LocalDateTime.now());
         account.setPrivileges(serializePrivileges(resolveRequestedPrivileges(request.role(), request.privileges())));
+        applyStudentProfile(
+                account,
+                request.role(),
+                request.studentNumber(),
+                request.fullName(),
+                request.faculty(),
+                request.academicDepartment(),
+                null
+        );
 
         UserAccountResponse saved = toUserResponse(accountRepository.save(account));
         activityService.recordAction(
@@ -170,6 +182,16 @@ public class AdminService {
         if (request.password() != null && !request.password().isBlank()) {
             account.setPasswordHash(passwordHasher.hash(request.password()));
         }
+
+        applyStudentProfile(
+                account,
+                request.role(),
+                request.studentNumber(),
+                request.fullName(),
+                request.faculty(),
+                request.academicDepartment(),
+                account.getId()
+        );
 
         UserAccountResponse saved = toUserResponse(accountRepository.save(account));
         activityService.recordAction(
@@ -333,8 +355,32 @@ public class AdminService {
                 account.getDepartment(),
                 Boolean.TRUE.equals(account.getActive()),
                 resolvePrivilegeCodes(account),
+                account.getStudentNumber(),
                 account.getCreatedAt(),
                 account.getLastLoginAt()
+        );
+    }
+
+    private void applyStudentProfile(
+            AccountEntity account,
+            UserRole role,
+            String studentNumber,
+            String fullName,
+            String faculty,
+            String academicDepartment,
+            Long excludeAccountId
+    ) {
+        if (role != UserRole.STUDENT) {
+            account.setStudentNumber(null);
+            return;
+        }
+        studentAccountProvisioningService.linkStudentAccount(
+                account,
+                studentNumber,
+                fullName,
+                faculty,
+                academicDepartment,
+                excludeAccountId
         );
     }
 

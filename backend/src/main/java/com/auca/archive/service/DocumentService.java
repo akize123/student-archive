@@ -66,6 +66,7 @@ public class DocumentService {
     private final ProjectLinkValidator projectLinkValidator;
     private final DocumentElasticsearchService documentElasticsearchService;
     private final StudentStorageService studentStorageService;
+    private final ReservationService reservationService;
     private final Path storageRoot;
     private final long minUploadSizeBytes;
     private final long maxUploadSizeBytes;
@@ -85,6 +86,7 @@ public class DocumentService {
             @org.springframework.beans.factory.annotation.Autowired(required = false)
             DocumentElasticsearchService documentElasticsearchService,
             StudentStorageService studentStorageService,
+            ReservationService reservationService,
             @Value("${archive.min-upload-size-bytes:1024}") long minUploadSizeBytes,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes,
             @Value("${archive.student.max-upload-size-bytes:5242880}") long studentMaxUploadSizeBytes,
@@ -102,6 +104,7 @@ public class DocumentService {
         this.projectLinkValidator = projectLinkValidator;
         this.documentElasticsearchService = documentElasticsearchService;
         this.studentStorageService = studentStorageService;
+        this.reservationService = reservationService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
         this.minUploadSizeBytes = minUploadSizeBytes;
         this.maxUploadSizeBytes = maxUploadSizeBytes;
@@ -208,6 +211,7 @@ public class DocumentService {
                 .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        requireReservationForPeerDownload(document, role, studentNumber);
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             throw new IllegalArgumentException("Document has no stored file");
         }
@@ -240,6 +244,7 @@ public class DocumentService {
                 .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        requireReservationForPeerDownload(document, role, studentNumber);
         if (document.getCoverPhotoPath() == null || document.getCoverPhotoPath().isBlank()) {
             throw new IllegalArgumentException("Document has no cover photo");
         }
@@ -464,6 +469,10 @@ public class DocumentService {
         entity.setStatus(DocumentStatus.PENDING);
         entity.setReviewNote(null);
 
+        StudentEntity student = studentService.getStudentOrThrow(entity.getStudentNumber());
+        ArchiveTreeService.StudentWorkspace workspace = archiveTreeService.ensureStudentWorkspace(student);
+        entity.setFolderId(workspace.myProjectsPending().getId());
+
         Path studentRoot = Path.of(entity.getFilePath()).getParent();
         if (studentRoot == null) {
             studentRoot = storageRoot;
@@ -668,17 +677,32 @@ public class DocumentService {
                 entity.getId()
         );
         entity.setFolderId(profileFolder.getId());
+        archiveTreeService.placeAcceptedProjectForLibrarian(
+                student,
+                entity.getTitle(),
+                entity.getId()
+        );
+        archiveTreeService.placePublishedProject(
+                student,
+                entity.getTitle(),
+                entity.getId()
+        );
         archiveTreeService.ensureLibrarianReviewFolders();
     }
 
     private void placeRejectedFinalYearProject(DocumentEntity entity) {
         StudentEntity student = studentService.getStudentOrThrow(entity.getStudentNumber());
-        FolderEntity rejectedFolder = archiveTreeService.placeRejectedProject(
+        FolderEntity studentRejectedFolder = archiveTreeService.placeRejectedProjectForStudent(
                 student,
                 entity.getTitle(),
                 entity.getId()
         );
-        entity.setFolderId(rejectedFolder.getId());
+        entity.setFolderId(studentRejectedFolder.getId());
+        archiveTreeService.placeRejectedProject(
+                student,
+                entity.getTitle(),
+                entity.getId()
+        );
     }
 
     @Transactional
@@ -1240,6 +1264,23 @@ public class DocumentService {
         String trimmed = trimToNull(value);
         if (trimmed != null) {
             builder.append(" - ").append(trimmed);
+        }
+    }
+
+    private void requireReservationForPeerDownload(DocumentEntity document, UserRole role, String studentNumber) {
+        if (role != UserRole.STUDENT
+                || document.getCategory() != StudentDocumentCategory.FINAL_YEAR_PROJECT
+                || document.getStatus() != DocumentStatus.APPROVED
+                || accessService.isStudentDocument(document, studentNumber)) {
+            return;
+        }
+        if (!folderService.isPublishedPeerDocument(document, studentNumber)) {
+            return;
+        }
+        if (!reservationService.hasActiveReservation(document.getId(), studentNumber)) {
+            throw new IllegalArgumentException(
+                    "Reserve this book for a 20-minute reading slot before downloading."
+            );
         }
     }
 }

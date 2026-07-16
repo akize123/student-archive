@@ -62,12 +62,17 @@ function activityCategoryLabel(category) {
   return normalized || 'Action'
 }
 
+const STUDENT_ID_HINT = 'YYYY + semester (1-3) + dept code + sequence (example: 20251SENG041)'
+
 function buildUserForm(overrides = {}) {
   const role = overrides.role || 'REGISTRAR'
   return {
     username: '',
     password: '',
     fullName: '',
+    studentNumber: '',
+    faculty: '',
+    academicDepartment: '',
     active: true,
     role,
     department: overrides.department ?? roleDepartments[role] ?? '',
@@ -220,14 +225,36 @@ export default function AdminDashboard({ onNotify }) {
       ...current,
       role,
       department: roleDepartments[role] || current.department,
-      privileges: defaultPrivilegesByRole[role] || []
+      privileges: defaultPrivilegesByRole[role] || [],
+      studentNumber: role === 'STUDENT' ? current.studentNumber : '',
+      faculty: role === 'STUDENT' ? current.faculty : '',
+      academicDepartment: role === 'STUDENT' ? current.academicDepartment : ''
     }))
     setEnabledCategories(OFFICE_META[role]?.categories || [])
+  }
+
+  function handleStudentNumberChange(studentNumber) {
+    setForm((current) => {
+      const normalizedUsername = studentNumber.trim().toLowerCase()
+      const usernameMatchesStudentId = !current.username.trim()
+        || current.username.trim().toLowerCase() === String(current.studentNumber || '').trim().toLowerCase()
+      return {
+        ...current,
+        studentNumber,
+        username: usernameMatchesStudentId ? normalizedUsername : current.username
+      }
+    })
   }
 
   function validateForm(step = null) {
     if (modalMode === 'create' && step === 4 && !form.username.trim()) {
       return 'Please enter a username.'
+    }
+    if (form.role === 'STUDENT' && (step === null || step >= 4) && !form.studentNumber.trim()) {
+      return 'Please enter the student ID.'
+    }
+    if (modalMode === 'edit' && form.role === 'STUDENT' && !form.studentNumber.trim()) {
+      return 'Please enter the student ID.'
     }
     if ((step === null || step >= 4) && !form.fullName.trim()) {
       return 'Please enter the user full name.'
@@ -250,6 +277,9 @@ export default function AdminDashboard({ onNotify }) {
       username: user.username,
       password: '',
       fullName: user.fullName,
+      studentNumber: user.studentNumber || '',
+      faculty: '',
+      academicDepartment: '',
       role: user.role,
       department: user.department,
       active: user.active,
@@ -316,7 +346,10 @@ export default function AdminDashboard({ onNotify }) {
           role: form.role,
           department: form.department.trim(),
           active: form.active,
-          privileges: form.privileges
+          privileges: form.privileges,
+          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() : null,
+          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
+          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
         })
         onNotify?.('User account created successfully.')
       } else if (editingUser) {
@@ -326,7 +359,10 @@ export default function AdminDashboard({ onNotify }) {
           department: form.department.trim(),
           active: form.active,
           privileges: form.privileges,
-          password: form.password.trim() || null
+          password: form.password.trim() || null,
+          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() || null : null,
+          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
+          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
         })
         onNotify?.('User account updated successfully.')
       }
@@ -642,12 +678,42 @@ export default function AdminDashboard({ onNotify }) {
 
                 {wizardStep === 4 ? (
                   <form className="admin-user-form" onSubmit={handleSubmit}>
+                    {form.role === 'STUDENT' ? (
+                      <>
+                        <label>
+                          <span>Student ID</span>
+                          <input
+                            value={form.studentNumber}
+                            onChange={(event) => handleStudentNumberChange(event.target.value)}
+                            placeholder="e.g. 20251SENG041"
+                            required
+                          />
+                          <small className="admin-muted-cell admin-field-hint">{STUDENT_ID_HINT}</small>
+                        </label>
+                        <label>
+                          <span>Faculty (optional for modern IDs)</span>
+                          <input
+                            value={form.faculty}
+                            onChange={(event) => setForm({ ...form, faculty: event.target.value })}
+                            placeholder="e.g. Faculty of Information Technology"
+                          />
+                        </label>
+                        <label>
+                          <span>Academic department (optional for modern IDs)</span>
+                          <input
+                            value={form.academicDepartment}
+                            onChange={(event) => setForm({ ...form, academicDepartment: event.target.value })}
+                            placeholder="e.g. Software Engineering"
+                          />
+                        </label>
+                      </>
+                    ) : null}
                     <label>
                       <span>Username</span>
                       <input
                         value={form.username}
                         onChange={(event) => setForm({ ...form, username: event.target.value })}
-                        placeholder="e.g. jane.doe"
+                        placeholder={form.role === 'STUDENT' ? 'Usually same as student ID' : 'e.g. jane.doe'}
                         required
                       />
                     </label>
@@ -712,6 +778,34 @@ export default function AdminDashboard({ onNotify }) {
                     required
                   />
                 </label>
+                {form.role === 'STUDENT' ? (
+                  <>
+                    <label>
+                      <span>Student ID</span>
+                      <input
+                        value={form.studentNumber}
+                        onChange={(event) => setForm({ ...form, studentNumber: event.target.value })}
+                        placeholder="e.g. 20251SENG041"
+                        required
+                      />
+                      <small className="admin-muted-cell admin-field-hint">{STUDENT_ID_HINT}</small>
+                    </label>
+                    <label>
+                      <span>Faculty (optional for modern IDs)</span>
+                      <input
+                        value={form.faculty}
+                        onChange={(event) => setForm({ ...form, faculty: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Academic department (optional for modern IDs)</span>
+                      <input
+                        value={form.academicDepartment}
+                        onChange={(event) => setForm({ ...form, academicDepartment: event.target.value })}
+                      />
+                    </label>
+                  </>
+                ) : null}
                 <label>
                   <span>Role</span>
                   <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>

@@ -22,6 +22,12 @@ public record UpdateUserRequest(
         List<String> privileges,
 
         @Size(min = 6, message = "Password must be at least 6 characters")
-        String password
+        String password,
+
+        String studentNumber,
+
+        String faculty,
+
+        String academicDepartment
 ) {
 }

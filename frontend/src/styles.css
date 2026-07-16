@@ -267,9 +267,15 @@ body:has(.auth-landing)::before {
 
 .auth-landing-left {
   display: flex;
-  flex-direction: column;
-  padding: 28px 48px 40px;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 48px;
   background: #fff;
+}
+
+.auth-landing-content {
+  width: min(100%, 480px);
+  margin: 0 auto;
 }
 
 .auth-back-home {
@@ -286,21 +292,18 @@ body:has(.auth-landing)::before {
   color: #64748b;
 }
 
-.auth-landing-content {
-  width: min(100%, 420px);
-  margin: 0 auto;
-}
-
 .auth-uni-brand {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 14px;
-  margin-bottom: 42px;
+  margin: 0 0 36px;
+  max-width: none;
 }
 
 .auth-uni-logo {
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
@@ -309,15 +312,15 @@ body:has(.auth-landing)::before {
 .auth-uni-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 .auth-uni-copy span {
-  color: #1e3a5f;
-  font-size: 0.78rem;
+  color: #1a4a7e;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1.25;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
 }
 
 .auth-portal-form h1 {
@@ -350,7 +353,7 @@ body:has(.auth-landing)::before {
   position: relative;
   display: flex;
   align-items: center;
-  margin-bottom: 22px;
+  margin-bottom: 0;
 }
 
 .auth-field-icon {
@@ -464,7 +467,7 @@ body:has(.auth-landing)::before {
 
 .auth-landing-right {
   position: relative;
-  min-height: 320px;
+  min-height: 100vh;
   overflow: hidden;
   background: #dbeafe;
 }
@@ -1593,6 +1596,33 @@ body:has(.auth-landing)::before {
 .student-folder-nav-child:hover,
 .student-folder-nav-child.active {
   background: rgba(15, 76, 129, 0.08);
+}
+
+.student-reservation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.student-reservation-controls .primary-btn.compact,
+.student-reservation-controls .ghost-btn.compact {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+.student-reservation-slots,
+.student-reservation-timer {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.student-dept-archive-btn {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(15, 76, 129, 0.04);
 }
 
 .archive-tree {
@@ -3715,7 +3745,7 @@ tbody tr.document-row {
   }
 
   .auth-landing-left {
-    padding: 20px 24px 32px;
+    padding: 28px 24px 36px;
   }
 
   .auth-back-home {
@@ -6372,29 +6402,64 @@ tbody tr.document-row {
 }
 
 .auca-theme {
-  font-family: 'Poppins', sans-serif !important;
+  font-family: 'Poppins', 'Segoe UI', sans-serif !important;
 }
+
+.auca-theme .auth-landing-left {
+  align-items: center;
+  justify-content: center;
+}
+
+.auca-theme .auth-landing-content {
+  width: min(100%, 480px);
+}
+
+.auca-theme .auth-uni-brand {
+  justify-content: flex-start;
+  margin-bottom: 40px;
+}
+
+.auca-theme .auth-uni-logo {
+  width: 64px;
+  height: 64px;
+}
+
+.auca-theme .auth-uni-copy span {
+  font-size: 22px;
+  font-weight: 700;
+  color: #004b8d;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
 .auca-theme .auth-portal-form {
-  padding: 0 40px;
+  padding: 0;
 }
-.auca-theme h1 {
-  color: #1a4a7e;
-  font-weight: 600;
+
+.auca-theme .auth-portal-form h1 {
+  color: #004b8d;
+  font-weight: 700;
   text-align: center;
-  font-size: 28px;
-  margin-bottom: 8px;
+  font-size: 34px;
+  margin: 0 0 12px;
+  line-height: 1.15;
 }
+
 .auca-theme .auth-portal-lead {
   text-align: center;
-  font-size: 14px;
-  color: #333;
-  margin-bottom: 32px;
+  font-size: 17px;
+  font-weight: 400;
+  color: #004b8d;
+  margin: 0 0 36px;
+  line-height: 1.45;
 }
+
 .auca-theme .auth-field-group {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
+
 .auca-theme .auth-field-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: #333;
   text-transform: none;
@@ -6402,33 +6467,41 @@ tbody tr.document-row {
   margin-bottom: 8px;
   display: block;
 }
+
 .auca-theme .auth-input-shell {
   border: none;
   background: transparent;
   padding: 0;
   height: auto;
 }
+
 .auca-theme .auth-input-shell input {
   background-color: #eef4fb;
-  border: 1px solid transparent;
+  border: 1px solid #e2ebf5;
   border-radius: 8px;
   padding: 12px 16px;
-  font-size: 14px;
+  min-height: 44px;
+  font-size: 15px;
   width: 100%;
   color: #333;
+  box-shadow: none;
   transition: border-color 0.2s ease;
 }
+
 .auca-theme .auth-input-shell input:focus {
   border-color: #1a4a7e;
   outline: none;
+  box-shadow: none;
 }
+
 .auca-theme .auth-options {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 24px;
+  gap: 0;
+  margin: 4px 0 24px;
 }
+
 .auca-theme .auth-forgot-link {
   color: #888;
   font-size: 13px;
@@ -6436,20 +6509,19 @@ tbody tr.document-row {
   border: none;
   padding: 0;
   cursor: pointer;
+  text-decoration: none;
 }
-.auca-theme .auth-staff-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #555;
-  cursor: pointer;
+
+.auca-theme .auth-forgot-link:hover {
+  color: #666;
 }
+
 .auca-theme .auth-submit-container {
   display: flex;
   justify-content: center;
-  margin-top: 16px;
+  margin-top: 8px;
 }
+
 .auca-theme .auth-portal-btn {
   background-color: #6d8299;
   color: #ffffff;
@@ -6459,32 +6531,27 @@ tbody tr.document-row {
   font-weight: 500;
   width: auto;
   min-width: 120px;
+  min-height: auto;
   border: none;
   cursor: pointer;
   box-shadow: none;
+  letter-spacing: normal;
 }
-.auca-theme .auth-portal-btn:hover {
+
+.auca-theme .auth-portal-btn:hover:not(:disabled) {
   background-color: #5c6e82;
+  transform: none;
+  box-shadow: none;
 }
-.auca-theme .auth-signup-text {
-  text-align: center;
+
+.auca-theme .auth-error {
+  margin-bottom: 16px;
   font-size: 13px;
-  color: #666;
-  margin-top: 24px;
 }
-.auca-theme .auth-signup-link {
-  color: #3b82f6;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-weight: 500;
-}
-.auca-theme .auth-signup-link:hover {
-  text-decoration: underline;
-}
-.auca-theme .auth-landing-content {
-  width: min(100%, 540px);
+
+.auca-theme .auth-forgot-note {
+  margin: 0 0 16px;
+  font-size: 13px;
 }
 
 .student-panel-head-split {

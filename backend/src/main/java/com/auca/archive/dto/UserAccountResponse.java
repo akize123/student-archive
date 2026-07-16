@@ -12,6 +12,7 @@ public record UserAccountResponse(
         String department,
         boolean active,
         List<String> privileges,
+        String studentNumber,
         LocalDateTime createdAt,
         LocalDateTime lastLoginAt
 ) {

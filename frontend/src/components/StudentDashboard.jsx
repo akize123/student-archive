@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { DocumentIcon, DownloadIcon, FolderPlusIcon } from './Icons'
+import StudentReservationsPanel from './StudentReservationsPanel'
 
 const registrarCategories = new Set([
   'REGISTRATION_FORM',
@@ -52,7 +53,10 @@ export default function StudentDashboard({
   onOpenDocument,
   onCreateFolder,
   onBrowse,
+  onBrowseDepartmentArchive,
   onEditFinalYearProject,
+  onNotify,
+  reservationRefreshToken = 0,
   profileMenu
 }) {
   const [projectTab, setProjectTab] = useState('pending')
@@ -100,8 +104,8 @@ export default function StudentDashboard({
           </nav>
           <h1>My archive</h1>
           <p>
-            Use the sidebar folders for Official Documents, Final Year Project, and Archive project.
-            Open Final Year Project to submit through the guided steps.
+            Use the sidebar folders for Official Documents, Final Year Project (Pending/Rejected), and Archive project.
+            Browse the department archive to reserve and read other students&apos; approved projects.
           </p>
           <span className="dash-meta">Student ID: {session.studentNumber}</span>
         </div>
@@ -110,8 +114,11 @@ export default function StudentDashboard({
             <FolderPlusIcon className="icon" />
             New subfolder
           </button>
+          <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowseDepartmentArchive}>
+            Department archive
+          </button>
           <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowse}>
-            Browse
+            My folders
           </button>
           {profileMenu}
         </div>
@@ -237,7 +244,7 @@ export default function StudentDashboard({
                       <span className="student-feedback">Feedback: {document.reviewNote}</span>
                     ) : null}
                     {projectTab === 'pending' ? (
-                      <span className="student-feedback soft">Waiting for librarian approval. Not visible in the shared archive yet.</span>
+                      <span className="student-feedback soft">In your Final Year Project → Pending folder until librarian approval.</span>
                     ) : null}
                     {projectTab === 'accepted' ? (
                       <span className="student-feedback soft">Approved and available in the archive project folders.</span>
@@ -268,10 +275,12 @@ export default function StudentDashboard({
               ? 'No pending submissions. Open Final Year Project in the sidebar to start the 5-step upload.'
               : projectTab === 'accepted'
                 ? 'No accepted projects yet. Approved submissions will appear here and under Archive project.'
-                : 'No rejected projects. If a submission is rejected, librarian feedback will show here. You can edit and resubmit.'}
+                : 'No rejected projects. Rejected submissions move to Final Year Project → Rejected with librarian feedback. Edit and resubmit from there.'}
           </p>
         )}
       </section>
+
+      <StudentReservationsPanel onNotify={onNotify} onRefreshToken={reservationRefreshToken} />
     </div>
   )
 }

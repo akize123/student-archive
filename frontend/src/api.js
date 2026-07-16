@@ -113,6 +113,10 @@ export function login(username, password) {
   })
 }
 
+export function getSessionProfile() {
+  return request('/api/auth/me')
+}
+
 export function searchDocuments(query, category) {
   const params = new URLSearchParams()
   if (query) params.set('q', query)
@@ -130,6 +134,30 @@ export function lookupStudent(studentNumber) {
 
 export function getFolder(folderId) {
   return request(`/api/folders/${folderId}`)
+}
+
+export function getPublishedArchiveTree() {
+  return request('/api/folders/published-archive/tree')
+}
+
+export function reserveDocument(documentId) {
+  return request(`/api/reservations?documentId=${encodeURIComponent(documentId)}`, {
+    method: 'POST'
+  })
+}
+
+export function getMyReservations() {
+  return request('/api/reservations/mine')
+}
+
+export function releaseReservation(reservationId) {
+  return request(`/api/reservations/${reservationId}`, {
+    method: 'DELETE'
+  })
+}
+
+export function getReservationAvailability(documentId) {
+  return request(`/api/reservations/availability?documentId=${encodeURIComponent(documentId)}`)
 }
 
 export function createSubfolder(parentId, name) {
