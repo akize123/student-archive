@@ -56,6 +56,7 @@ public class FolderImportService {
     private final StudentIdFormatService studentIdFormatService;
     private final FileEncryptionService fileEncryptionService;
     private final ActivityService activityService;
+    private final MalwareScanService malwareScanService;
     private final Path storageRoot;
     private final long maxUploadSizeBytes;
 
@@ -68,6 +69,7 @@ public class FolderImportService {
             StudentIdFormatService studentIdFormatService,
             FileEncryptionService fileEncryptionService,
             ActivityService activityService,
+            MalwareScanService malwareScanService,
             @Value("${archive.storage-root:storage}") String storageRoot,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes
     ) {
@@ -79,6 +81,7 @@ public class FolderImportService {
         this.studentIdFormatService = studentIdFormatService;
         this.fileEncryptionService = fileEncryptionService;
         this.activityService = activityService;
+        this.malwareScanService = malwareScanService;
         this.storageRoot = Path.of(storageRoot);
         this.maxUploadSizeBytes = maxUploadSizeBytes;
     }
@@ -226,6 +229,7 @@ public class FolderImportService {
             UserRole role
     ) throws IOException {
         FileSignatureValidator.requirePdf(fileBytes);
+        malwareScanService.requireClean(fileBytes, fileName);
         if (fileBytes.length < MIN_FILE_BYTES) {
             throw new IllegalArgumentException("File is too small");
         }

@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getPublishedArchiveTree, getSessionProfile, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getSessionProfile, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import AdminOfficeView from './components/AdminOfficeView'
 import { buildAdminOffices, filterArchiveTreeForOffice } from './adminOfficeUtils'
 import AcademicYearField from './components/AcademicYearField'
 import MobileScanPage from './components/MobileScanPage'
 import UploadPhoneScanPanel from './components/UploadPhoneScanPanel'
+import UploadFileDropzone from './components/UploadFileDropzone'
 import LibrarianDashboard from './components/LibrarianDashboard'
 import StudentDashboard from './components/StudentDashboard'
-import StudentBookReservationControls from './components/StudentBookReservationControls'
+import StudentBookReservationControls, { StudentArchiveBookReservationPanel } from './components/StudentBookReservationControls'
+import DocumentPdfViewer from './components/DocumentPdfViewer'
 import StudentFypWizard from './components/StudentFypWizard'
 import ProjectCoverPhoto from './components/ProjectCoverPhoto'
 import BrandLogo from './components/BrandLogo'
@@ -22,7 +24,6 @@ import {
   validateStudentIdDepartmentMatch,
   validateStudentIdForNewEntry
 } from './studentId'
-import { countPdfPages } from './documentScan'
 import { validateAcademicYearFormat } from './academicYears'
 import { validatePdfFile, validateReplacementFile } from './fileSignatures'
 import {
@@ -183,10 +184,9 @@ const quickAccess = [
 ]
 
 const studentQuickAccess = [
+  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Recent activity', icon: ClockIcon, count: null, action: 'recent' },
   { label: 'Dashboard', icon: HomeIcon, count: null, action: 'dashboard' },
-  { label: 'Department Archive', icon: FolderIcon, count: null, action: 'dept-archive' },
-  { label: 'Shared with me', icon: BellIcon, count: null, action: 'shared' },
   { label: 'Trash', icon: TrashIcon, count: null, action: 'archive' }
 ]
 
@@ -246,6 +246,12 @@ const studentDocumentCategories = [
 
 const studentCategoryByValue = Object.fromEntries(studentDocumentCategories.map((item) => [item.value, item]))
 const studentCategoryByFolderCode = Object.fromEntries(studentDocumentCategories.map((item) => [item.folderCode, item.value]))
+
+const legacyDocumentTypeCategories = new Set([
+  'REGISTRATION_FORM',
+  'REINTEGRATION_FORM',
+  'APPLICATION_DOCUMENTS'
+])
 
 const examPaperTypes = [
   {
@@ -323,9 +329,17 @@ const SHARE_DESTINATIONS = [
 ]
 
 const SHARE_PERMISSIONS = [
-  { value: 'READ_ONLY', label: 'Read only', hint: 'View and download only' },
+  { value: 'VIEW_ONLY', label: 'View only', hint: 'Secure read-only viewer — no download, print, or copy' },
+  { value: 'READ_ONLY', label: 'Read & download', hint: 'View and download files' },
   { value: 'WRITE', label: 'Write', hint: 'Upload files and create folders' },
   { value: 'EDIT', label: 'Edit', hint: 'Replace, rename, and modify items' }
+]
+
+const SHARE_EXPIRATION_OPTIONS = [
+  { value: 'NEVER', label: 'No expiration' },
+  { value: '7_DAYS', label: '7 days' },
+  { value: '30_DAYS', label: '30 days' },
+  { value: 'CUSTOM', label: 'Custom date' }
 ]
 
 function getShareDestinations(role) {
@@ -454,7 +468,7 @@ const roleDashboardConfig = {
     department: 'Registrar Office',
     welcomeCopy: 'Manage student records, archive intake, and approval routing.',
     defaultCategory: '',
-    visibleCategories: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS']
+    visibleCategories: []
   },
   EXAMINATION_OFFICER: {
     roleLabel: 'Examination Officer',
@@ -469,8 +483,8 @@ const roleDashboardConfig = {
     dashboardTitle: 'HOD Dashboard',
     department: 'Department Office',
     welcomeCopy: 'Oversee department submissions and final approval decisions.',
-    defaultCategory: 'APPLICATION_DOCUMENTS',
-    visibleCategories: ['APPLICATION_DOCUMENTS']
+    defaultCategory: '',
+    visibleCategories: []
   },
   LIBRARIAN: {
     roleLabel: 'Librarian',
@@ -486,7 +500,7 @@ const roleDashboardConfig = {
     department: 'Student Workspace',
     welcomeCopy: 'Access registrar documents and upload your final year project within your personal storage limit.',
     defaultCategory: 'FINAL_YEAR_PROJECT',
-    visibleCategories: ['FINAL_YEAR_PROJECT']
+    visibleCategories: []
   }
 }
 
@@ -598,6 +612,81 @@ function findStudentDefaultFolders(nodes) {
     return code.endsWith('-SARC') || name === 'archive project'
   }) || null
   return { official, projects, archive }
+}
+
+function computeStudentFypCounts(dashboard) {
+  const documents = dashboard?.recentFiles || []
+  const projects = documents.filter((item) => item.category === 'FINAL_YEAR_PROJECT')
+  const statusOf = (item) => String(item.status || '').toUpperCase()
+  return {
+    pending: projects.filter((item) => statusOf(item) === 'PENDING').length,
+    rejected: projects.filter((item) => statusOf(item) === 'REJECTED').length,
+    accepted: projects.filter((item) => statusOf(item) === 'APPROVED').length
+  }
+}
+
+function childFolderBadgeCount(child, fypCounts) {
+  const code = String(child?.code || '').toUpperCase()
+  const name = String(child?.name || '').toLowerCase()
+  if (code.includes('-PND') || name === 'pending') {
+    return fypCounts.pending
+  }
+  if (code.includes('-REJ') || name === 'rejected') {
+    return fypCounts.rejected
+  }
+  if (code.includes('-APR') || code.includes('-ACC') || name === 'accepted' || name === 'approved') {
+    return fypCounts.accepted
+  }
+  return null
+}
+
+const studentFypStatusItems = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'accepted', label: 'Accepted' },
+  { key: 'rejected', label: 'Rejected' }
+]
+
+function matchesFypStatusFolder(node, status) {
+  const code = String(node?.code || '').toUpperCase()
+  const name = String(node?.name || '').toLowerCase()
+  if (status === 'pending') {
+    return code.includes('-PND') || name === 'pending'
+  }
+  if (status === 'rejected') {
+    return code.includes('-REJ') || name === 'rejected'
+  }
+  if (status === 'accepted') {
+    return code.includes('-ACC') || code.includes('-APR') || name === 'accepted' || name === 'approved'
+  }
+  return false
+}
+
+function resolveStudentFypStatusFolder(defaults, status) {
+  const children = defaults.projects?.children || []
+  if (status === 'accepted') {
+    return children.find((child) => matchesFypStatusFolder(child, status)) || defaults.archive || null
+  }
+  return children.find((child) => matchesFypStatusFolder(child, status)) || null
+}
+
+function fypStatusBadgeCount(status, fypCounts) {
+  return fypCounts?.[status] ?? 0
+}
+
+const studentFolderMeta = {
+  official: {
+    label: 'Official Documents',
+    description: 'Forms and records from registrar'
+  },
+  projects: {
+    label: 'Final Year Project',
+    description: 'Submit and track your project review',
+    expandable: true
+  },
+  archive: {
+    label: 'Archive project',
+    description: 'Your approved archived copy'
+  }
 }
 
 function findStudentPersonalFolderParent(nodes, studentNumber) {
@@ -1415,7 +1504,45 @@ function buildDefaultUploadForm() {
 }
 
 function getCategoryMeta(value) {
-  return studentCategoryByValue[value] || { value, label: value || 'Uncategorized', summary: 'Student record' }
+  return studentCategoryByValue[value] || { value, label: value || '', summary: 'Student record' }
+}
+
+function isLegacyDocumentTypeCategory(category) {
+  return legacyDocumentTypeCategories.has(String(category || '').toUpperCase())
+}
+
+function shouldShowDocumentCategoryLabel(category, context = {}) {
+  if (!category || isLegacyDocumentTypeCategory(category)) {
+    return false
+  }
+  if (isFinalYearProjectCategory(category) && !isFinalYearProjectDocumentView(context)) {
+    return false
+  }
+  return true
+}
+
+function resolveUploadCategory(role, { usesPlacementUpload, isExamOfficer, isStudent }) {
+  if (isStudent) {
+    return 'FINAL_YEAR_PROJECT'
+  }
+  if (isExamOfficer) {
+    return 'EXAMINATION_DOCUMENTS'
+  }
+  if (role === 'LIBRARIAN') {
+    return 'FINAL_YEAR_PROJECT'
+  }
+  if (usesPlacementUpload && (role === 'REGISTRAR' || role === 'HOD')) {
+    return null
+  }
+  const configured = roleDashboardConfig[role]?.defaultCategory
+  return configured || null
+}
+
+function resolveCategoryChipLabel(category) {
+  if (!shouldShowDocumentCategoryLabel(category)) {
+    return 'Document'
+  }
+  return getCategoryMeta(category).label
 }
 
 function getDepartmentOptions(faculty) {
@@ -1432,15 +1559,6 @@ function getExamPaperTypeMeta(value) {
   }
 }
 
-function buildPlacementUploadTitle(form, studentNumber) {
-  return [
-    getCategoryMeta(form.category).label,
-    String(studentNumber || '').trim(),
-    String(form.academicYear || '').trim(),
-    String(form.semester || '').trim()
-  ].filter(Boolean).join(' - ')
-}
-
 function buildDocumentMetaLine(document) {
   if (!document?.examType) {
     return ''
@@ -1455,6 +1573,189 @@ function buildDocumentMetaLine(document) {
     document.marks != null ? `${document.marks}/${examType.maxMarks}` : null,
     document.examRoom
   ].filter(Boolean).join(' | ')
+}
+
+function isFinalYearProjectCategory(value) {
+  return String(value || '').toUpperCase() === 'FINAL_YEAR_PROJECT'
+}
+
+function isFinalYearProjectDocumentView(context = {}) {
+  return Boolean(
+    context.showArchiveGallery
+    || context.showProfileHeader
+    || context.inPublishedArchive
+    || context.showFypSubmit
+    || isStudentFinalYearProjectFolder(context.folder)
+    || isPublishedArchiveFolder(context.folder)
+  )
+}
+
+function stripFinalYearProjectLabel(text) {
+  return String(text || '')
+    .replace(/\s*[-–—|·]\s*Final Year Project/gi, '')
+    .replace(/^Final Year Project\s*[-–—|·]\s*/i, '')
+    .replace(/\s*Final Year Project\s*$/i, '')
+    .trim()
+}
+
+function inferCategoryLabelFromTitle(title) {
+  const normalized = String(title || '').trim().toLowerCase()
+  if (!normalized) {
+    return ''
+  }
+  for (const category of studentDocumentCategories) {
+    if (isFinalYearProjectCategory(category.value)) {
+      continue
+    }
+    if (normalized.includes(category.label.toLowerCase())) {
+      return category.label
+    }
+  }
+  return ''
+}
+
+function resolveExplorerDocumentCategoryLabel(document, context = {}) {
+  const category = document?.category
+  if (!shouldShowDocumentCategoryLabel(category, context)) {
+    return ''
+  }
+  return getCategoryMeta(category).label
+}
+
+function stripPlacementMetadataFromTitle(text, document) {
+  let result = stripFinalYearProjectLabel(String(text || '').trim())
+  if (!result) {
+    return ''
+  }
+
+  const segments = result.split(/\s*-\s*/).map((segment) => segment.trim()).filter(Boolean)
+  if (!segments.length) {
+    return ''
+  }
+
+  const categoryLabels = new Set(
+    studentDocumentCategories
+      .filter((category) => !isFinalYearProjectCategory(category.value))
+      .map((category) => category.label.toLowerCase())
+  )
+  const studentNumber = String(document?.studentNumber || '').trim()
+  const academicYear = String(document?.academicYear || '').trim()
+  const semester = String(document?.semester || '').trim()
+
+  const filtered = segments.filter((segment) => {
+    const lower = segment.toLowerCase()
+    if (categoryLabels.has(lower)) {
+      return false
+    }
+    if (studentNumber && segment === studentNumber) {
+      return false
+    }
+    if (academicYear && segment === academicYear) {
+      return false
+    }
+    if (semester && segment === semester) {
+      return false
+    }
+    if (/^\d{4}-\d{4}$/.test(segment)) {
+      return false
+    }
+    if (/^\d{4}\/\d+$/.test(segment)) {
+      return false
+    }
+    return true
+  })
+
+  return filtered.join(' - ').trim()
+}
+
+function humanizeFileName(fileName) {
+  return String(fileName || '').trim().replace(/\.pdf$/i, '').trim()
+}
+
+function looksLikeRawFileName(value) {
+  const text = String(value || '').trim()
+  if (!text) {
+    return true
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) {
+    return true
+  }
+  if (/^\d+\.pdf$/i.test(text)) {
+    return true
+  }
+  return false
+}
+
+function resolveExplorerDocumentTitle(document, context = {}) {
+  const title = String(document?.title || '').trim()
+  const fileName = String(document?.fileName || '').trim()
+  let candidate = title
+
+  if (title && fileName && title.toLowerCase().endsWith(` - ${fileName.toLowerCase()}`)) {
+    candidate = title.slice(0, title.length - fileName.length - 3).trim()
+  }
+
+  candidate = stripPlacementMetadataFromTitle(candidate, document)
+  if (candidate && !looksLikeRawFileName(candidate)) {
+    return candidate
+  }
+
+  const fromFile = humanizeFileName(fileName)
+  if (fromFile && !looksLikeRawFileName(fromFile)) {
+    return fromFile
+  }
+
+  return 'Archived document'
+}
+
+function resolveExplorerDocumentFileLabel(document, context = {}) {
+  const fileName = String(document?.fileName || '').trim()
+  const displayTitle = resolveExplorerDocumentTitle(document, context)
+  if (!fileName || looksLikeRawFileName(fileName)) {
+    return ''
+  }
+  const normalizedTitle = displayTitle.toLowerCase()
+  const normalizedFile = humanizeFileName(fileName).toLowerCase()
+  if (normalizedTitle === normalizedFile || normalizedTitle === fileName.toLowerCase()) {
+    return ''
+  }
+  return fileName
+}
+
+function resolveExplorerDocumentMetaLine(document) {
+  const examMeta = buildDocumentMetaLine(document)
+  if (examMeta) {
+    return examMeta
+  }
+
+  const parts = []
+  const studentNumber = String(document?.studentNumber || '').trim()
+  if (studentNumber) {
+    parts.push(studentNumber)
+  }
+  const ownerName = String(document?.ownerName || '').trim()
+  if (ownerName && ownerName !== studentNumber) {
+    parts.push(ownerName)
+  }
+  if (document?.modifiedAt) {
+    parts.push(formatShortDate(document.modifiedAt))
+  }
+  return parts.join(' · ')
+}
+
+function resolveExplorerDocumentStatsLine(document, context = {}) {
+  const parts = []
+  if (document?.sizeBytes) {
+    parts.push(formatBytes(document.sizeBytes))
+  }
+  if (document?.pageCount) {
+    parts.push(`${document.pageCount} page${Number(document.pageCount) === 1 ? '' : 's'}`)
+  }
+  const fileLabel = resolveExplorerDocumentFileLabel(document, context)
+  if (fileLabel) {
+    parts.push(fileLabel)
+  }
+  return parts.join(' · ')
 }
 
 function matchesDocumentSearch(document, query, category) {
@@ -1615,51 +1916,61 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
   )
 }
 
-function StudentDepartmentArchiveNav({ onOpenDepartmentArchive, onNotify }) {
-  return (
-    <div className="sidebar-section student-folders-nav">
-      <div className="section-head">
-        <p className="eyebrow">Department archive</p>
-      </div>
-      <button
-        type="button"
-        className="student-folder-nav-button student-dept-archive-btn"
-        onClick={() => onOpenDepartmentArchive?.() || onNotify?.('Department archive is unavailable.')}
-      >
-        <span className="student-folder-nav-icon" aria-hidden="true">
-          <FolderIcon className="icon" />
-        </span>
-        <span className="student-folder-nav-copy">
-          <strong>Published FYP books</strong>
-          <em>Reserve &amp; read (20 min slots)</em>
-        </span>
-      </button>
-    </div>
-  )
-}
-
-function StudentDefaultFoldersNav({ nodes, activeFolderId, onOpenFolder, onNotify }) {
+function StudentWorkspaceNav({
+  nodes,
+  activeFolderId,
+  fypCounts,
+  fypTab = 'pending',
+  isFolderRoute = false,
+  onOpenFolder,
+  onSelectFypStatus,
+  onNotify
+}) {
   const defaults = findStudentDefaultFolders(nodes)
+  const [projectsExpanded, setProjectsExpanded] = useState(true)
+
   const folders = [
-    {
-      key: 'official',
-      label: 'Official Documents',
-      hint: 'From registrar & exams',
-      node: defaults.official
-    },
-    {
-      key: 'projects',
-      label: 'Final Year Project',
-      hint: 'Submit and edit pending work',
-      node: defaults.projects
-    },
-    {
-      key: 'archive',
-      label: 'Archive project',
-      hint: 'Accepted project profiles',
-      node: defaults.archive
-    }
+    { key: 'official', ...studentFolderMeta.official, node: defaults.official },
+    { key: 'projects', ...studentFolderMeta.projects, node: defaults.projects },
+    { key: 'archive', ...studentFolderMeta.archive, node: defaults.archive }
   ]
+
+  useEffect(() => {
+    const hasActiveStatusFolder = studentFypStatusItems.some((item) => {
+      const target = resolveStudentFypStatusFolder(defaults, item.key)
+      return target?.id && Number(activeFolderId) === Number(target.id)
+    })
+    if (hasActiveStatusFolder) {
+      setProjectsExpanded(true)
+    }
+  }, [activeFolderId, defaults.projects])
+
+  function openFolder(folder) {
+    if (folder.node?.id) {
+      onOpenFolder?.(folder.node.id)
+      return
+    }
+    onNotify?.(`${folder.label} is still being prepared. Refresh the page if this persists.`)
+  }
+
+  function handleFypStatusClick(status) {
+    onSelectFypStatus?.(status)
+    const target = resolveStudentFypStatusFolder(defaults, status)
+    if (target?.id) {
+      onOpenFolder?.(target.id)
+      return
+    }
+    const label = studentFypStatusItems.find((item) => item.key === status)?.label || 'Folder'
+    onNotify?.(`${label} is not ready yet. Refresh the page if this persists.`)
+  }
+
+  function isFypStatusActive(status) {
+    const target = resolveStudentFypStatusFolder(defaults, status)
+    if (isFolderRoute && target?.id && Number(activeFolderId) === Number(target.id)) {
+      return true
+    }
+    return !isFolderRoute && fypTab === status
+  }
 
   return (
     <div className="sidebar-section student-folders-nav">
@@ -1669,51 +1980,92 @@ function StudentDefaultFoldersNav({ nodes, activeFolderId, onOpenFolder, onNotif
       <div className="student-folders-nav-list">
         {folders.map((folder) => {
           const isActive = Boolean(folder.node?.id && Number(activeFolderId) === Number(folder.node.id))
-          const childCount = folder.node?.itemCount ?? 0
+          const childActive = folder.expandable && studentFypStatusItems.some((item) => {
+            const target = resolveStudentFypStatusFolder(defaults, item.key)
+            return target?.id && Number(activeFolderId) === Number(target.id)
+          })
+          const itemCount = folder.node?.itemCount ?? 0
+          const isExpanded = folder.expandable ? projectsExpanded : false
+          const fypAttentionCount = folder.expandable
+            ? fypStatusBadgeCount('pending', fypCounts) + fypStatusBadgeCount('rejected', fypCounts)
+            : 0
+
           return (
-            <div key={folder.key} className={`student-folder-nav-item ${isActive ? 'active' : ''}`}>
-              <button
-                type="button"
-                className="student-folder-nav-button"
-                onClick={() => {
-                  if (folder.node?.id) {
-                    onOpenFolder?.(folder.node.id)
-                  } else {
-                    onNotify?.(`${folder.label} is still being prepared. Refresh the page or open My archive.`)
-                  }
-                }}
-              >
-                <span className="student-folder-nav-icon" aria-hidden="true">
-                  <FolderIcon className="icon" />
-                  <LockIcon className="icon lock" />
-                </span>
-                <span className="student-folder-nav-copy">
-                  <strong>{folder.label}</strong>
-                  <em>{folder.hint}</em>
-                </span>
-                <span className="student-folder-nav-count">{childCount}</span>
-              </button>
-              {folder.node?.children?.length ? (
-                <div className="student-folder-nav-children">
-                  {folder.node.children.map((child) => (
-                    <button
-                      key={child.id}
-                      type="button"
-                      className={`student-folder-nav-child ${Number(activeFolderId) === Number(child.id) ? 'active' : ''}`}
-                      onClick={() => onOpenFolder?.(child.id)}
-                    >
-                      <FolderIcon className="icon" />
-                      <span>{child.name}</span>
-                    </button>
-                  ))}
+            <article
+              key={folder.key}
+              className={`student-folder-nav-item ${folder.expandable ? 'student-folder-nav-item-fyp' : ''} ${isActive || childActive ? 'active' : ''}`}
+            >
+              <div className={`student-folder-nav-row ${folder.expandable ? 'student-folder-nav-row-fyp' : ''}`}>
+                {folder.expandable && folder.node?.id ? (
+                  <button
+                    type="button"
+                    className="student-folder-nav-toggle"
+                    aria-label={isExpanded ? 'Hide status folders' : 'Show status folders'}
+                    aria-expanded={isExpanded}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setProjectsExpanded((current) => !current)
+                    }}
+                  >
+                    <ChevronRightIcon className={`icon tiny tree-chevron ${isExpanded ? 'expanded' : ''}`} />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="student-folder-nav-button"
+                  onClick={() => openFolder(folder)}
+                >
+                  <span className="student-folder-nav-icon">
+                    <FolderIcon className="icon folder" />
+                  </span>
+                  <span className="student-folder-nav-copy">
+                    <strong>{folder.label}</strong>
+                    <em>{folder.description}</em>
+                  </span>
+                  {folder.expandable && !isExpanded && fypAttentionCount > 0 ? (
+                    <span className="student-folder-nav-count is-alert">{fypAttentionCount}</span>
+                  ) : itemCount ? (
+                    <span className="student-folder-nav-count">{itemCount}</span>
+                  ) : null}
+                </button>
+              </div>
+
+              {folder.expandable ? (
+                <div className={`student-folder-nav-children-panel ${isExpanded ? 'is-open' : ''}`}>
+                  <div className="student-folder-nav-children">
+                    {studentFypStatusItems.map((statusItem) => {
+                      const badge = fypStatusBadgeCount(statusItem.key, fypCounts)
+                      const statusIsActive = isFypStatusActive(statusItem.key)
+                      const isAlert = statusItem.key === 'rejected' && badge > 0
+                      return (
+                        <button
+                          key={statusItem.key}
+                          type="button"
+                          className={`student-folder-nav-child student-fyp-status-row ${statusIsActive ? 'active' : ''}`}
+                          aria-current={statusIsActive ? 'page' : undefined}
+                          onClick={() => handleFypStatusClick(statusItem.key)}
+                        >
+                          <span className={`student-fyp-status-dot status-${statusItem.key}`} aria-hidden="true" />
+                          <span className="student-folder-nav-child-label">{statusItem.label}</span>
+                          {badge > 0 ? (
+                            <span className={`student-folder-nav-count student-fyp-status-count ${isAlert ? 'is-alert' : ''}`}>{badge}</span>
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               ) : null}
-            </div>
+            </article>
           )
         })}
       </div>
     </div>
   )
+}
+
+function StudentDefaultFoldersNav(props) {
+  return <StudentWorkspaceNav {...props} />
 }
 
 function ArchiveTreePanel({
@@ -2191,7 +2543,7 @@ function DocumentContextMenu({
         disabled={busy}
         onClick={() => { onOpenInNewWindow?.(documentItem); onClose?.() }}
       >
-        Open PDF in new window
+        Open in viewer
       </button>
       <button
         type="button"
@@ -2291,6 +2643,8 @@ function FolderView({
   onDataChange,
   onArchivedChange,
   onReservationChange,
+  reservationRefreshToken = 0,
+  onOpenDocument,
   addressBarActions
 }) {
   const [viewMode, setViewMode] = useState('grid')
@@ -2307,6 +2661,9 @@ function FolderView({
   const [shareOpen, setShareOpen] = useState(false)
   const [shareTargetRole, setShareTargetRole] = useState('')
   const [sharePermission, setSharePermission] = useState('READ_ONLY')
+  const [shareExpiration, setShareExpiration] = useState('NEVER')
+  const [shareCustomExpiresAt, setShareCustomExpiresAt] = useState('')
+  const [shareAllowReshare, setShareAllowReshare] = useState(false)
   const [shareBusy, setShareBusy] = useState(false)
   const shareDestinations = getShareDestinations(userRole)
   const isStudent = userRole === 'STUDENT'
@@ -2423,10 +2780,7 @@ function FolderView({
 
     setOpeningDocumentId(documentItem.id)
     try {
-      const result = await openDocument(documentItem.id)
-      if (result?.mode === 'download') {
-        onNotify?.(`Downloading ${result.filename}...`)
-      }
+      await onOpenDocument?.(documentItem.id, documentItem.title || documentItem.fileName)
     } catch (err) {
       onNotify?.(err.message || 'Unable to open document.')
     } finally {
@@ -2549,6 +2903,18 @@ function FolderView({
     }
     if (filterType === 'pending') {
       return String(document.status || '').toUpperCase() === 'PENDING'
+    }
+    if (
+      isFinalYearProjectCategory(document.category)
+      && !isFinalYearProjectDocumentView({
+        showArchiveGallery: isArchiveProjectRootFolder(folder),
+        showProfileHeader: isProjectProfileFolder(folder),
+        inPublishedArchive,
+        showFypSubmit,
+        folder
+      })
+    ) {
+      return false
     }
     return true
   })
@@ -2897,6 +3263,9 @@ function FolderView({
     }
     setShareTargetRole(shareDestinations[0]?.value || '')
     setSharePermission('READ_ONLY')
+    setShareExpiration('NEVER')
+    setShareCustomExpiresAt('')
+    setShareAllowReshare(false)
     setShareOpen(true)
   }
 
@@ -2907,6 +3276,10 @@ function FolderView({
     }
     if (!sharePermission) {
       onNotify?.('Choose a permission level.')
+      return
+    }
+    if (shareExpiration === 'CUSTOM' && !shareCustomExpiresAt) {
+      onNotify?.('Choose a custom expiration date.')
       return
     }
     const folderIds = [...selectedFolderIds]
@@ -2921,7 +3294,10 @@ function FolderView({
         targetRole: shareTargetRole,
         permission: sharePermission,
         folderIds,
-        documentIds
+        documentIds,
+        expirationPreset: shareExpiration,
+        expiresAt: shareExpiration === 'CUSTOM' ? shareCustomExpiresAt : null,
+        allowReshare: shareAllowReshare
       })
       setShareOpen(false)
       setSelectedFolderIds(new Set())
@@ -3043,6 +3419,43 @@ function FolderView({
                 </label>
               ))}
             </div>
+            <p className="share-section-label">Access duration</p>
+            <div className="share-role-options">
+              {SHARE_EXPIRATION_OPTIONS.map((option) => (
+                <label key={option.value} className={`share-role-option ${shareExpiration === option.value ? 'active' : ''}`}>
+                  <input
+                    type="radio"
+                    name="share-expiration"
+                    value={option.value}
+                    checked={shareExpiration === option.value}
+                    onChange={() => setShareExpiration(option.value)}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              ))}
+            </div>
+            {shareExpiration === 'CUSTOM' ? (
+              <label className="share-custom-date">
+                <span>Expires on</span>
+                <input
+                  type="date"
+                  value={shareCustomExpiresAt}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={(event) => setShareCustomExpiresAt(event.target.value)}
+                />
+              </label>
+            ) : null}
+            <label className="share-reshare-option">
+              <input
+                type="checkbox"
+                checked={shareAllowReshare}
+                onChange={(event) => setShareAllowReshare(event.target.checked)}
+              />
+              <span>
+                <strong>Allow recipient to re-share</strong>
+                <em className="share-permission-hint">Recipients can forward these items to other departments unless this stays unchecked.</em>
+              </span>
+            </label>
             <div className="modal-actions">
               <button type="button" className="ghost-btn" onClick={() => setShareOpen(false)} disabled={shareBusy}>Cancel</button>
               <button type="button" className="primary-btn" onClick={handleShareConfirm} disabled={shareBusy || !shareTargetRole || !sharePermission}>
@@ -3304,7 +3717,7 @@ function FolderView({
         </p>
       ) : showArchiveGallery ? (
         <p className="explorer-hint">
-          Approved final year projects appear here as profiles. Open a profile to view details, links, and the project ZIP.
+          Approved final year projects appear here as profiles. Reserve department books below, or open a profile to view your archived copy.
         </p>
       ) : showProfileHeader ? (
         <p className="explorer-hint">
@@ -3318,6 +3731,15 @@ function FolderView({
         <p className="explorer-hint">
           Click to select a document. Right-click for open and download options. <kbd>Ctrl</kbd>+click to multi-select for bulk download or delete.
         </p>
+      ) : null}
+
+      {showArchiveGallery && isStudent ? (
+        <StudentArchiveBookReservationPanel
+          studentNumber={studentNumber}
+          refreshToken={reservationRefreshToken}
+          onNotify={onNotify}
+          onChanged={() => onReservationChange?.()}
+        />
       ) : null}
 
       {showProfileHeader && profileDocument ? (
@@ -3436,24 +3858,40 @@ function FolderView({
             </button>
           ))}
 
-        {visibleDocumentsForGrid.map((document) => (
+        {visibleDocumentsForGrid.map((document) => {
+          const documentViewContext = {
+            showArchiveGallery,
+            showProfileHeader,
+            inPublishedArchive,
+            showFypSubmit,
+            folder
+          }
+          const displayTitle = resolveExplorerDocumentTitle(document, documentViewContext)
+          const metaLine = resolveExplorerDocumentMetaLine(document)
+          const statsLine = resolveExplorerDocumentStatsLine(document, documentViewContext)
+          const categoryLabel = resolveExplorerDocumentCategoryLabel(document, documentViewContext)
+          const docType = String(document.type || 'PDF').toUpperCase()
+
+          return (
           <div
             key={document.id}
             role="button"
             tabIndex={0}
-            className={`explorer-item explorer-file ${selectedDocumentIds.has(document.id) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
+            className={`explorer-item explorer-file explorer-document-card ${selectedDocumentIds.has(document.id) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
             onClick={(event) => handleDocumentClick(event, document)}
             onContextMenu={(event) => handleDocumentContextMenu(event, document)}
             onKeyDown={(event) => handleDocumentKeyDown(event, document)}
             title="Click to select. Right-click for open and download."
           >
             <ExplorerStatusBadge status={document.status} userRole={userRole} />
-            <div className="explorer-item-icon file">
-              <DocumentIcon className="icon" />
+            <div className="explorer-document-head">
+              <span className="explorer-document-type">{docType}</span>
+              {categoryLabel ? <span className="explorer-document-category">{categoryLabel}</span> : null}
             </div>
-            <div className="explorer-item-copy">
-              <strong>{document.fileName || document.title}</strong>
-              <span>{formatBytes(document.sizeBytes)}</span>
+            <div className="explorer-document-body">
+              <strong className="explorer-document-title">{displayTitle}</strong>
+              {metaLine ? <span className="explorer-document-meta">{metaLine}</span> : null}
+              {statsLine ? <span className="explorer-document-stats">{statsLine}</span> : null}
               {inPublishedArchive ? (
                 <StudentBookReservationControls
                   documentId={document.id}
@@ -3468,7 +3906,8 @@ function FolderView({
               ) : null}
             </div>
           </div>
-        ))}
+          )
+        })}
 
         {isEmpty ? (
           <div className="explorer-empty">
@@ -3689,7 +4128,7 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                           ? 'Folder'
                           : fileRow.kind === 'folder'
                             ? 'Folder'
-                            : getCategoryMeta(fileRow.category).label}
+                            : resolveCategoryChipLabel(fileRow.category)}
                       </span>
                     </td>
                     <td>
@@ -3794,15 +4233,15 @@ function App() {
   const [uploadSourceMode, setUploadSourceMode] = useState('file')
   const [studentFypWizardOpen, setStudentFypWizardOpen] = useState(false)
   const [studentFypEditId, setStudentFypEditId] = useState(null)
+  const [studentFypTab, setStudentFypTab] = useState('pending')
   const [uploadBusy, setUploadBusy] = useState(false)
-  const [scanBusy, setScanBusy] = useState(false)
-  const [scanResult, setScanResult] = useState(null)
-  const [scanError, setScanError] = useState('')
+  const [uploadBatchProgress, setUploadBatchProgress] = useState({ current: 0, total: 0 })
   const [dashboardView, setDashboardView] = useState('default')
   const [sharedItems, setSharedItems] = useState([])
   const [sharedBusy, setSharedBusy] = useState(false)
   const [sharedCount, setSharedCount] = useState(0)
   const [reservationRefreshToken, setReservationRefreshToken] = useState(0)
+  const [documentViewer, setDocumentViewer] = useState(null)
   const [quickAccessOpen, setQuickAccessOpen] = useState(loadQuickAccessOpen)
   const [adminOffices, setAdminOffices] = useState(() => buildAdminOffices([], {}, []))
   const [selectedAdminOffice, setSelectedAdminOffice] = useState(null)
@@ -3848,6 +4287,20 @@ function App() {
     }
   }, [showNotice])
 
+  const openDocumentPreview = useCallback((documentId, title, options = {}) => {
+    if (!documentId) {
+      return
+    }
+    setDocumentViewer({
+      documentId,
+      title: title || 'Document',
+      sharedAccess: options.sharedAccess === true,
+      sharePermission: options.sharePermission || '',
+      sharePermissionLabel: options.sharePermissionLabel || '',
+      allowDownload: options.sharedAccess ? options.allowDownload : undefined
+    })
+  }, [])
+
   useEffect(() => () => {
     if (noticeTimerRef.current) {
       clearTimeout(noticeTimerRef.current)
@@ -3888,13 +4341,9 @@ function App() {
   const [, setFolderNavTick] = useState(0)
 
   const [form, setForm] = useState(buildDefaultUploadForm)
-  const [file, setFile] = useState(null)
-  const [filePreviewOpen, setFilePreviewOpen] = useState(false)
-  const [filePreviewUrl, setFilePreviewUrl] = useState('')
-  const uploadFileInputRef = useRef(null)
+  const [uploadQueue, setUploadQueue] = useState([])
   const roleConfig = getRoleDashboardConfig(session?.role)
   const visibleDocumentCategories = getVisibleDocumentCategories(session?.role)
-  const documentTypeLocked = visibleDocumentCategories.length === 1
 
   useEffect(() => {
     let active = true
@@ -4007,10 +4456,8 @@ function App() {
   useEffect(() => {
     if (!session) {
       setForm(buildDefaultUploadForm())
-      setFile(null)
-      setScanResult(null)
-      setScanError('')
-      setScanBusy(false)
+      setUploadQueue([])
+      setUploadBatchProgress({ current: 0, total: 0 })
       setModalOpen(false)
       setSelectedCategory('')
       setSearchQuery('')
@@ -4029,7 +4476,9 @@ function App() {
     setForm((current) => ({
       ...current,
       uploadedBy: current.uploadedBy || resolvedUploadedBy,
-      category: roleConfig.defaultCategory || current.category,
+      category: usesSemesterFolderUpload(session.role) && (session.role === 'REGISTRAR' || session.role === 'HOD')
+        ? ''
+        : (roleConfig.defaultCategory || current.category),
       studentNumber: session.role === 'STUDENT' ? (session.studentNumber || current.studentNumber) : current.studentNumber,
       studentName: session.role === 'STUDENT' ? (session.fullName || current.studentName) : current.studentName,
       faculty: session.role === 'STUDENT' ? (current.faculty || studentLookupResult?.faculty || '') : current.faculty,
@@ -4064,72 +4513,6 @@ function App() {
       active = false
     }
   }, [session])
-
-  useEffect(() => {
-    if (!file) {
-      setFilePreviewUrl('')
-      setFilePreviewOpen(false)
-      return undefined
-    }
-
-    const url = URL.createObjectURL(file)
-    setFilePreviewUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [file])
-
-  useEffect(() => {
-    if (!file || !modalOpen) {
-      return undefined
-    }
-
-    let active = true
-    setScanBusy(true)
-    setScanError('')
-    setScanResult(null)
-
-    const context = {
-      studentNumber: normalizeStudentId(form.studentNumber),
-      studentName: String(form.studentName || '').trim(),
-      category: form.category,
-      course: String(form.course || '').trim(),
-      faculty: String(form.faculty || '').trim(),
-      department: String(form.department || '').trim(),
-      fileName: file.name
-    }
-
-    scanDocument(file, context)
-      .then((result) => {
-        if (!active) return
-        setScanResult(result)
-        if (result.pageCount) {
-          setForm((current) => ({ ...current, pageCount: result.pageCount }))
-        }
-      })
-      .catch((err) => {
-        if (!active) return
-        setScanResult(null)
-        setScanError(err.message || 'Unable to scan this document.')
-      })
-      .finally(() => {
-        if (active) setScanBusy(false)
-      })
-
-    return () => {
-      active = false
-    }
-  }, [
-    file,
-    modalOpen,
-    form.studentNumber,
-    form.studentName,
-    form.category,
-    form.course,
-    form.faculty,
-    form.department,
-    file?.name
-  ])
 
   useEffect(() => {
     if (route.view !== 'folder') {
@@ -4497,6 +4880,16 @@ function App() {
     }
   }, [settledSearchQuery, session, dashboard])
 
+  useEffect(() => {
+    if (session?.role !== 'STUDENT') {
+      return
+    }
+    const rejectedCount = computeStudentFypCounts(dashboard ?? emptyDashboard).rejected
+    if (rejectedCount > 0) {
+      setStudentFypTab('rejected')
+    }
+  }, [session?.role, dashboard])
+
   function toggleQuickAccess() {
     setQuickAccessOpen((current) => {
       const next = !current
@@ -4572,10 +4965,8 @@ function App() {
     setStudentEntryMode('idle')
     setLoading(false)
     setModalOpen(false)
-    setFile(null)
-    setScanResult(null)
-    setScanError('')
-    setScanBusy(false)
+    setUploadQueue([])
+    setUploadBatchProgress({ current: 0, total: 0 })
     setRoute({ view: 'dashboard', folderId: null })
     setFolderDetail(null)
     setFolderError('')
@@ -4628,7 +5019,7 @@ function App() {
   const adminArchiveTreeTitle = selectedAdminOffice
     ? `${adminOffices.find((office) => office.role === selectedAdminOffice)?.label || 'Office'} archive tree`
     : 'Archive Tree'
-  const hideHeaderBrowse = usesOfficeDashboardFormat(session.role) || isLibrarian
+  const hideHeaderBrowse = usesOfficeDashboardFormat(session.role) || isLibrarian || isStudent
   const showOfficeDashboardFormat = usesOfficeDashboardFormat(session.role)
   const isStaffUser = !isStudent
   const isFolderRoute = route.view === 'folder'
@@ -4646,6 +5037,24 @@ function App() {
   const archiveSemesterOptions = semesterOptionsForAcademicYear(form.academicYear)
   const uploadPlacement = usesPlacementUpload ? resolveFolderUploadPlacement(folderDetail) : null
   const uploadPlacementSummary = formatUploadPlacementSummary(uploadPlacement)
+  const uploadScanContext = {
+    studentNumber: normalizeStudentId(form.studentNumber),
+    studentName: String(form.studentName || '').trim(),
+    ...(resolveUploadCategory(session?.role, {
+      usesPlacementUpload,
+      isExamOfficer,
+      isStudent
+    })
+      ? { category: resolveUploadCategory(session?.role, { usesPlacementUpload, isExamOfficer, isStudent }) }
+      : {}),
+    course: String(form.course || '').trim(),
+    faculty: String(form.faculty || '').trim(),
+    department: String(form.department || '').trim()
+  }
+  const uploadMaxFileSizeBytes = isStudent ? 5 * 1024 * 1024 : 10 * 1024 * 1024
+  const verifiedUploadItems = uploadQueue.filter((item) => item.status === 'verified')
+  const uploadQueueScanning = uploadQueue.some((item) => item.status === 'pending' || item.status === 'scanning')
+  const uploadQueueRequiresStudentId = usesPlacementUpload && !normalizeStudentId(form.studentNumber)
   const effectiveUploadPlacementSummary = studentEntryMode === 'existing'
     ? formatUploadPlacementSummary({
         faculty: form.faculty,
@@ -4654,9 +5063,6 @@ function App() {
         semester: form.semester
       })
     : uploadPlacementSummary
-  const uploadTitlePreview = usesPlacementUpload
-    ? buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
-    : getCategoryMeta(form.category).label
 
   async function handleDecision(taskId, decision, reviewNote = '') {
     try {
@@ -4671,8 +5077,8 @@ function App() {
       }
       await decideApproval(taskId, decision, note)
       showNotice(decision === 'approve'
-        ? 'Project approved. It was moved to the student Archive project and appears in Library Accepted.'
-        : 'Project rejected. It was moved to Library Rejected (hidden from the student folder tree).')
+        ? 'Project approved. It was moved to the student Archive project and published for department reading.'
+        : 'Project rejected. The student was notified and can revise from Final Year Project → Rejected.')
       setApprovalReviewTask(null)
       setApprovalReviewNote('')
       const fresh = await getDashboard()
@@ -5180,22 +5586,9 @@ function App() {
       }
       return
     }
-    if (action === 'dept-archive') {
-      setDashboardView('default')
-      setSelectedAdminOffice(null)
-      setSelectedCategory('')
-      setSearchQuery('')
-      setStudentSearchProfile(null)
-      setSearchResults(null)
-      getPublishedArchiveTree()
-        .then((node) => {
-          if (node?.id) {
-            openFolder(node.id)
-          } else {
-            showNotice('Department archive is not ready yet.')
-          }
-        })
-        .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
+    if (action === 'submit-fyp') {
+      setStudentFypEditId(null)
+      setStudentFypWizardOpen(true)
     }
   }
 
@@ -5212,8 +5605,28 @@ function App() {
   const sidebarQuickAccess = isAdmin
     ? adminQuickAccess
     : isStudent
-      ? studentQuickAccess.filter((item) => item.action !== 'archive')
-      : staffQuickAccess
+      ? studentQuickAccess
+      : isLibrarian
+        ? librarianQuickAccess
+        : isStaffUser
+          ? staffQuickAccess
+          : []
+  const studentFypCounts = isStudent ? computeStudentFypCounts(data) : { pending: 0, rejected: 0, accepted: 0 }
+  const librarianPendingCount = isLibrarian
+    ? (data.awaitingApproval || []).filter((task) => String(task.status || '').toUpperCase() === 'PENDING').length
+    : 0
+
+  function handleSelectStudentFypStatus(status) {
+    setStudentFypTab(status)
+    setDashboardView('default')
+    setSelectedAdminOffice(null)
+    setSelectedCategory('')
+    setSearchQuery('')
+    setStudentSearchProfile(null)
+    setSearchResults(null)
+    navigateToDashboard()
+  }
+
   function openFolder(folderId) {
     if (!folderId) {
       return
@@ -5292,38 +5705,23 @@ function App() {
     }
   }
 
-  function clearSelectedUploadFile() {
-    setFile(null)
-    setScanResult(null)
-    setScanError('')
-    setFilePreviewOpen(false)
-    if (uploadFileInputRef.current) {
-      uploadFileInputRef.current.value = ''
-    }
+  function clearUploadQueue() {
+    setUploadQueue([])
   }
 
-  async function handleUploadFileSelect(nextFile, inputElement) {
-    setScanResult(null)
-    setScanError('')
-    setFilePreviewOpen(false)
-    if (!nextFile) {
-      setFile(null)
+  function appendPhoneImportToQueue(importedFile, pageCount) {
+    if (!importedFile) {
       return
     }
-    const validation = await validatePdfFile(nextFile)
-    if (!validation.ok) {
-      setFile(null)
-      setScanError(validation.message)
-      if (inputElement) {
-        inputElement.value = ''
-      }
-      return
-    }
-    setFile(nextFile)
-    const pages = await countPdfPages(nextFile)
-    if (pages) {
-      setForm((current) => ({ ...current, pageCount: pages }))
-    }
+    setUploadQueue([{
+      id: crypto.randomUUID(),
+      file: importedFile,
+      status: 'pending',
+      scanResult: null,
+      scanError: '',
+      pageCount: pageCount || null,
+      uploadError: ''
+    }])
   }
 
   function openUploadModal() {
@@ -5335,18 +5733,19 @@ function App() {
       }
     }
     setUploadSourceMode('file')
-    setScanResult(null)
-    setScanError('')
-    setScanBusy(false)
-    setFilePreviewOpen(false)
-    clearSelectedUploadFile()
+    setUploadBatchProgress({ current: 0, total: 0 })
+    clearUploadQueue()
     setStudentLookupResult(null)
     setStudentLookupError('')
     setStudentLookupInfo('')
     setStudentEntryMode('idle')
     setForm({
       ...buildDefaultUploadForm(),
-      category: roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || buildDefaultUploadForm().category,
+      category: resolveUploadCategory(session?.role, {
+        usesPlacementUpload,
+        isExamOfficer,
+        isStudent: session?.role === 'STUDENT'
+      }) || '',
       uploadedBy: session?.fullName || session?.username || '',
       faculty: placement?.faculty || '',
       department: placement?.department || '',
@@ -5360,33 +5759,22 @@ function App() {
   function closeUploadModal() {
     setModalOpen(false)
     setUploadSourceMode('file')
-    setScanResult(null)
-    setScanError('')
-    setScanBusy(false)
-    setFilePreviewOpen(false)
-    clearSelectedUploadFile()
+    setUploadBatchProgress({ current: 0, total: 0 })
+    clearUploadQueue()
   }
 
   async function handleUpload(event) {
     event.preventDefault()
-    if (!file) {
-      showNotice('Please choose a file to upload.')
+    if (!verifiedUploadItems.length) {
+      showNotice('Add at least one verified PDF to upload.')
       return
     }
-    if (scanBusy) {
-      showNotice('Please wait while the document is being scanned.')
-      return
-    }
-    if (!scanResult?.verified) {
-      showNotice(scanError || scanResult?.summary || 'This document could not be confirmed as an AUCA record.')
+    if (uploadQueueScanning) {
+      showNotice('Please wait while documents are being scanned.')
       return
     }
     if (isStudent && (!session.studentNumber || !session.fullName)) {
       showNotice('Your student profile is incomplete. Contact the registrar office.')
-      return
-    }
-    if (isStudent && Number(file.size || 0) > 5 * 1024 * 1024) {
-      showNotice('Student uploads are limited to 5 MB per file.')
       return
     }
     if (!isStudent && !usesPlacementUpload) {
@@ -5427,54 +5815,106 @@ function App() {
       showNotice('Upload placement could not be determined. Open a semester folder under a department and try again.')
       return
     }
+
+    const itemsToUpload = [...verifiedUploadItems]
     setUploadBusy(true)
+    setUploadBatchProgress({ current: 0, total: itemsToUpload.length })
+
+    let uploadedCount = 0
+    let failedCount = 0
+    let lastUploaded = null
+
     try {
       const studentNumber = normalizeStudentId(form.studentNumber)
-      const resolvedPageCount = Number(scanResult?.pageCount || form.pageCount) || 1
-      const payload = usesPlacementUpload
-        ? {
-            studentNumber,
-            studentName: form.studentName,
-            faculty: form.faculty,
-            department: form.department,
-            uploadedBy: form.uploadedBy,
-            category: form.category,
-            pageCount: resolvedPageCount,
-            academicYear: String(form.academicYear || '').trim() || null,
-            semester: String(form.semester || '').trim() || null,
-            issueDate: todayInputValue(),
-            title: buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || studentNumber),
-            description: null,
-            tags: null,
-            examType: isExamOfficer ? '' : null,
-            course: isExamOfficer ? '' : null,
-            marks: isExamOfficer ? null : null,
-            examRoom: isExamOfficer ? '' : null
+
+      for (let index = 0; index < itemsToUpload.length; index += 1) {
+        const item = itemsToUpload[index]
+        setUploadBatchProgress({ current: index + 1, total: itemsToUpload.length })
+        setUploadQueue((current) => current.map((queueItem) => (
+          queueItem.id === item.id ? { ...queueItem, status: 'uploading', uploadError: '' } : queueItem
+        )))
+
+        try {
+          const resolvedPageCount = Number(item.pageCount || item.scanResult?.pageCount || form.pageCount) || 1
+          const distinctTitle = item.file.name
+          const uploadCategory = resolveUploadCategory(session?.role, {
+            usesPlacementUpload,
+            isExamOfficer,
+            isStudent
+          })
+          const payload = usesPlacementUpload
+            ? {
+                studentNumber,
+                studentName: form.studentName,
+                faculty: form.faculty,
+                department: form.department,
+                uploadedBy: form.uploadedBy,
+                pageCount: resolvedPageCount,
+                academicYear: String(form.academicYear || '').trim() || null,
+                semester: String(form.semester || '').trim() || null,
+                issueDate: todayInputValue(),
+                title: distinctTitle,
+                description: null,
+                tags: null,
+                examType: isExamOfficer ? '' : null,
+                course: isExamOfficer ? '' : null,
+                marks: isExamOfficer ? null : null,
+                examRoom: isExamOfficer ? '' : null
+              }
+            : {
+                ...form,
+                studentNumber,
+                title: distinctTitle,
+                pageCount: resolvedPageCount,
+                marks: form.marks === '' ? null : Number(form.marks),
+                academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
+                semester: isStudent ? null : String(form.semester || '').trim() || null
+              }
+          if (uploadCategory) {
+            payload.category = uploadCategory
+          } else {
+            delete payload.category
           }
-        : {
-            ...form,
-            studentNumber,
-            title: getCategoryMeta(form.category).label,
-            pageCount: resolvedPageCount,
-            marks: form.marks === '' ? null : Number(form.marks),
-            academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
-            semester: isStudent ? null : String(form.semester || '').trim() || null
-          }
-      await submitUpload(payload, file)
-      showNotice('Document uploaded successfully.')
-      closeUploadModal()
-      setFile(null)
-      setScanResult(null)
-      setScanError('')
-      const fresh = await getDashboard()
-      setDashboard(fresh)
-      if (isFolderRoute && route.folderId) {
-        await reloadFolder()
+
+          const uploaded = await submitUpload(payload, item.file)
+          uploadedCount += 1
+          lastUploaded = uploaded
+          setUploadQueue((current) => current.map((queueItem) => (
+            queueItem.id === item.id ? { ...queueItem, status: 'uploaded', uploadError: '' } : queueItem
+          )))
+        } catch (err) {
+          failedCount += 1
+          setUploadQueue((current) => current.map((queueItem) => (
+            queueItem.id === item.id
+              ? { ...queueItem, status: 'failed', uploadError: err.message || 'Upload failed.' }
+              : queueItem
+          )))
+        }
       }
-    } catch (err) {
-      showNotice(err.message)
+
+      if (uploadedCount > 0) {
+        const fresh = await getDashboard()
+        setDashboard(fresh)
+        if (isFolderRoute && route.folderId) {
+          await reloadFolder()
+        }
+      }
+
+      if (failedCount === 0) {
+        showNotice(`${uploadedCount} document${uploadedCount === 1 ? '' : 's'} uploaded successfully.`)
+        closeUploadModal()
+        if (lastUploaded?.id) {
+          const lastItem = itemsToUpload[itemsToUpload.length - 1]
+          openDocumentPreview(lastUploaded.id, lastUploaded.title || lastItem?.file?.name || 'Document')
+        }
+      } else if (uploadedCount > 0) {
+        showNotice(`${uploadedCount} uploaded, ${failedCount} failed. Remove or retry failed files.`)
+      } else {
+        showNotice('All uploads failed. Check the queue for details.')
+      }
     } finally {
       setUploadBusy(false)
+      setUploadBatchProgress({ current: 0, total: 0 })
     }
   }
 
@@ -5500,8 +5940,8 @@ function App() {
             <BrandLogo />
           </div>
 
-          {isStaffUser ? (
-            <div className={`sidebar-section sidebar-quick-access ${quickAccessOpen ? 'is-open' : 'is-collapsed'}`}>
+          {(isStaffUser || isStudent) ? (
+            <div className={`sidebar-section sidebar-quick-access ${isStudent ? 'student-quick-access' : ''} ${quickAccessOpen ? 'is-open' : 'is-collapsed'}`}>
               <button
                 type="button"
                 className="quick-access-toggle"
@@ -5529,7 +5969,11 @@ function App() {
                         ? recentActivityCount
                         : item.action === 'shared'
                           ? sharedCount
-                          : null
+                          : isStudent && item.action === 'dashboard'
+                            ? studentFypCounts.rejected || null
+                            : isLibrarian && item.action === 'dashboard'
+                              ? librarianPendingCount
+                              : null
                     return (
                       <button
                         key={item.label}
@@ -5546,34 +5990,39 @@ function App() {
                 </div>
               </div>
             </div>
-          ) : (
-            <div className="sidebar-section sidebar-quick-access is-open student-quick-access">
-              <p className="eyebrow quick-access-label">Quick Access</p>
-              <div className="quick-access-links">
-                {sidebarQuickAccess.map((item) => {
-                  const Icon = item.icon
-                  const isActive = !isFolderRoute && (
-                    (item.action === 'dashboard' && dashboardView === 'default')
-                    || (item.action === 'recent' && dashboardView === 'recent')
-                    || (item.action === 'archive' && dashboardView === 'archive')
-                    || (item.action === 'shared' && dashboardView === 'shared')
-                  ) || (item.action === 'browse' && isFolderRoute)
-                  return (
+          ) : null}
+
+          {!isAdmin && isStudent ? (
+            <>
+              {studentFypCounts.pending === 0 && studentFypCounts.rejected === 0 ? (
+                <div className="sidebar-section student-sidebar-links">
+                  <div className="section-head student-sidebar-links-head">
+                    <p className="eyebrow">Workspace</p>
+                  </div>
+                  <div className="student-sidebar-links-list">
                     <button
-                      key={item.label}
-                      className={`quick-link ${isActive ? 'active' : ''}`}
                       type="button"
-                      onClick={() => handleQuickAccess(item.action)}
+                      className="quick-link"
+                      onClick={() => handleQuickAccess('submit-fyp')}
                     >
-                      <Icon className="icon" />
-                      <span>{item.label}</span>
-                      {item.action === 'shared' && sharedCount ? <strong>{sharedCount}</strong> : null}
+                      <UploadIcon className="icon" />
+                      <span>Submit project</span>
                     </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+                  </div>
+                </div>
+              ) : null}
+              <StudentDefaultFoldersNav
+                nodes={data.archiveTree || []}
+                activeFolderId={activeFolderId}
+                fypCounts={studentFypCounts}
+                fypTab={studentFypTab}
+                isFolderRoute={isFolderRoute}
+                onOpenFolder={openFolder}
+                onSelectFypStatus={handleSelectStudentFypStatus}
+                onNotify={showNotice}
+              />
+            </>
+          ) : null}
 
           {isAdmin ? (
             <div className="sidebar-section sidebar-offices">
@@ -5601,31 +6050,6 @@ function App() {
                 )}
               </div>
             </div>
-          ) : null}
-
-          {!isAdmin && isStudent ? (
-            <>
-              <StudentDefaultFoldersNav
-                nodes={data.archiveTree || []}
-                activeFolderId={activeFolderId}
-                onOpenFolder={openFolder}
-                onNotify={showNotice}
-              />
-              <StudentDepartmentArchiveNav
-                onOpenDepartmentArchive={() => {
-                  getPublishedArchiveTree()
-                    .then((node) => {
-                      if (node?.id) {
-                        openFolder(node.id)
-                      } else {
-                        showNotice('Department archive is not ready yet.')
-                      }
-                    })
-                    .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
-                }}
-                onNotify={showNotice}
-              />
-            </>
           ) : null}
 
           {!isAdmin && !isStudent ? (
@@ -5678,7 +6102,7 @@ function App() {
               studentProfile={studentSearchProfile}
               mode={usesOfficeDashboardFormat(session.role) ? 'registrar' : 'documents'}
               onClear={() => setSearchQuery('')}
-              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+              onOpenDocument={(documentId, title) => openDocumentPreview(documentId, title)}
               onDownloadDocument={handleDownloadDocumentById}
               onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
             />
@@ -5709,6 +6133,8 @@ function App() {
               onDataChange={refreshExplorerData}
               onArchivedChange={handleArchivedChange}
               onReservationChange={() => setReservationRefreshToken((value) => value + 1)}
+              reservationRefreshToken={reservationRefreshToken}
+              onOpenDocument={openDocumentPreview}
               addressBarActions={profileMenu}
             />
           ) : isAdmin && dashboardView === 'default' ? (
@@ -5762,7 +6188,7 @@ function App() {
                   results={searchResults}
                   studentProfile={studentSearchProfile}
                   onClear={() => setSearchQuery('')}
-                  onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+                  onOpenDocument={(documentId, title) => openDocumentPreview(documentId, title)}
                   onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                 />
@@ -5816,6 +6242,7 @@ function App() {
                     <AdminOfficeView
                       officeRole={selectedAdminOffice}
                       onNotify={showNotice}
+                      onOpenDocument={openDocumentPreview}
                       onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId)}
                       onBack={() => setSelectedAdminOffice(null)}
                       onShowArchiveTree={() => setAdminOfficePanel('tree')}
@@ -5826,6 +6253,35 @@ function App() {
                 <AdminDashboard onNotify={showNotice} />
               )}
             </div>
+          ) : isLibrarian && dashboardView === 'default' && !isFolderRoute ? (
+            <>
+              {error ? <div className="banner warning">{error}</div> : null}
+              {loading ? (
+                <section className="explorer-page explorer-page-loading">
+                  <p>Loading library workspace…</p>
+                </section>
+              ) : (
+                <LibrarianDashboard
+                  session={session}
+                  dashboard={data}
+                  onNotify={showNotice}
+                  onOpenDocument={(documentId) => openDocumentPreview(documentId)}
+                  onOpenFolder={openFolder}
+                  onBrowse={() => {
+                    const firstFolder = (data.archiveTree || [])[0]
+                    if (firstFolder?.id) {
+                      openFolder(firstFolder.id)
+                    } else {
+                      showNotice('No archive folders are available yet.')
+                    }
+                  }}
+                  onReviewTask={(task) => {
+                    setApprovalReviewTask(task)
+                    setApprovalReviewNote('')
+                  }}
+                />
+              )}
+            </>
           ) : isStudent && dashboardView === 'default' && !isFolderRoute ? (
             <>
               {error ? <div className="banner warning student-dashboard-error">{error}</div> : null}
@@ -5839,32 +6295,18 @@ function App() {
               dashboard={data}
               onNotify={showNotice}
               reservationRefreshToken={reservationRefreshToken}
-              onCreateFolder={handleTreeAddFolder}
+              fypCounts={studentFypCounts}
+              fypTab={studentFypTab}
+              onFypTabChange={setStudentFypTab}
               onEditFinalYearProject={(documentId) => {
                 setStudentFypEditId(documentId)
                 setStudentFypWizardOpen(true)
               }}
-              onBrowse={() => {
-                const defaults = findStudentDefaultFolders(data.archiveTree || [])
-                const target = defaults.projects || defaults.official
-                if (target?.id) {
-                  openFolder(target.id)
-                } else {
-                  showNotice('Your Official Documents and Final Year Project folders will appear after the workspace is ready.')
-                }
+              onStartProject={() => {
+                setStudentFypEditId(null)
+                setStudentFypWizardOpen(true)
               }}
-              onBrowseDepartmentArchive={() => {
-                getPublishedArchiveTree()
-                  .then((node) => {
-                    if (node?.id) {
-                      openFolder(node.id)
-                    } else {
-                      showNotice('Department archive is not ready yet.')
-                    }
-                  })
-                  .catch((err) => showNotice(err.message || 'Unable to open department archive.'))
-              }}
-              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+              onOpenDocument={(documentId, title) => openDocumentPreview(documentId, title)}
               profileMenu={profileMenu}
             />
               )}
@@ -5902,7 +6344,7 @@ function App() {
                       Browse
                     </button>
                   ) : null}
-                  {!showOfficeDashboardFormat && !isHod ? (
+                  {!showOfficeDashboardFormat && !isHod && !isStudent ? (
                     <button className="primary-btn dash-action-btn" type="button" onClick={openUploadModal}>
                       <UploadIcon className="icon" />
                       Upload
@@ -5944,7 +6386,7 @@ function App() {
                   studentProfile={studentSearchProfile}
                   mode="registrar"
                   onClear={() => setSearchQuery('')}
-                  onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+                  onOpenDocument={(documentId, title) => openDocumentPreview(documentId, title)}
                   onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                 />
@@ -5984,14 +6426,14 @@ function App() {
 
               <section className={`dash-metrics ${showOfficeDashboardFormat ? 'dash-metrics-registrar' : ''}`}>
                 <StatCard label="Uploaded this week" value={data.recentlyUploaded} caption="new files" accent="upload" />
-                {!showOfficeDashboardFormat ? (
+                {!showOfficeDashboardFormat && !isLibrarian ? (
                   <StatCard label="Pending approvals" value={data.pendingApprovals} caption="in your queue" accent="approvals" />
                 ) : null}
                 <StatCard label="Department files" value={data.departmentFiles} caption={departmentLabel || 'All departments'} accent="department" />
                 <StatCard label="Storage" value={formatBytes(data.storageUsedBytes)} caption={`of ${formatBytes(data.storageLimitBytes)}`} accent="storage" />
               </section>
 
-              <section className={`dash-grid ${showOfficeDashboardFormat ? 'dash-grid-single' : ''}`}>
+              <section className={`dash-grid ${showOfficeDashboardFormat || dashboardView === 'shared' || dashboardView === 'recent' ? 'dash-grid-single' : ''}`}>
                 <div className="dash-panel dash-panel-main">
                   <div className="dash-panel-head">
                     <div>
@@ -6048,6 +6490,7 @@ function App() {
                               <th>Type</th>
                               <th>Permission</th>
                               <th>Shared by</th>
+                              <th>Expires</th>
                               <th>Date</th>
                               <th>Open</th>
                             </>
@@ -6085,7 +6528,7 @@ function App() {
                                 </td>
                                 <td>
                                   <span className="document-chip">
-                                    {getCategoryMeta(fileRow.category).label}
+                                    {resolveCategoryChipLabel(fileRow.category)}
                                   </span>
                                 </td>
                                 <td>{formatDateTime(fileRow.archivedAt)}</td>
@@ -6116,7 +6559,7 @@ function App() {
                         ) : dashboardView === 'shared' ? (
                           sharedBusy ? (
                             <tr>
-                              <td colSpan="6" className="empty-state">Loading shared items...</td>
+                              <td colSpan="7" className="empty-state">Loading shared items...</td>
                             </tr>
                           ) : sharedItems.length ? (
                             sharedItems.map((item) => (
@@ -6138,6 +6581,7 @@ function App() {
                                   <span className="document-chip">{item.permissionLabel || item.permission}</span>
                                 </td>
                                 <td>{item.sharedBy || '-'}</td>
+                                <td>{item.expiresAt ? formatDateTime(item.expiresAt) : 'No expiry'}</td>
                                 <td>{formatDateTime(item.sharedAt)}</td>
                                 <td>
                                   <button
@@ -6145,9 +6589,16 @@ function App() {
                                     className="dash-text-btn"
                                     onClick={() => {
                                       if (item.itemType === 'DOCUMENT' && item.documentId) {
-                                        openDocument(item.documentId).catch((err) => {
-                                          showNotice(err.message || 'Unable to open document.')
-                                        })
+                                        openDocumentPreview(
+                                          item.documentId,
+                                          item.title || item.name,
+                                          {
+                                            sharedAccess: true,
+                                            allowDownload: item.allowDownload !== false,
+                                            sharePermission: item.permission,
+                                            sharePermissionLabel: item.permissionLabel || item.permission
+                                          }
+                                        )
                                         return
                                       }
                                       if (item.folderId) {
@@ -6164,7 +6615,7 @@ function App() {
                             ))
                           ) : (
                             <tr>
-                              <td colSpan="6" className="empty-state">
+                              <td colSpan="7" className="empty-state">
                                 Nothing has been shared with you yet.
                               </td>
                             </tr>
@@ -6200,7 +6651,7 @@ function App() {
                   </div>
                 </div>
 
-                {!showOfficeDashboardFormat ? (
+                {!showOfficeDashboardFormat && !isLibrarian && dashboardView !== 'shared' && dashboardView !== 'recent' ? (
                 <aside className="dash-panel dash-panel-side">
                   <div className="dash-panel-head dash-panel-head-inline">
                     <h2>Approvals</h2>
@@ -6352,8 +6803,8 @@ function App() {
                   {!usesPlacementUpload ? (
                     <p className="upload-modal-subtitle">
                       {isStudent
-                        ? 'Submit your final year project for librarian review.'
-                        : 'Complete the form and attach a PDF to store it in the archive.'}
+                        ? 'Submit your final year project for librarian review. Every file is scanned for malware before upload.'
+                        : 'Complete the form and attach a PDF to store it in the archive. Every file is scanned for malware before upload.'}
                     </p>
                   ) : null}
                 </div>
@@ -6478,27 +6929,10 @@ function App() {
                     </div>
                   </div>
 
-                  {!documentTypeLocked ? (
-                    <label className="upload-type-field">
-                      <span>Document type</span>
-                      <select
-                        value={form.category}
-                        onChange={(event) => setForm({ ...form, category: event.target.value })}
-                      >
-                        {visibleDocumentCategories.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-
-                  {form.academicYear && form.semester && (form.studentNumber?.trim() || studentLookupResult?.studentNumber) ? (
-                    <p className="upload-generated-title">
-                      Generated title: <strong>{uploadTitlePreview}</strong>
-                    </p>
-                  ) : null}
+                  <p className="inline-note">
+                    The PDF is stored inside a folder named with the student ID under this semester.
+                    If that folder does not exist yet, it is created automatically on upload.
+                  </p>
                 </section>
               ) : null}
 
@@ -6619,35 +7053,6 @@ function App() {
                       placeholder="Will be linked to the student ID"
                     />
                   </label>
-                ) : null}
-                {!usesPlacementUpload ? (
-                  documentTypeLocked ? (
-                    <div className="upload-role-note">
-                      <div>
-                        <p className="eyebrow">Document type</p>
-                        <strong>{getCategoryMeta(form.category).label}</strong>
-                        <span>
-                          {isStudent
-                            ? 'Students can only upload final year project documents.'
-                            : 'This role only uploads this document category.'}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <label>
-                      <span>Document type</span>
-                      <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
-                        {studentDocumentCategories.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </select>
-                      <small className="lookup-hint">
-                        {`Title will default to ${getCategoryMeta(form.category).label}.`}
-                      </small>
-                    </label>
-                  )
                 ) : null}
                 {!usesPlacementUpload ? (
                   <label>
@@ -6784,117 +7189,21 @@ function App() {
                   onNotify={showNotice}
                   onImport={(importedFile, pageCount) => {
                     setUploadSourceMode('file')
-                    setFile(importedFile)
-                    setScanResult(null)
-                    setScanError('')
-                    if (pageCount) {
-                      setForm((current) => ({ ...current, pageCount }))
-                    }
+                    appendPhoneImportToQueue(importedFile, pageCount)
                   }}
                 />
               ) : null}
 
               {uploadSourceMode === 'file' ? (
-              <div className="upload-file-section full-width">
-                <span className="upload-file-label">File</span>
-                <input
-                  ref={uploadFileInputRef}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="upload-file-input-hidden"
-                  onChange={async (event) => {
-                    const nextFile = event.target.files?.[0] || null
-                    await handleUploadFileSelect(nextFile, event.target)
-                  }}
+                <UploadFileDropzone
+                  queue={uploadQueue}
+                  onQueueChange={setUploadQueue}
+                  scanContext={uploadScanContext}
+                  maxFileSizeBytes={uploadMaxFileSizeBytes}
+                  disabled={uploadQueueRequiresStudentId}
+                  disabledReason={uploadQueueRequiresStudentId ? 'Enter a student ID before adding files.' : ''}
+                  onNotify={showNotice}
                 />
-                {!file ? (
-                  <button
-                    type="button"
-                    className="upload-file-choose"
-                    onClick={() => uploadFileInputRef.current?.click()}
-                  >
-                    Choose PDF
-                  </button>
-                ) : (
-                  <div className="upload-file-card">
-                    <div className="upload-file-card-copy">
-                      <strong>{file.name}</strong>
-                      <span>
-                        {formatBytes(file.size)}
-                        {form.pageCount ? ` · ${form.pageCount} page${Number(form.pageCount) === 1 ? '' : 's'}` : ''}
-                      </span>
-                    </div>
-                    <div className="upload-file-card-actions">
-                      <button
-                        type="button"
-                        className="ghost-btn tiny-btn"
-                        onClick={() => setFilePreviewOpen((current) => !current)}
-                      >
-                        {filePreviewOpen ? 'Hide preview' : 'Preview'}
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-btn tiny-btn"
-                        onClick={() => uploadFileInputRef.current?.click()}
-                      >
-                        Change
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost-btn tiny-btn"
-                        onClick={clearSelectedUploadFile}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                    {filePreviewOpen && filePreviewUrl ? (
-                      <iframe
-                        className="upload-file-preview"
-                        src={filePreviewUrl}
-                        title={`Preview ${file.name}`}
-                      />
-                    ) : null}
-                  </div>
-                )}
-              </div>
-              ) : null}
-
-              {uploadSourceMode === 'file' && file ? (
-                <div className={`upload-scan-panel ${scanBusy ? 'is-scanning' : scanResult?.verified ? 'is-verified' : scanResult ? 'is-rejected' : ''}`}>
-                  {scanBusy ? (
-                    <>
-                      <strong>Scanning document…</strong>
-                      <p>Reading the PDF and checking for AUCA-related information.</p>
-                    </>
-                  ) : scanError ? (
-                    <>
-                      <strong>Scan failed</strong>
-                      <p>{scanError}</p>
-                    </>
-                  ) : scanResult ? (
-                    <>
-                      <div className="upload-scan-head">
-                        {scanResult.verified ? <CheckIcon className="icon tiny" /> : <XIcon className="icon tiny" />}
-                        <strong>{scanResult.verified ? 'AUCA document confirmed' : 'Document not accepted'}</strong>
-                      </div>
-                      <p>{scanResult.summary}</p>
-                      {scanResult.matchedSignals?.length ? (
-                        <ul className="upload-scan-signals">
-                          {scanResult.matchedSignals.map((signal) => (
-                            <li key={signal}>{signal}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {scanResult.preview ? (
-                        <p className="upload-scan-preview">“{scanResult.preview}”</p>
-                      ) : null}
-                      <span className="upload-scan-meta">
-                        {scanResult.pageCount} page{scanResult.pageCount === 1 ? '' : 's'}
-                        {scanResult.scanMethod ? ` · ${scanResult.scanMethod}` : ''}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
               ) : null}
 
               <div className="modal-actions">
@@ -6908,10 +7217,16 @@ function App() {
                 <button
                   type="submit"
                   className="primary-btn"
-                  disabled={!file || uploadBusy || scanBusy || !scanResult?.verified}
+                  disabled={!verifiedUploadItems.length || uploadBusy || uploadQueueScanning}
                 >
                   <UploadIcon className="icon" />
-                  {uploadBusy ? 'Uploading...' : 'Upload to archive'}
+                  {uploadBusy && uploadBatchProgress.total > 1
+                    ? `Uploading ${uploadBatchProgress.current} of ${uploadBatchProgress.total}…`
+                    : uploadBusy
+                      ? 'Uploading...'
+                      : verifiedUploadItems.length > 1
+                        ? `Upload ${verifiedUploadItems.length} documents`
+                        : 'Upload to archive'}
                 </button>
               </div>
             </form>
@@ -6958,19 +7273,20 @@ function App() {
                 <button
                   type="button"
                   className="ghost-btn"
-                  onClick={() => openDocument(approvalReviewTask.documentId).catch((err) => showNotice(err.message || 'Unable to open file.'))}
+                  onClick={() => openDocumentPreview(approvalReviewTask.documentId, approvalReviewTask.documentTitle)}
                 >
                   <DownloadIcon className="icon" />
                   Open submitted file
                 </button>
               ) : null}
-              <label style={{ display: 'grid', gap: 8, marginTop: 16 }}>
-                <span>Decision note</span>
+              <label className="fyp-review-note-field">
+                <span>Decision note {approvalReviewTask ? '(required when rejecting)' : ''}</span>
                 <textarea
                   rows={4}
                   value={approvalReviewNote}
                   onChange={(event) => setApprovalReviewNote(event.target.value)}
-                  placeholder="Required for rejection. Optional for approval."
+                  placeholder="Explain why the project is rejected, or add approval notes for the student record."
+                  required={false}
                 />
               </label>
             </div>
@@ -6999,6 +7315,19 @@ function App() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {documentViewer ? (
+        <DocumentPdfViewer
+          documentId={documentViewer.documentId}
+          title={documentViewer.title}
+          sharedAccess={documentViewer.sharedAccess}
+          sharePermission={documentViewer.sharePermission}
+          sharePermissionLabel={documentViewer.sharePermissionLabel}
+          allowDownload={documentViewer.allowDownload}
+          onClose={() => setDocumentViewer(null)}
+          onNotify={showNotice}
+        />
       ) : null}
     </div>
   )

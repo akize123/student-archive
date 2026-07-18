@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react'
-import { DocumentIcon, DownloadIcon, FolderPlusIcon } from './Icons'
+import React, { useMemo } from 'react'
+import { DocumentIcon, DownloadIcon, UploadIcon } from './Icons'
 import StudentReservationsPanel from './StudentReservationsPanel'
 
 const registrarCategories = new Set([
@@ -29,17 +29,6 @@ function formatDate(value) {
   }).format(new Date(value))
 }
 
-function categoryLabel(category) {
-  const labels = {
-    REGISTRATION_FORM: 'Registration',
-    REINTEGRATION_FORM: 'Reintegration',
-    APPLICATION_DOCUMENTS: 'Application',
-    FINAL_YEAR_PROJECT: 'Final Year Project',
-    EXAMINATION_DOCUMENTS: 'Exam'
-  }
-  return labels[category] || category || 'Document'
-}
-
 function statusLabel(status) {
   const normalized = String(status || '').toUpperCase()
   if (normalized === 'APPROVED') return 'Accepted'
@@ -50,17 +39,16 @@ function statusLabel(status) {
 export default function StudentDashboard({
   session,
   dashboard,
+  fypCounts = { pending: 0, rejected: 0, accepted: 0 },
+  fypTab = 'pending',
+  onFypTabChange,
   onOpenDocument,
-  onCreateFolder,
-  onBrowse,
-  onBrowseDepartmentArchive,
   onEditFinalYearProject,
+  onStartProject,
   onNotify,
   reservationRefreshToken = 0,
   profileMenu
 }) {
-  const [projectTab, setProjectTab] = useState('pending')
-
   const storagePercent = dashboard.storageLimitBytes
     ? Math.min(100, Math.round((dashboard.storageUsedBytes / dashboard.storageLimitBytes) * 100))
     : 0
@@ -88,199 +76,188 @@ export default function StudentDashboard({
     [personalDocuments]
   )
 
-  const visibleProjects = projectTab === 'accepted'
+  const visibleProjects = fypTab === 'accepted'
     ? acceptedProjects
-    : projectTab === 'rejected'
+    : fypTab === 'rejected'
       ? rejectedProjects
       : pendingProjects
 
+  function selectTab(tab) {
+    onFypTabChange?.(tab)
+  }
+
   return (
     <div className="dashboard-workspace student-dashboard">
-      <header className="dash-header student-dash-header">
+      <header className="dash-header student-dash-header student-dash-header-compact">
         <div className="dash-header-copy">
           <nav className="dash-crumbs" aria-label="Breadcrumb">
             <span>Student workspace</span>
             <strong>{session.fullName}</strong>
           </nav>
-          <h1>My archive</h1>
-          <p>
-            Use the sidebar folders for Official Documents, Final Year Project (Pending/Rejected), and Archive project.
-            Browse the department archive to reserve and read other students&apos; approved projects.
-          </p>
-          <span className="dash-meta">Student ID: {session.studentNumber}</span>
+          <div className="student-dash-title-row">
+            <h1>My archive</h1>
+            <span className="student-id-pill">{session.studentNumber}</span>
+          </div>
         </div>
         <div className="dash-header-actions">
-          <button className="ghost-btn dash-action-btn" type="button" onClick={onCreateFolder}>
-            <FolderPlusIcon className="icon" />
-            New subfolder
-          </button>
-          <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowseDepartmentArchive}>
-            Department archive
-          </button>
-          <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowse}>
-            My folders
-          </button>
+          {fypCounts.pending === 0 && fypCounts.rejected === 0 ? (
+            <button className="primary-btn dash-action-btn" type="button" onClick={onStartProject}>
+              <UploadIcon className="icon" />
+              Submit project
+            </button>
+          ) : null}
           {profileMenu}
         </div>
       </header>
 
-      <section className={`student-storage-card storage-${storageState}`}>
-        <div>
-          <p className="eyebrow">Personal storage</p>
-          <strong>{formatBytes(dashboard.storageUsedBytes)} used</strong>
-          <span>{formatBytes(dashboard.storageLimitBytes)} available</span>
+      {fypCounts.rejected > 0 ? (
+        <div className="student-alert-banner student-alert-banner-compact" role="status">
+          <strong>Revision required</strong>
+          <span>
+            {fypCounts.rejected} project{fypCounts.rejected === 1 ? '' : 's'} need{fypCounts.rejected === 1 ? 's' : ''} changes — open Rejected or edit below.
+          </span>
         </div>
-        <div className="student-storage-meter" aria-hidden="true">
-          <div className="student-storage-fill" style={{ width: `${storagePercent}%` }} />
-        </div>
-        <p className="student-storage-note">
-          {storageState === 'critical'
-            ? 'Storage is almost full. Delete older project files before uploading again.'
-            : storageState === 'warning'
-              ? 'You are nearing your personal storage limit.'
-              : 'Upload project ZIPs (max 1 MB) into Final Year Project. Pending submissions stay private until librarian approval.'}
-        </p>
-      </section>
+      ) : null}
 
-      <div className="student-summary-grid">
-        <article className="student-summary-card">
-          <p className="eyebrow">From registrar</p>
-          <strong>{receivedDocuments.length}</strong>
-          <span>Under Official Documents</span>
-        </article>
-        <article className="student-summary-card">
-          <p className="eyebrow">Pending</p>
-          <strong>{pendingProjects.length}</strong>
-          <span>Waiting for librarian review</span>
-        </article>
-        <article className="student-summary-card">
-          <p className="eyebrow">Accepted</p>
-          <strong>{acceptedProjects.length}</strong>
-          <span>Approved into the archive</span>
-        </article>
-        <article className="student-summary-card">
-          <p className="eyebrow">Rejected</p>
-          <strong>{rejectedProjects.length}</strong>
-          <span>Needs revision with feedback</span>
-        </article>
-      </div>
-
-      <section className="student-documents-panel">
-        <div className="student-panel-head">
-          <div>
-            <p className="eyebrow">Official Documents</p>
-            <h2>Received from registrar</h2>
+      <section className={`student-overview-strip storage-${storageState}`} aria-label="Workspace overview">
+        <div className="student-overview-storage">
+          <span className="student-overview-label">Storage</span>
+          <span className="student-overview-value">
+            {formatBytes(dashboard.storageUsedBytes)} / {formatBytes(dashboard.storageLimitBytes)}
+          </span>
+          <div className="student-storage-meter student-storage-meter-slim" aria-hidden="true">
+            <div className="student-storage-fill" style={{ width: `${storagePercent}%` }} />
           </div>
         </div>
+        <div className="student-stat-chips" aria-label="Document counts">
+          <span className="student-stat-chip">
+            Registrar <strong>{receivedDocuments.length}</strong>
+          </span>
+          <span className="student-stat-chip">
+            Pending <strong>{pendingProjects.length}</strong>
+          </span>
+          <span className="student-stat-chip">
+            Accepted <strong>{acceptedProjects.length}</strong>
+          </span>
+          <span className="student-stat-chip">
+            Rejected <strong>{rejectedProjects.length}</strong>
+          </span>
+        </div>
+      </section>
+
+      <div className="student-dashboard-panels">
+        <section className="student-documents-panel student-documents-panel-compact">
+          <div className="student-panel-head student-panel-head-split">
+            <div>
+              <p className="eyebrow">Final Year Project</p>
+              <h2>Submission status</h2>
+            </div>
+            <div className="student-project-tabs" role="tablist" aria-label="Project status">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={fypTab === 'pending'}
+                className={fypTab === 'pending' ? 'active' : ''}
+                onClick={() => selectTab('pending')}
+              >
+                Pending ({pendingProjects.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={fypTab === 'accepted'}
+                className={fypTab === 'accepted' ? 'active' : ''}
+                onClick={() => selectTab('accepted')}
+              >
+                Accepted ({acceptedProjects.length})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={fypTab === 'rejected'}
+                className={fypTab === 'rejected' ? 'active' : ''}
+                onClick={() => selectTab('rejected')}
+              >
+                Rejected ({rejectedProjects.length})
+              </button>
+            </div>
+          </div>
+
+          {visibleProjects.length ? (
+            <div className="student-document-list" role="tabpanel">
+              {visibleProjects.map((document) => (
+                <article key={document.id} className="student-document-row student-project-row">
+                  <div className="student-document-copy">
+                    <DocumentIcon className="icon" />
+                    <div>
+                      <strong>{document.title}</strong>
+                      <span>
+                        {statusLabel(document.status)} · {formatBytes(document.sizeBytes)} · {formatDate(document.modifiedAt)}
+                      </span>
+                      {fypTab === 'rejected' && document.reviewNote ? (
+                        <span className="student-feedback">Librarian feedback: {document.reviewNote}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="student-document-actions">
+                    <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
+                      <DownloadIcon className="icon" />
+                      View
+                    </button>
+                    {(fypTab === 'pending' || fypTab === 'rejected') ? (
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={() => onEditFinalYearProject?.(document.id)}
+                      >
+                        {fypTab === 'rejected' ? 'Revise & resubmit' : 'Edit'}
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="student-empty-copy student-empty-copy-compact" role="tabpanel">
+              {fypTab === 'pending'
+                ? 'No pending submissions. Use Submit project in the sidebar.'
+                : fypTab === 'accepted'
+                  ? 'No accepted projects yet.'
+                  : 'No rejected projects.'}
+            </p>
+          )}
+        </section>
+
         {receivedDocuments.length ? (
-          <div className="student-document-list">
-            {receivedDocuments.map((document) => (
-              <article key={document.id} className="student-document-row">
-                <div className="student-document-copy">
-                  <DocumentIcon className="icon" />
-                  <div>
-                    <strong>{document.title}</strong>
-                    <span>{categoryLabel(document.category)} · {formatDate(document.issueDate)}</span>
+          <section className="student-documents-panel student-documents-panel-compact">
+            <div className="student-panel-head">
+              <div>
+                <p className="eyebrow">Official Documents</p>
+                <h2>From registrar</h2>
+              </div>
+            </div>
+            <div className="student-document-list">
+              {receivedDocuments.map((document) => (
+                <article key={document.id} className="student-document-row">
+                  <div className="student-document-copy">
+                    <DocumentIcon className="icon" />
+                    <div>
+                      <strong>{document.title}</strong>
+                      <span>{formatDate(document.issueDate)}</span>
+                    </div>
                   </div>
-                </div>
-                <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
-                  <DownloadIcon className="icon" />
-                  Open
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="student-empty-copy">
-            No registrar documents yet. When the registrar uploads files to your student ID, they appear under Official Documents.
-          </p>
-        )}
-      </section>
-
-      <section className="student-documents-panel">
-        <div className="student-panel-head student-panel-head-split">
-          <div>
-            <p className="eyebrow">Final Year Project</p>
-            <h2>Submission status</h2>
-          </div>
-          <div className="student-project-tabs" role="tablist" aria-label="Project status">
-            <button
-              type="button"
-              className={projectTab === 'pending' ? 'active' : ''}
-              onClick={() => setProjectTab('pending')}
-            >
-              Pending ({pendingProjects.length})
-            </button>
-            <button
-              type="button"
-              className={projectTab === 'accepted' ? 'active' : ''}
-              onClick={() => setProjectTab('accepted')}
-            >
-              Accepted ({acceptedProjects.length})
-            </button>
-            <button
-              type="button"
-              className={projectTab === 'rejected' ? 'active' : ''}
-              onClick={() => setProjectTab('rejected')}
-            >
-              Rejected ({rejectedProjects.length})
-            </button>
-          </div>
-        </div>
-
-        {visibleProjects.length ? (
-          <div className="student-document-list">
-            {visibleProjects.map((document) => (
-              <article key={document.id} className="student-document-row student-project-row">
-                <div className="student-document-copy">
-                  <DocumentIcon className="icon" />
-                  <div>
-                    <strong>{document.title}</strong>
-                    <span>
-                      {statusLabel(document.status)} · {formatBytes(document.sizeBytes)} · {formatDate(document.modifiedAt)}
-                    </span>
-                    {document.githubUrl ? <span className="student-link-line">GitHub: {document.githubUrl}</span> : null}
-                    {projectTab === 'rejected' && document.reviewNote ? (
-                      <span className="student-feedback">Feedback: {document.reviewNote}</span>
-                    ) : null}
-                    {projectTab === 'pending' ? (
-                      <span className="student-feedback soft">In your Final Year Project → Pending folder until librarian approval.</span>
-                    ) : null}
-                    {projectTab === 'accepted' ? (
-                      <span className="student-feedback soft">Approved and available in the archive project folders.</span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="student-document-actions">
                   <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
                     <DownloadIcon className="icon" />
-                    View
+                    Open
                   </button>
-                  {(projectTab === 'pending' || projectTab === 'rejected') ? (
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      onClick={() => onEditFinalYearProject?.(document.id)}
-                    >
-                      Edit
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="student-empty-copy">
-            {projectTab === 'pending'
-              ? 'No pending submissions. Open Final Year Project in the sidebar to start the 5-step upload.'
-              : projectTab === 'accepted'
-                ? 'No accepted projects yet. Approved submissions will appear here and under Archive project.'
-                : 'No rejected projects. Rejected submissions move to Final Year Project → Rejected with librarian feedback. Edit and resubmit from there.'}
-          </p>
-        )}
-      </section>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-      <StudentReservationsPanel onNotify={onNotify} onRefreshToken={reservationRefreshToken} />
+        <StudentReservationsPanel onNotify={onNotify} onRefreshToken={reservationRefreshToken} />
+      </div>
     </div>
   )
 }

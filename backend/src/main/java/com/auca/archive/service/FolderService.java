@@ -7,6 +7,7 @@ import com.auca.archive.domain.SharePermission;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.ActivityScope;
+import com.auca.archive.dto.DocumentShareAccessContext;
 import com.auca.archive.dto.DocumentListItemResponse;
 import com.auca.archive.dto.FolderBreadcrumbResponse;
 import com.auca.archive.dto.FolderDetailResponse;
@@ -31,6 +32,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -614,6 +616,7 @@ public class FolderService {
                     documentRepository.findById(documentId)
                             .filter(document -> !document.isArchivedForRemoval())
                             .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                            .filter(document -> isDocumentDownloadAllowed(document, role, studentNumber))
                             .ifPresent(document -> entries.add(new ZipDocumentEntry(
                                     sanitizeZipPath(document.getFileName() == null ? "document-" + document.getId() : document.getFileName()),
                                     document
@@ -680,6 +683,9 @@ public class FolderService {
             if (!isDocumentAccessible(document, role, studentNumber)) {
                 continue;
             }
+            if (!isDocumentDownloadAllowed(document, role, studentNumber)) {
+                continue;
+            }
             String fileName = document.getFileName() == null || document.getFileName().isBlank()
                     ? "document-" + document.getId() + ".pdf"
                     : document.getFileName();
@@ -706,7 +712,32 @@ public class FolderService {
     }
 
     public ShareFolderResponse shareFolder(Long folderId, String targetRoleRaw, String permissionRaw, String actorRoleRaw, String actorName) {
-        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName, RequestActor.empty());
+        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, null, null, null, actorRoleRaw, actorName, RequestActor.empty());
+    }
+
+    public ShareFolderResponse shareFolder(
+            Long folderId,
+            String targetRoleRaw,
+            String permissionRaw,
+            String expirationPreset,
+            String expiresAtRaw,
+            Boolean allowReshare,
+            String actorRoleRaw,
+            String actorName,
+            RequestActor requestActor
+    ) {
+        return shareItems(
+                List.of(folderId),
+                List.of(),
+                targetRoleRaw,
+                permissionRaw,
+                expirationPreset,
+                expiresAtRaw,
+                allowReshare,
+                actorRoleRaw,
+                actorName,
+                requestActor
+        );
     }
 
     public ShareFolderResponse shareFolder(
@@ -717,7 +748,7 @@ public class FolderService {
             String actorName,
             RequestActor requestActor
     ) {
-        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, actorRoleRaw, actorName, requestActor);
+        return shareItems(List.of(folderId), List.of(), targetRoleRaw, permissionRaw, null, null, null, actorRoleRaw, actorName, requestActor);
     }
 
     @Transactional
@@ -729,7 +760,7 @@ public class FolderService {
             String actorRoleRaw,
             String actorName
     ) {
-        return shareItems(folderIds, documentIds, targetRoleRaw, permissionRaw, actorRoleRaw, actorName, RequestActor.empty());
+        return shareItems(folderIds, documentIds, targetRoleRaw, permissionRaw, null, null, null, actorRoleRaw, actorName, RequestActor.empty());
     }
 
     @Transactional
@@ -742,6 +773,22 @@ public class FolderService {
             String actorName,
             RequestActor requestActor
     ) {
+        return shareItems(folderIds, documentIds, targetRoleRaw, permissionRaw, null, null, null, actorRoleRaw, actorName, requestActor);
+    }
+
+    @Transactional
+    public ShareFolderResponse shareItems(
+            List<Long> folderIds,
+            List<Long> documentIds,
+            String targetRoleRaw,
+            String permissionRaw,
+            String expirationPreset,
+            String expiresAtRaw,
+            Boolean allowReshareRaw,
+            String actorRoleRaw,
+            String actorName,
+            RequestActor requestActor
+    ) {
         UserRole actorRole = accessService.resolveRole(actorRoleRaw);
         if (actorRole == UserRole.STUDENT) {
             throw new IllegalArgumentException("Students cannot share archive items");
@@ -749,6 +796,8 @@ public class FolderService {
         UserRole targetRole = accessService.resolveRole(targetRoleRaw);
         validateShareTarget(actorRole, targetRole);
         SharePermission permission = SharePermission.fromRaw(permissionRaw);
+        LocalDateTime expiresAt = resolveShareExpiresAt(expirationPreset, expiresAtRaw);
+        boolean allowReshare = Boolean.TRUE.equals(allowReshareRaw);
 
         LinkedHashSet<Long> uniqueFolderIds = new LinkedHashSet<>();
         if (folderIds != null) {
@@ -772,7 +821,8 @@ public class FolderService {
             if (!isFolderAccessible(folder, actorRole)) {
                 throw new IllegalArgumentException("Folder not found: " + folderId);
             }
-            saveFolderShare(folder, targetRole, permission, actor);
+            requireCanShareFolder(folder, actorRole, null);
+            saveFolderShare(folder, targetRole, permission, actor, expiresAt, allowReshare);
             sharedFolders++;
             if (firstName == null) {
                 firstName = folder.getName();
@@ -786,7 +836,8 @@ public class FolderService {
             if (!isDocumentAccessible(document, actorRole)) {
                 throw new IllegalArgumentException("Document not found: " + documentId);
             }
-            saveDocumentShare(document, targetRole, permission, actor);
+            requireCanShareDocument(document, actorRole, null);
+            saveDocumentShare(document, targetRole, permission, actor, expiresAt, allowReshare);
             sharedDocuments++;
             if (firstName == null) {
                 firstName = document.getTitle() == null || document.getTitle().isBlank()
@@ -827,8 +878,17 @@ public class FolderService {
             message.append(sharedDocuments).append(sharedDocuments == 1 ? " file" : " files");
         }
         message.append(" with ").append(targetLabel)
-                .append(" (").append(permission.getLabel()).append(").")
-                .append(" Recipients can open it under Shared with me.");
+                .append(" (").append(permission.getLabel()).append(").");
+        if (expiresAt != null) {
+            message.append(" Access expires ").append(expiresAt.toLocalDate()).append(".");
+        }
+        if (permission == SharePermission.VIEW_ONLY) {
+            message.append(" Download is restricted for recipients.");
+        }
+        if (allowReshare) {
+            message.append(" Recipients may re-share these items.");
+        }
+        message.append(" Recipients can open it under Shared with me.");
 
         Long openFolderId = uniqueFolderIds.isEmpty() ? null : uniqueFolderIds.iterator().next();
         String shareUrl = openFolderId != null ? "#/folders/" + openFolderId : "#/shared";
@@ -843,6 +903,7 @@ public class FolderService {
             return List.of();
         }
         return folderShareRepository.findByTargetRoleOrderByCreatedAtDesc(role).stream()
+                .filter(this::isShareActive)
                 .map(this::toSharedItem)
                 .filter(Objects::nonNull)
                 .toList();
@@ -855,14 +916,16 @@ public class FolderService {
         if (role == null) {
             return 0;
         }
-        return folderShareRepository.countByTargetRole(role);
+        return folderShareRepository.findByTargetRoleOrderByCreatedAtDesc(role).stream()
+                .filter(this::isShareActive)
+                .count();
     }
 
     public void requireDocumentShareAtLeast(DocumentEntity document, UserRole role, SharePermission minimum) {
         if (document == null || role == null || role == UserRole.ADMIN) {
             return;
         }
-        Optional<FolderShareEntity> documentShare = folderShareRepository.findByDocumentIdAndTargetRole(document.getId(), role);
+        Optional<FolderShareEntity> documentShare = findActiveDocumentShare(document.getId(), role);
         if (documentShare.isPresent()) {
             if (!documentShare.get().getPermission().allows(minimum)) {
                 throw new IllegalArgumentException("This share is "
@@ -878,7 +941,83 @@ public class FolderService {
                 requireShareAtLeast(folder, role, null, minimum));
     }
 
-    private void saveFolderShare(FolderEntity folder, UserRole targetRole, SharePermission permission, String actor) {
+    public void requireDocumentDownloadAllowed(DocumentEntity document, UserRole role, String studentNumber) {
+        if (document == null || role == null || role == UserRole.ADMIN) {
+            return;
+        }
+        if (hasNativeDocumentAccess(document, role, studentNumber)) {
+            return;
+        }
+        SharePermission effective = resolveEffectiveSharePermission(document, role)
+                .orElse(null);
+        if (effective == SharePermission.VIEW_ONLY) {
+            throw new IllegalArgumentException(
+                    "Download is restricted for this shared document. View-only access applies.");
+        }
+    }
+
+    public boolean isDocumentDownloadAllowed(DocumentEntity document, UserRole role, String studentNumber) {
+        if (document == null || role == null || role == UserRole.ADMIN) {
+            return true;
+        }
+        if (hasNativeDocumentAccess(document, role, studentNumber)) {
+            return true;
+        }
+        return resolveEffectiveSharePermission(document, role)
+                .map(permission -> permission != SharePermission.VIEW_ONLY)
+                .orElse(true);
+    }
+
+    public Optional<LocalDateTime> resolveDocumentShareExpiresAt(DocumentEntity document, UserRole role) {
+        return resolveDocumentShareExpiresAt(document, role, null);
+    }
+
+    public DocumentShareAccessContext resolveDocumentShareAccess(
+            DocumentEntity document,
+            UserRole role,
+            String studentNumber
+    ) {
+        if (document == null || role == null || role == UserRole.ADMIN) {
+            return DocumentShareAccessContext.fullAccess();
+        }
+        if (hasNativeDocumentAccess(document, role, studentNumber)) {
+            return DocumentShareAccessContext.fullAccess();
+        }
+        Optional<SharePermission> permission = resolveEffectiveSharePermission(document, role);
+        if (permission.isEmpty()) {
+            return DocumentShareAccessContext.fullAccess();
+        }
+        SharePermission effective = permission.get();
+        LocalDateTime expiresAt = findActiveDocumentShare(document.getId(), role)
+                .map(FolderShareEntity::getExpiresAt)
+                .or(() -> document.getFolderId() == null
+                        ? Optional.empty()
+                        : folderRepository.findById(document.getFolderId())
+                                .flatMap(folder -> findActiveFolderShare(folder, role))
+                                .map(FolderShareEntity::getExpiresAt))
+                .orElse(null);
+        return new DocumentShareAccessContext(
+                true,
+                effective != SharePermission.VIEW_ONLY,
+                effective,
+                effective.getLabel(),
+                expiresAt
+        );
+    }
+
+    public Optional<LocalDateTime> resolveDocumentShareExpiresAt(DocumentEntity document, UserRole role, String studentNumber) {
+        LocalDateTime expiresAt = resolveDocumentShareAccess(document, role, studentNumber).shareExpiresAt();
+        return expiresAt == null ? Optional.empty() : Optional.of(expiresAt);
+    }
+
+    private void saveFolderShare(
+            FolderEntity folder,
+            UserRole targetRole,
+            SharePermission permission,
+            String actor,
+            LocalDateTime expiresAt,
+            boolean allowReshare
+    ) {
         FolderShareEntity share = folderShareRepository
                 .findByFolderIdAndTargetRoleAndDocumentIdIsNull(folder.getId(), targetRole)
                 .orElseGet(FolderShareEntity::new);
@@ -890,10 +1029,19 @@ public class FolderService {
         share.setPermission(permission);
         share.setSharedBy(actor);
         share.setCreatedAt(LocalDateTime.now());
+        share.setExpiresAt(expiresAt);
+        share.setAllowReshare(allowReshare);
         folderShareRepository.save(share);
     }
 
-    private void saveDocumentShare(DocumentEntity document, UserRole targetRole, SharePermission permission, String actor) {
+    private void saveDocumentShare(
+            DocumentEntity document,
+            UserRole targetRole,
+            SharePermission permission,
+            String actor,
+            LocalDateTime expiresAt,
+            boolean allowReshare
+    ) {
         FolderShareEntity share = folderShareRepository
                 .findByDocumentIdAndTargetRole(document.getId(), targetRole)
                 .orElseGet(FolderShareEntity::new);
@@ -904,6 +1052,8 @@ public class FolderService {
         share.setPermission(permission);
         share.setSharedBy(actor);
         share.setCreatedAt(LocalDateTime.now());
+        share.setExpiresAt(expiresAt);
+        share.setAllowReshare(allowReshare);
         folderShareRepository.save(share);
     }
 
@@ -933,7 +1083,10 @@ public class FolderService {
                     share.getSharedBy(),
                     share.getTargetRole() == null ? null : share.getTargetRole().name(),
                     share.getCreatedAt(),
-                    document.getFolderId() == null ? "#/shared" : "#/folders/" + document.getFolderId()
+                    document.getFolderId() == null ? "#/shared" : "#/folders/" + document.getFolderId(),
+                    share.getExpiresAt(),
+                    permission != SharePermission.VIEW_ONLY,
+                    share.isAllowReshare()
             );
         }
         if (share.getFolderId() == null) {
@@ -954,7 +1107,10 @@ public class FolderService {
                 share.getSharedBy(),
                 share.getTargetRole() == null ? null : share.getTargetRole().name(),
                 share.getCreatedAt(),
-                "#/folders/" + folder.getId()
+                "#/folders/" + folder.getId(),
+                share.getExpiresAt(),
+                permission != SharePermission.VIEW_ONLY,
+                share.isAllowReshare()
         );
     }
 
@@ -1075,7 +1231,7 @@ public class FolderService {
         if (role == UserRole.ADMIN) {
             return true;
         }
-        if (role != null && folderShareRepository.findByDocumentIdAndTargetRole(document.getId(), role).isPresent()) {
+        if (role != null && findActiveDocumentShare(document.getId(), role).isPresent()) {
             return true;
         }
         if (role == UserRole.STUDENT) {
@@ -1314,20 +1470,7 @@ public class FolderService {
     }
 
     private Optional<SharePermission> findEffectiveSharePermission(FolderEntity folder, UserRole role) {
-        FolderEntity current = folder;
-        Set<Long> visited = new HashSet<>();
-        while (current != null && visited.add(current.getId())) {
-            Optional<FolderShareEntity> share = folderShareRepository
-                    .findByFolderIdAndTargetRoleAndDocumentIdIsNull(current.getId(), role);
-            if (share.isPresent()) {
-                return Optional.of(share.get().getPermission());
-            }
-            if (current.getParentId() == null) {
-                break;
-            }
-            current = folderRepository.findById(current.getParentId()).orElse(null);
-        }
-        return Optional.empty();
+        return findActiveFolderShare(folder, role).map(FolderShareEntity::getPermission);
     }
 
     private boolean hasNativeAccessIgnoringShares(FolderEntity folder, UserRole role, String studentNumber) {
@@ -1359,7 +1502,7 @@ public class FolderService {
         if (isMirroredSharedDocumentsFolder(folder)) {
             return false;
         }
-        if (folderShareRepository.findByFolderIdAndTargetRole(folder.getId(), role).isPresent()) {
+        if (findActiveFolderShare(folder, role).isPresent()) {
             return true;
         }
         FolderEntity current = folder;
@@ -1368,7 +1511,7 @@ public class FolderService {
             if (isMirroredSharedDocumentsFolder(current)) {
                 return false;
             }
-            if (folderShareRepository.findByFolderIdAndTargetRole(current.getId(), role).isPresent()) {
+            if (findActiveFolderShare(current, role).isPresent()) {
                 return true;
             }
             if (current.getParentId() == null) {
@@ -1787,5 +1930,150 @@ public class FolderService {
                 document.getDescription(),
                 document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
         );
+    }
+
+    private boolean isShareActive(FolderShareEntity share) {
+        if (share == null) {
+            return false;
+        }
+        LocalDateTime expiresAt = share.getExpiresAt();
+        return expiresAt == null || expiresAt.isAfter(LocalDateTime.now());
+    }
+
+    private LocalDateTime resolveShareExpiresAt(String expirationPreset, String expiresAtRaw) {
+        if (expirationPreset == null || expirationPreset.isBlank()
+                || "NEVER".equalsIgnoreCase(expirationPreset.trim())) {
+            return null;
+        }
+        String preset = expirationPreset.trim().toUpperCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+        LocalDateTime now = LocalDateTime.now();
+        if ("7_DAYS".equals(preset) || "7DAYS".equals(preset)) {
+            return now.plusDays(7);
+        }
+        if ("30_DAYS".equals(preset) || "30DAYS".equals(preset)) {
+            return now.plusDays(30);
+        }
+        if ("CUSTOM".equals(preset) && expiresAtRaw != null && !expiresAtRaw.isBlank()) {
+            String raw = expiresAtRaw.trim();
+            try {
+                return LocalDateTime.parse(raw);
+            } catch (RuntimeException ignored) {
+                return LocalDate.parse(raw).atTime(23, 59, 59);
+            }
+        }
+        return null;
+    }
+
+    private Optional<FolderShareEntity> findActiveDocumentShare(Long documentId, UserRole role) {
+        if (documentId == null || role == null) {
+            return Optional.empty();
+        }
+        return folderShareRepository.findByDocumentIdAndTargetRole(documentId, role)
+                .filter(this::isShareActive);
+    }
+
+    private Optional<FolderShareEntity> findActiveFolderShare(FolderEntity folder, UserRole role) {
+        if (folder == null || role == null) {
+            return Optional.empty();
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            Optional<FolderShareEntity> share = folderShareRepository
+                    .findByFolderIdAndTargetRoleAndDocumentIdIsNull(current.getId(), role)
+                    .filter(this::isShareActive);
+            if (share.isPresent()) {
+                return share;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return Optional.empty();
+    }
+
+    private Optional<SharePermission> resolveEffectiveSharePermission(DocumentEntity document, UserRole role) {
+        Optional<FolderShareEntity> documentShare = findActiveDocumentShare(document.getId(), role);
+        if (documentShare.isPresent()) {
+            return Optional.of(documentShare.get().getPermission());
+        }
+        if (document.getFolderId() == null) {
+            return Optional.empty();
+        }
+        return folderRepository.findById(document.getFolderId())
+                .flatMap(folder -> findActiveFolderShare(folder, role))
+                .map(FolderShareEntity::getPermission);
+    }
+
+    private boolean hasNativeDocumentAccess(DocumentEntity document, UserRole role, String studentNumber) {
+        if (document == null || role == null) {
+            return false;
+        }
+        if (role == UserRole.ADMIN) {
+            return true;
+        }
+        if (role == UserRole.STUDENT) {
+            if (accessService.isStudentDocument(document, studentNumber)) {
+                return true;
+            }
+            if (isPublishedPeerDocument(document, studentNumber)) {
+                return true;
+            }
+            if (document.getFolderId() == null) {
+                return false;
+            }
+            return folderRepository.findById(document.getFolderId())
+                    .map(folder -> accessService.isStudentFolder(folder, studentNumber))
+                    .orElse(false);
+        }
+
+        if (document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT
+                && document.getStatus() != DocumentStatus.APPROVED) {
+            if (role != UserRole.LIBRARIAN || !accessService.canViewOfficeDocument(document, role)) {
+                return false;
+            }
+        } else if (!accessService.canViewOfficeDocument(document, role)) {
+            return false;
+        }
+
+        if (document.getFolderId() != null) {
+            return folderRepository.findById(document.getFolderId())
+                    .map(folder -> hasNativeAccessIgnoringShares(folder, role, studentNumber))
+                    .orElse(false);
+        }
+
+        return document.getCategory() != null && accessService.allowedUploadCategories(role).contains(document.getCategory());
+    }
+
+    private void requireCanShareFolder(FolderEntity folder, UserRole role, String studentNumber) {
+        if (role == UserRole.ADMIN || hasNativeAccessIgnoringShares(folder, role, studentNumber)) {
+            return;
+        }
+        Optional<FolderShareEntity> share = findActiveFolderShare(folder, role);
+        if (share.isPresent() && share.get().isAllowReshare()) {
+            return;
+        }
+        throw new IllegalArgumentException(
+                "You cannot share this folder. Only the original owner or users with re-share permission can share it.");
+    }
+
+    private void requireCanShareDocument(DocumentEntity document, UserRole role, String studentNumber) {
+        if (role == UserRole.ADMIN || hasNativeDocumentAccess(document, role, studentNumber)) {
+            return;
+        }
+        Optional<FolderShareEntity> documentShare = findActiveDocumentShare(document.getId(), role);
+        if (documentShare.isPresent() && documentShare.get().isAllowReshare()) {
+            return;
+        }
+        if (document.getFolderId() != null) {
+            Optional<FolderShareEntity> folderShare = folderRepository.findById(document.getFolderId())
+                    .flatMap(folder -> findActiveFolderShare(folder, role));
+            if (folderShare.isPresent() && folderShare.get().isAllowReshare()) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException(
+                "You cannot share this document. Only the original owner or users with re-share permission can share it.");
     }
 }

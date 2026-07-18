@@ -10,6 +10,7 @@ import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.dto.DocumentDetailResponse;
 import com.auca.archive.dto.DocumentListItemResponse;
+import com.auca.archive.dto.DocumentShareAccessContext;
 import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.UploadDocumentRequest;
 import com.auca.archive.util.FileSignatureValidator;
@@ -21,8 +22,6 @@ import com.auca.archive.repository.ApprovalTaskRepository;
 import com.auca.archive.repository.DocumentRepository;
 import jakarta.transaction.Transactional;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
@@ -47,11 +46,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class DocumentService {
-    private static final float PAGE_SIZE_TOLERANCE = 12f;
-    private static final float A4_WIDTH = 595f;
-    private static final float A4_HEIGHT = 842f;
-    private static final float LETTER_WIDTH = 612f;
-    private static final float LETTER_HEIGHT = 792f;
     private static final long FYP_ZIP_MAX_BYTES = 1024L * 1024L;
 
     private final DocumentRepository documentRepository;
@@ -59,6 +53,7 @@ public class DocumentService {
     private final StudentService studentService;
     private final ArchiveAccessService accessService;
     private final DocumentScanService documentScanService;
+    private final MalwareScanService malwareScanService;
     private final ArchiveTreeService archiveTreeService;
     private final FileEncryptionService fileEncryptionService;
     private final ActivityService activityService;
@@ -78,6 +73,7 @@ public class DocumentService {
             StudentService studentService,
             ArchiveAccessService accessService,
             DocumentScanService documentScanService,
+            MalwareScanService malwareScanService,
             ArchiveTreeService archiveTreeService,
             FileEncryptionService fileEncryptionService,
             ActivityService activityService,
@@ -97,6 +93,7 @@ public class DocumentService {
         this.studentService = studentService;
         this.accessService = accessService;
         this.documentScanService = documentScanService;
+        this.malwareScanService = malwareScanService;
         this.archiveTreeService = archiveTreeService;
         this.fileEncryptionService = fileEncryptionService;
         this.activityService = activityService;
@@ -189,21 +186,14 @@ public class DocumentService {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
-        return toDetail(documentRepository.findById(id)
-                .filter(document -> !document.isArchivedForRemoval())
-                .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber))
-                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)));
+        DocumentEntity document = documentRepository.findById(id)
+                .filter(entity -> !entity.isArchivedForRemoval())
+                .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        return toDetail(document, role, studentNumber);
     }
 
-    public Resource download(Long id) throws IOException {
-        return download(id, null);
-    }
-
-    public Resource download(Long id, String rawRole) throws IOException {
-        return download(id, rawRole, null);
-    }
-
-    public Resource download(Long id, String rawRole, String rawStudentNumber) throws IOException {
+    public Resource preview(Long id, String rawRole, String rawStudentNumber) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
@@ -212,6 +202,10 @@ public class DocumentService {
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
         requireReservationForPeerDownload(document, role, studentNumber);
+        return loadDocumentResource(document);
+    }
+
+    private Resource loadDocumentResource(DocumentEntity document) throws IOException {
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             throw new IllegalArgumentException("Document has no stored file");
         }
@@ -230,6 +224,27 @@ public class DocumentService {
                 return filename;
             }
         };
+    }
+
+    public Resource download(Long id) throws IOException {
+        return download(id, null);
+    }
+
+    public Resource download(Long id, String rawRole) throws IOException {
+        return download(id, rawRole, null);
+    }
+
+    public Resource download(Long id, String rawRole, String rawStudentNumber) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
+        DocumentEntity document = documentRepository.findById(id)
+                .filter(entity -> !entity.isArchivedForRemoval())
+                .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber))
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        folderService.requireDocumentDownloadAllowed(document, role, studentNumber);
+        requireReservationForPeerDownload(document, role, studentNumber);
+        return loadDocumentResource(document);
     }
 
     public Resource downloadCover(Long id) throws IOException {
@@ -321,7 +336,11 @@ public class DocumentService {
         }
         byte[] fileBytes = file.getBytes();
         validateUpload(request, file, fileBytes, role);
-        if (!accessService.canUploadCategory(role, request.category())) {
+        if (request.category() == null) {
+            if (!allowsNullUploadCategory(role)) {
+                throw new IllegalArgumentException("Document category is required");
+            }
+        } else if (!accessService.canUploadCategory(role, request.category())) {
             throw new IllegalArgumentException("You are not allowed to upload this document category");
         }
         if (role == UserRole.STUDENT) {
@@ -338,6 +357,7 @@ public class DocumentService {
                 usesArchivePlacementContext(role)
         );
         FolderEntity folder = archiveTreeService.resolveUploadFolder(request, student, examPaperType, role);
+        validateStaffUploadPlacement(role, request, folder);
 
         Path studentRoot = archiveTreeService.resolveStoragePath(storageRoot, request, student, examPaperType, role);
         Files.createDirectories(studentRoot);
@@ -745,6 +765,7 @@ public class DocumentService {
         if (fileBytes.length < 1) {
             throw new IllegalArgumentException("Replacement file is empty");
         }
+        malwareScanService.requireClean(fileBytes, file.getOriginalFilename());
 
         DocumentType replacementType = resolveReplacementType(fileBytes);
 
@@ -868,7 +889,9 @@ public class DocumentService {
             throw new IllegalArgumentException("Document file is required");
         }
         if (request.category() == null) {
-            throw new IllegalArgumentException("Document category is required");
+            if (!allowsNullUploadCategory(role)) {
+                throw new IllegalArgumentException("Document category is required");
+            }
         }
         if (fileBytes.length < minUploadSizeBytes) {
             throw new IllegalArgumentException("Document file is too small");
@@ -879,6 +902,8 @@ public class DocumentService {
                     ? "Student uploads are limited to 5 MB per file"
                     : "Document file is too large");
         }
+
+        malwareScanService.requireClean(fileBytes, file.getOriginalFilename());
 
         if (isStudentProjectZip(request, file, fileBytes)) {
             FileSignatureValidator.requireZip(fileBytes);
@@ -905,8 +930,6 @@ public class DocumentService {
                 throw new IllegalArgumentException("PDF has no pages");
             }
 
-            validatePageSizes(pdfDocument, role);
-
             documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename());
         }
     }
@@ -921,26 +944,6 @@ public class DocumentService {
             // Fall back to the client-provided count.
         }
         return requested == null || requested < 1 ? 1 : requested;
-    }
-
-    private void validatePageSizes(PDDocument pdfDocument, UserRole role) {
-        int invalidPages = 0;
-        for (PDPage page : pdfDocument.getPages()) {
-            if (!isNormalPageSize(page.getMediaBox())) {
-                invalidPages += 1;
-            }
-        }
-        if (invalidPages == 0) {
-            return;
-        }
-        if (invalidPages == pdfDocument.getNumberOfPages()) {
-            throw new IllegalArgumentException("PDF pages must use A4 or Letter size.");
-        }
-        if (role != UserRole.STUDENT && invalidPages <= pdfDocument.getNumberOfPages() / 2) {
-            return;
-        }
-        throw new IllegalArgumentException("Only A4 or Letter page sizes are allowed. "
-                + invalidPages + " page(s) use an unsupported size.");
     }
 
     private DocumentType resolveReplacementType(byte[] fileBytes) {
@@ -981,6 +984,7 @@ public class DocumentService {
         }
         byte[] bytes = coverPhoto.getBytes();
         FileSignatureValidator.requireImage(bytes);
+        malwareScanService.requireClean(bytes, originalName);
         try (java.io.ByteArrayInputStream input = new java.io.ByteArrayInputStream(bytes)) {
             java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(input);
             if (image == null) {
@@ -1057,7 +1061,7 @@ public class DocumentService {
         String cleanStudentNumber = studentNumber == null ? "STUDENT" : studentNumber.replaceAll("[^A-Za-z0-9]", "").toUpperCase();
         String suffix = Integer.toHexString(Math.abs(fileName.hashCode())).toUpperCase();
         if (isExamUpload(request) && examPaperType != null) {
-            return request.category().getFolderCode()
+            return categoryFolderCode(request)
                     + "-"
                     + examPaperType.getFolderCode()
                     + "-"
@@ -1072,7 +1076,7 @@ public class DocumentService {
                     + suffix;
         }
         if (isExamUpload(request)) {
-            return request.category().getFolderCode()
+            return categoryFolderCode(request)
                     + "-"
                     + sanitizeCodeSegment(request.academicYear())
                     + "-"
@@ -1082,7 +1086,15 @@ public class DocumentService {
                     + "-"
                     + suffix;
         }
-        return request.category().getFolderCode() + "-" + cleanStudentNumber + "-" + suffix;
+        return categoryFolderCode(request) + "-" + cleanStudentNumber + "-" + suffix;
+    }
+
+    private String categoryFolderCode(UploadDocumentRequest request) {
+        return request.category() == null ? "DOC" : request.category().getFolderCode();
+    }
+
+    private boolean allowsNullUploadCategory(UserRole role) {
+        return role == UserRole.REGISTRAR || role == UserRole.HOD;
     }
 
     private String sanitizeFileName(String fileName) {
@@ -1132,6 +1144,12 @@ public class DocumentService {
     }
 
     private DocumentDetailResponse toDetail(DocumentEntity document) {
+        return toDetail(document, null, null);
+    }
+
+    private DocumentDetailResponse toDetail(DocumentEntity document, UserRole role, String studentNumber) {
+        DocumentShareAccessContext access = folderService.resolveDocumentShareAccess(document, role, studentNumber);
+        boolean allowDownload = access.allowDownload();
         return new DocumentDetailResponse(
                 document.getId(),
                 document.getTitle(),
@@ -1167,25 +1185,13 @@ public class DocumentService {
                 document.getCoverPhotoPath() == null || document.getCoverPhotoPath().isBlank()
                         ? null
                         : "/api/documents/" + document.getId() + "/cover",
-                "/api/documents/" + document.getId() + "/download"
+                allowDownload ? "/api/documents/" + document.getId() + "/download" : null,
+                allowDownload,
+                access.shareExpiresAt(),
+                access.accessViaShare(),
+                access.sharePermission() == null ? null : access.sharePermission().name(),
+                access.sharePermissionLabel()
         );
-    }
-
-    private boolean isNormalPageSize(PDRectangle box) {
-        if (box == null) {
-            return false;
-        }
-        float width = box.getWidth();
-        float height = box.getHeight();
-        return matchesPageSize(width, height, A4_WIDTH, A4_HEIGHT)
-                || matchesPageSize(width, height, A4_HEIGHT, A4_WIDTH)
-                || matchesPageSize(width, height, LETTER_WIDTH, LETTER_HEIGHT)
-                || matchesPageSize(width, height, LETTER_HEIGHT, LETTER_WIDTH);
-    }
-
-    private boolean matchesPageSize(float width, float height, float expectedWidth, float expectedHeight) {
-        return Math.abs(width - expectedWidth) <= PAGE_SIZE_TOLERANCE
-                && Math.abs(height - expectedHeight) <= PAGE_SIZE_TOLERANCE;
     }
 
     private String resolveFolderName(DocumentEntity document) {
@@ -1242,6 +1248,10 @@ public class DocumentService {
         if (explicitTitle != null) {
             return explicitTitle;
         }
+        if (request.category() == null) {
+            return "Archived document";
+            
+        }
         if (isExamUpload(request)) {
             StringBuilder builder = new StringBuilder(request.category().getDisplayName());
             appendTitleSegment(builder, request.academicYear());
@@ -1280,6 +1290,35 @@ public class DocumentService {
         if (!reservationService.hasActiveReservation(document.getId(), studentNumber)) {
             throw new IllegalArgumentException(
                     "Reserve this book for a 20-minute reading slot before downloading."
+            );
+        }
+    }
+
+    private void validateStaffUploadPlacement(UserRole role, UploadDocumentRequest request, FolderEntity folder) {
+        if (role == null || role == UserRole.STUDENT) {
+            return;
+        }
+        String studentNumber = trimToNull(request.studentNumber());
+        if (studentNumber == null) {
+            throw new IllegalArgumentException(
+                    "Student ID is required. Documents cannot be uploaded directly into a semester without a linked student folder."
+            );
+        }
+        if (usesArchivePlacementContext(role)) {
+            if (trimToNull(request.academicYear()) == null || trimToNull(request.semester()) == null) {
+                throw new IllegalArgumentException(
+                        "Open a semester folder and provide placement context before uploading for a student."
+                );
+            }
+        }
+        if (folder == null || !ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+            throw new IllegalArgumentException(
+                    "Upload must be stored inside the student's folder under the selected semester."
+            );
+        }
+        if (folder.getName() == null || !folder.getName().trim().equalsIgnoreCase(studentNumber.trim())) {
+            throw new IllegalArgumentException(
+                    "Upload folder must match the student ID used for this document."
             );
         }
     }

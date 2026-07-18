@@ -13,6 +13,9 @@ public record SharedItemResponse(
         String sharedBy,
         String targetRole,
         LocalDateTime sharedAt,
-        String openUrl
+        String openUrl,
+        LocalDateTime expiresAt,
+        Boolean allowDownload,
+        Boolean allowReshare
 ) {
 }

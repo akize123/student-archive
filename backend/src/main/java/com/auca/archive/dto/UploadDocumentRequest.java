@@ -3,7 +3,6 @@ package com.auca.archive.dto;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDate;
 
@@ -20,7 +19,7 @@ public record UploadDocumentRequest(
         Integer marks,
         String examRoom,
         @NotBlank String uploadedBy,
-        @NotNull StudentDocumentCategory category,
+        StudentDocumentCategory category,
         Integer pageCount,
         @JsonFormat(pattern = "yyyy-MM-dd") LocalDate issueDate,
         String description,

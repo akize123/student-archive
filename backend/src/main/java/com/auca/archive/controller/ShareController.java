@@ -37,6 +37,9 @@ public class ShareController {
                 request.documentIds(),
                 request.targetRole(),
                 request.permission(),
+                request.expirationPreset(),
+                request.expiresAt(),
+                request.allowReshare(),
                 role,
                 actorName,
                 com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)

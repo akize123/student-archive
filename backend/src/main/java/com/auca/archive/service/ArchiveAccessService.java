@@ -47,8 +47,11 @@ public class ArchiveAccessService {
     }
 
     public boolean canUploadCategory(UserRole role, StudentDocumentCategory category) {
-        if (role == null || category == null) {
-            return true;
+        if (role == null) {
+            return false;
+        }
+        if (category == null) {
+            return role == UserRole.REGISTRAR || role == UserRole.HOD;
         }
         return allowedUploadCategories(role).contains(category);
     }

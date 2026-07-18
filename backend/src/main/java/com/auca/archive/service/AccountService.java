@@ -124,7 +124,8 @@ public class AccountService {
                 role.getDashboardTitle(),
                 role.getDashboardKey(),
                 adminService.resolvePrivilegeCodes(account),
-                account.getStudentNumber()
+                account.getStudentNumber(),
+                account.getAccessVersion()
         );
     }
 

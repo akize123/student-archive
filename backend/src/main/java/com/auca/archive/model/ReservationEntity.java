@@ -26,8 +26,10 @@ public class ReservationEntity {
     private ReservationStatus status;
 
     private LocalDateTime createdAt;
+    private LocalDateTime startsAt;
     private LocalDateTime expiresAt;
     private LocalDateTime releasedAt;
+    private String purpose;
 
     public ReservationEntity() {
     }
@@ -86,6 +88,22 @@ public class ReservationEntity {
 
     public void setExpiresAt(LocalDateTime expiresAt) {
         this.expiresAt = expiresAt;
+    }
+
+    public LocalDateTime getStartsAt() {
+        return startsAt;
+    }
+
+    public void setStartsAt(LocalDateTime startsAt) {
+        this.startsAt = startsAt;
+    }
+
+    public String getPurpose() {
+        return purpose;
+    }
+
+    public void setPurpose(String purpose) {
+        this.purpose = purpose;
     }
 
     public LocalDateTime getReleasedAt() {

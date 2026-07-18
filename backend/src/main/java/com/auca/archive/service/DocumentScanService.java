@@ -56,6 +56,7 @@ public class DocumentScanService {
     private final float ocrDpi;
     private final String tessDataPath;
     private final boolean ocrEnabled;
+    private final MalwareScanService malwareScanService;
 
     public DocumentScanService(
             @Value("${archive.document-scan.enabled:true}") boolean scanEnabled,
@@ -63,7 +64,8 @@ public class DocumentScanService {
             @Value("${archive.document-scan.max-ocr-pages:10}") int maxOcrPages,
             @Value("${archive.document-scan.ocr-dpi:150}") float ocrDpi,
             @Value("${archive.ocr.enabled:true}") boolean ocrEnabled,
-            @Value("${archive.ocr.tessdata-path:}") String tessDataPath
+            @Value("${archive.ocr.tessdata-path:}") String tessDataPath,
+            MalwareScanService malwareScanService
     ) {
         this.scanEnabled = scanEnabled;
         this.minTextCharsBeforeOcr = minTextCharsBeforeOcr;
@@ -71,6 +73,7 @@ public class DocumentScanService {
         this.ocrDpi = ocrDpi;
         this.ocrEnabled = ocrEnabled;
         this.tessDataPath = tessDataPath == null ? "" : tessDataPath.trim();
+        this.malwareScanService = malwareScanService;
     }
 
     public DocumentScanResponse scan(MultipartFile file, DocumentScanContext context) throws IOException {
@@ -79,12 +82,33 @@ public class DocumentScanService {
         }
 
         byte[] fileBytes = file.getBytes();
+        MalwareScanService.ScanResult malwareResult = malwareScanService.scan(fileBytes, file.getOriginalFilename());
+        if (!malwareResult.clean()) {
+            return new DocumentScanResponse(
+                    false,
+                    malwareResult.message(),
+                    List.of("MALWARE"),
+                    0,
+                    "MALWARE",
+                    "",
+                    false,
+                    malwareResult.message()
+            );
+        }
         FileSignatureValidator.requirePdf(fileBytes);
         DocumentScanContext enriched = enrichContext(context, file.getOriginalFilename());
-        return scanPdf(fileBytes, enriched);
+        return scanPdf(fileBytes, enriched, malwareResult);
     }
 
     public DocumentScanResponse scanPdf(byte[] fileBytes, DocumentScanContext context) throws IOException {
+        return scanPdf(fileBytes, context, null);
+    }
+
+    private DocumentScanResponse scanPdf(
+            byte[] fileBytes,
+            DocumentScanContext context,
+            MalwareScanService.ScanResult malwareResult
+    ) throws IOException {
         DocumentScanContext enriched = enrichContext(context, context == null ? null : context.fileName());
         try (PDDocument document = PDDocument.load(fileBytes)) {
             int pageCount = document.getNumberOfPages();
@@ -107,18 +131,24 @@ public class DocumentScanService {
                     ? "This file looks like a valid AUCA archive document."
                     : buildRejectionSummary(extractedText, evaluation);
 
+            boolean malwarePassed = malwareResult != null && malwareResult.clean();
+            String malwareSummary = malwareResult == null ? "" : malwareResult.message();
+
             return new DocumentScanResponse(
                     evaluation.verified(),
                     summary,
                     evaluation.matchedSignals(),
                     pageCount,
                     scanMethod,
-                    preview
+                    preview,
+                    malwarePassed,
+                    malwareSummary
             );
         }
     }
 
     public void requireVerified(byte[] fileBytes, UploadDocumentRequest request, String originalFileName) throws IOException {
+        malwareScanService.requireClean(fileBytes, originalFileName);
         if (!scanEnabled) {
             return;
         }

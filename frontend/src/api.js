@@ -4,7 +4,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (
     ? ''
     : (
       typeof window !== 'undefined'
-        ? `http://${window.location.hostname}:${API_PORT}`
+        ? `${window.location.protocol}//${window.location.hostname}:${API_PORT}`
         : `http://localhost:${API_PORT}`
     )
 )
@@ -39,6 +39,9 @@ function getSessionRoleHeader() {
     }
     if (session?.username) {
       headers['X-User-Username'] = session.username
+    }
+    if (session?.accessVersion != null) {
+      headers['X-Access-Version'] = String(session.accessVersion)
     }
     return headers
   } catch {
@@ -92,6 +95,16 @@ async function request(path, options = {}) {
     } else {
       message = await response.text()
     }
+    if (response.status === 403 && typeof window !== 'undefined') {
+      const lowered = String(message || '').toLowerCase()
+      if (lowered.includes('access revoked') || lowered.includes('session expired')) {
+        try {
+          window.sessionStorage.removeItem(AUTH_SESSION_KEY)
+        } catch {
+          // ignore storage cleanup failures
+        }
+      }
+    }
     throw new Error(message || `Request failed with status ${response.status}`)
   }
 
@@ -140,10 +153,19 @@ export function getPublishedArchiveTree() {
   return request('/api/folders/published-archive/tree')
 }
 
-export function reserveDocument(documentId) {
-  return request(`/api/reservations?documentId=${encodeURIComponent(documentId)}`, {
-    method: 'POST'
+export function reserveDocument(documentId, { startsAt, purpose } = {}) {
+  return request('/api/reservations', {
+    method: 'POST',
+    body: JSON.stringify({
+      documentId,
+      startsAt,
+      purpose: purpose || null
+    })
   })
+}
+
+export function getReservableBooks() {
+  return request('/api/reservations/books')
 }
 
 export function getMyReservations() {
@@ -156,8 +178,12 @@ export function releaseReservation(reservationId) {
   })
 }
 
-export function getReservationAvailability(documentId) {
-  return request(`/api/reservations/availability?documentId=${encodeURIComponent(documentId)}`)
+export function getReservationAvailability(documentId, startsAt) {
+  const params = new URLSearchParams({ documentId: String(documentId) })
+  if (startsAt) {
+    params.set('startsAt', startsAt)
+  }
+  return request(`/api/reservations/availability?${params.toString()}`)
 }
 
 export function createSubfolder(parentId, name) {
@@ -231,10 +257,26 @@ export function shareFolder(folderId, targetRole, permission = 'READ_ONLY') {
   })
 }
 
-export function shareItems({ targetRole, permission = 'READ_ONLY', folderIds = [], documentIds = [] }) {
+export function shareItems({
+  targetRole,
+  permission = 'READ_ONLY',
+  folderIds = [],
+  documentIds = [],
+  expirationPreset = 'NEVER',
+  expiresAt = null,
+  allowReshare = false
+}) {
   return request('/api/shares', {
     method: 'POST',
-    body: JSON.stringify({ targetRole, permission, folderIds, documentIds })
+    body: JSON.stringify({
+      targetRole,
+      permission,
+      folderIds,
+      documentIds,
+      expirationPreset,
+      expiresAt,
+      allowReshare
+    })
   })
 }
 
@@ -308,8 +350,9 @@ export function getActivities(scope, topic) {
   return request(`/api/activity${query ? `?${query}` : ''}`)
 }
 
-async function fetchDocumentFile(documentId) {
-  const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
+async function fetchDocumentFile(documentId, preview = false) {
+  const endpoint = preview ? 'preview' : 'download'
+  const response = await fetch(`${API_BASE}/api/documents/${documentId}/${endpoint}`, {
     headers: {
       ...getSessionRoleHeader()
     }
@@ -338,6 +381,10 @@ async function fetchDocumentFile(documentId) {
   const contentType = response.headers.get('content-type') || blob.type || 'application/octet-stream'
 
   return { blob, filename, contentType }
+}
+
+export async function fetchDocumentPreview(documentId) {
+  return fetchDocumentFile(documentId, true)
 }
 
 export async function openDocument(documentId) {

@@ -1,5 +1,6 @@
 package com.auca.archive.exception;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -16,6 +17,17 @@ import java.util.stream.Collectors;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException exception) {
+        String detail = exception.getMostSpecificCause() == null
+                ? exception.getMessage()
+                : exception.getMostSpecificCause().getMessage();
+        if (detail != null && detail.contains("folder_shares_permission_check")) {
+            return build(HttpStatus.BAD_REQUEST, "This share permission is not supported yet. Try again after the system update completes.");
+        }
+        return build(HttpStatus.BAD_REQUEST, "Unable to save this change because it conflicts with archive rules.");
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException exception) {
         return build(HttpStatus.BAD_REQUEST, exception.getMessage());

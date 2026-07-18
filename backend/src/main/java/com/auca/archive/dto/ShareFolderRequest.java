@@ -4,6 +4,9 @@ import jakarta.validation.constraints.NotBlank;
 
 public record ShareFolderRequest(
         @NotBlank String targetRole,
-        String permission
+        String permission,
+        String expirationPreset,
+        String expiresAt,
+        Boolean allowReshare
 ) {
 }

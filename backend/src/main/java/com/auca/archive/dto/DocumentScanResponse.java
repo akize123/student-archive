@@ -8,6 +8,8 @@ public record DocumentScanResponse(
         List<String> matchedSignals,
         int pageCount,
         String scanMethod,
-        String preview
+        String preview,
+        boolean malwareScanPassed,
+        String malwareScanSummary
 ) {
 }

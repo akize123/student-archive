@@ -36,6 +36,11 @@ public record DocumentDetailResponse(
         String externalLinks,
         String reviewNote,
         String coverPhotoPath,
-        String downloadUrl
+        String downloadUrl,
+        Boolean allowDownload,
+        LocalDateTime shareExpiresAt,
+        Boolean accessViaShare,
+        String sharePermission,
+        String sharePermissionLabel
 ) {
 }

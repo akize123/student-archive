@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { DownloadIcon } from './Icons'
 import { downloadDocument, getMyReservations, releaseReservation } from '../api'
 
-function formatCountdown(expiresAt) {
-  const remainingMs = new Date(expiresAt).getTime() - Date.now()
+function formatCountdown(targetAt) {
+  const remainingMs = new Date(targetAt).getTime() - Date.now()
   if (remainingMs <= 0) {
     return 'Expired'
   }
@@ -11,6 +11,30 @@ function formatCountdown(expiresAt) {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function formatSlotRange(startsAt, expiresAt) {
+  const start = new Date(startsAt)
+  const end = new Date(expiresAt)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return '20-minute slot'
+  }
+  const datePart = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const startTime = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const endTime = end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  return `${datePart} · ${startTime} – ${endTime}`
+}
+
+function reservationStatus(reservation, now) {
+  const startsAt = new Date(reservation.startsAt || reservation.createdAt).getTime()
+  const expiresAt = new Date(reservation.expiresAt).getTime()
+  if (expiresAt <= now) {
+    return 'expired'
+  }
+  if (startsAt > now) {
+    return 'scheduled'
+  }
+  return 'active'
 }
 
 export default function StudentReservationsPanel({ onNotify, onRefreshToken = 0 }) {
@@ -31,6 +55,10 @@ export default function StudentReservationsPanel({ onNotify, onRefreshToken = 0 
 
   async function handleDownload(reservation) {
     if (!reservation?.documentId) {
+      return
+    }
+    if (reservationStatus(reservation, now) !== 'active') {
+      onNotify?.('Download unlocks when your scheduled slot starts.')
       return
     }
     try {
@@ -58,27 +86,15 @@ export default function StudentReservationsPanel({ onNotify, onRefreshToken = 0 
   }
 
   const activeReservations = reservations.filter(
-    (reservation) => new Date(reservation.expiresAt).getTime() > now
+    (reservation) => reservationStatus(reservation, now) !== 'expired'
   )
 
   if (!activeReservations.length) {
-    return (
-      <section className="student-documents-panel">
-        <div className="student-panel-head">
-          <div>
-            <p className="eyebrow">Department archive</p>
-            <h2>My reservations</h2>
-          </div>
-        </div>
-        <p className="student-empty-copy">
-          No active book reservations. Browse the department archive and reserve an approved final year project for a 20-minute reading slot (max 3 students per book).
-        </p>
-      </section>
-    )
+    return null
   }
 
   return (
-    <section className="student-documents-panel">
+    <section className="student-documents-panel student-documents-panel-compact">
       <div className="student-panel-head">
         <div>
           <p className="eyebrow">Department archive</p>
@@ -86,30 +102,49 @@ export default function StudentReservationsPanel({ onNotify, onRefreshToken = 0 
         </div>
       </div>
       <div className="student-document-list">
-        {activeReservations.map((reservation) => (
-          <article key={reservation.id} className="student-document-row">
-            <div className="student-document-copy">
-              <div>
-                <strong>{reservation.documentTitle || 'Reserved book'}</strong>
-                <span>{formatCountdown(reservation.expiresAt)} · 20-minute slot</span>
+        {activeReservations.map((reservation) => {
+          const status = reservationStatus(reservation, now)
+          const startsAt = reservation.startsAt || reservation.createdAt
+          const countdown = status === 'scheduled'
+            ? `Starts in ${formatCountdown(startsAt)}`
+            : `${formatCountdown(reservation.expiresAt)} left`
+
+          return (
+            <article key={reservation.id} className="student-document-row">
+              <div className="student-document-copy">
+                <div>
+                  <strong>{reservation.documentTitle || 'Reserved book'}</strong>
+                  <span>
+                    {status === 'scheduled' ? 'Scheduled · ' : 'Active · '}
+                    {formatSlotRange(startsAt, reservation.expiresAt)}
+                  </span>
+                  <span>{countdown}</span>
+                  {reservation.purpose ? <em>{reservation.purpose}</em> : null}
+                </div>
               </div>
-            </div>
-            <div className="student-document-actions">
-              <button type="button" className="ghost-btn" onClick={() => handleDownload(reservation)}>
-                <DownloadIcon className="icon" />
-                Download
-              </button>
-              <button
-                type="button"
-                className="ghost-btn"
-                onClick={() => handleRelease(reservation)}
-                disabled={busyId === reservation.id}
-              >
-                Release
-              </button>
-            </div>
-          </article>
-        ))}
+              <div className="student-document-actions">
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => handleDownload(reservation)}
+                  disabled={status !== 'active'}
+                  title={status !== 'active' ? 'Available when your slot starts' : 'Download book'}
+                >
+                  <DownloadIcon className="icon" />
+                  Download
+                </button>
+                <button
+                  type="button"
+                  className="ghost-btn"
+                  onClick={() => handleRelease(reservation)}
+                  disabled={busyId === reservation.id}
+                >
+                  Release
+                </button>
+              </div>
+            </article>
+          )
+        })}
       </div>
     </section>
   )

@@ -3,6 +3,8 @@ package com.auca.archive.repository;
 import com.auca.archive.domain.ReservationStatus;
 import com.auca.archive.model.ReservationEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -29,4 +31,31 @@ public interface ReservationRepository extends JpaRepository<ReservationEntity, 
     );
 
     List<ReservationEntity> findByStatusAndExpiresAtBefore(ReservationStatus status, LocalDateTime cutoff);
+
+    List<ReservationEntity> findByDocumentIdAndStatusAndExpiresAtAfterOrderByStartsAtAsc(
+            Long documentId,
+            ReservationStatus status,
+            LocalDateTime now
+    );
+
+    @Query("""
+            SELECT r FROM ReservationEntity r
+            WHERE r.documentId = :documentId
+              AND r.status = :status
+              AND COALESCE(r.startsAt, r.createdAt) < :slotEnd
+              AND r.expiresAt > :slotStart
+            """)
+    List<ReservationEntity> findOverlapping(
+            @Param("documentId") Long documentId,
+            @Param("status") ReservationStatus status,
+            @Param("slotStart") LocalDateTime slotStart,
+            @Param("slotEnd") LocalDateTime slotEnd
+    );
+
+    Optional<ReservationEntity> findFirstByDocumentIdAndStudentAccountIdAndStatusAndExpiresAtAfterOrderByStartsAtAsc(
+            Long documentId,
+            Long studentAccountId,
+            ReservationStatus status,
+            LocalDateTime now
+    );
 }

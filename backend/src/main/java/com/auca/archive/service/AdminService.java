@@ -82,6 +82,7 @@ public class AdminService {
     private final ActivityEntryRepository activityEntryRepository;
     private final FolderService folderService;
     private final StudentAccountProvisioningService studentAccountProvisioningService;
+    private final AccessRevocationService accessRevocationService;
 
     public AdminService(
             AccountRepository accountRepository,
@@ -90,7 +91,8 @@ public class AdminService {
             ActivityService activityService,
             ActivityEntryRepository activityEntryRepository,
             FolderService folderService,
-            StudentAccountProvisioningService studentAccountProvisioningService
+            StudentAccountProvisioningService studentAccountProvisioningService,
+            AccessRevocationService accessRevocationService
     ) {
         this.accountRepository = accountRepository;
         this.passwordHasher = passwordHasher;
@@ -99,6 +101,7 @@ public class AdminService {
         this.activityEntryRepository = activityEntryRepository;
         this.folderService = folderService;
         this.studentAccountProvisioningService = studentAccountProvisioningService;
+        this.accessRevocationService = accessRevocationService;
     }
 
     public AdminDashboardResponse getDashboard(String rawRole) {
@@ -171,6 +174,10 @@ public class AdminService {
         AccountEntity account = accountRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + id));
 
+        UserRole previousRole = account.getRole();
+        String previousDepartment = account.getDepartment();
+        boolean previousActive = Boolean.TRUE.equals(account.getActive());
+
         account.setFullName(request.fullName().trim());
         account.setRole(request.role());
         account.setDepartment(request.department().trim());
@@ -194,6 +201,30 @@ public class AdminService {
         );
 
         UserAccountResponse saved = toUserResponse(accountRepository.save(account));
+
+        boolean deactivated = previousActive && !Boolean.TRUE.equals(saved.active());
+        boolean roleChanged = previousRole != request.role();
+        boolean departmentChanged = previousDepartment != null
+                && request.department() != null
+                && !previousDepartment.equalsIgnoreCase(request.department().trim());
+        if (deactivated) {
+            accessRevocationService.revokeAccountAccess(
+                    accountRepository.findById(id).orElseThrow(),
+                    "Account deactivated");
+        } else if (roleChanged) {
+            accessRevocationService.revokeAccountAccess(
+                    accountRepository.findById(id).orElseThrow(),
+                    "Role changed from " + previousRole.name() + " to " + request.role().name());
+        } else if (departmentChanged) {
+            accessRevocationService.revokeAccountAccess(
+                    accountRepository.findById(id).orElseThrow(),
+                    "Department changed from " + previousDepartment + " to " + request.department().trim());
+        }
+
+        if (deactivated || roleChanged || departmentChanged) {
+            saved = toUserResponse(accountRepository.findById(id).orElseThrow());
+        }
+
         activityService.recordAction(
                 "Updated user account \"" + saved.fullName() + "\" (" + saved.username() + ")",
                 actor.resolvedActorLabel("Administrator"),

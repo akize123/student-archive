@@ -31,6 +31,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @RestController
@@ -90,6 +91,23 @@ public class DocumentController {
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
         return documentService.getDocument(id, role, studentNumber);
+    }
+
+    @GetMapping("/{id}/preview")
+    public ResponseEntity<Resource> preview(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+    ) throws IOException {
+        Resource resource = documentService.preview(id, role, studentNumber);
+        String contentType = resource.getFilename() != null
+                && resource.getFilename().toLowerCase(Locale.ROOT).endsWith(".pdf")
+                ? MediaType.APPLICATION_PDF_VALUE
+                : MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                .contentType(MediaType.parseMediaType(contentType))
+                .body(resource);
     }
 
     @GetMapping("/{id}/download")

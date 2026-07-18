@@ -1,6 +1,7 @@
 package com.auca.archive.domain;
 
 public enum SharePermission {
+    VIEW_ONLY("View only"),
     READ_ONLY("Read only"),
     WRITE("Write"),
     EDIT("Edit");
@@ -27,6 +28,9 @@ public enum SharePermission {
             return READ_ONLY;
         }
         String normalized = raw.trim().toUpperCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+        if ("VIEWONLY".equals(normalized) || "VIEW".equals(normalized)) {
+            return VIEW_ONLY;
+        }
         if ("READONLY".equals(normalized) || "READ".equals(normalized)) {
             return READ_ONLY;
         }
