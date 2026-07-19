@@ -228,10 +228,6 @@ public class ActivityService {
                 .build();
     }
 
-    private void applyScope(ActivityEntryEntity entry, ActivityScope scope) {
-        applyScope(entry, scope, RequestActor.empty());
-    }
-
     private boolean matchesTopic(ActivityEntryEntity entry, String topic) {
         if (topic == null || topic.isBlank()) {
             return true;

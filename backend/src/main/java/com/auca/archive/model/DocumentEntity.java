@@ -67,6 +67,14 @@ public class DocumentEntity {
     private String githubUrl;
     private String externalLinks;
     private String reviewNote;
+    private Long documentSubtypeId;
+    private Long documentTypeId;
+    private Long categoryDefinitionId;
+    private String contentChecksumSha256;
+    private String checksumAlgorithm;
+    private Boolean compressed;
+    private Long originalSizeBytes;
+    private String convertedFromMime;
 
     public DocumentEntity() {
     }
@@ -365,6 +373,70 @@ public class DocumentEntity {
 
     public void setReviewNote(String reviewNote) {
         this.reviewNote = reviewNote;
+    }
+
+    public Long getDocumentSubtypeId() {
+        return documentSubtypeId;
+    }
+
+    public void setDocumentSubtypeId(Long documentSubtypeId) {
+        this.documentSubtypeId = documentSubtypeId;
+    }
+
+    public Long getDocumentTypeId() {
+        return documentTypeId;
+    }
+
+    public void setDocumentTypeId(Long documentTypeId) {
+        this.documentTypeId = documentTypeId;
+    }
+
+    public Long getCategoryDefinitionId() {
+        return categoryDefinitionId;
+    }
+
+    public void setCategoryDefinitionId(Long categoryDefinitionId) {
+        this.categoryDefinitionId = categoryDefinitionId;
+    }
+
+    public String getContentChecksumSha256() {
+        return contentChecksumSha256;
+    }
+
+    public void setContentChecksumSha256(String contentChecksumSha256) {
+        this.contentChecksumSha256 = contentChecksumSha256;
+    }
+
+    public String getChecksumAlgorithm() {
+        return checksumAlgorithm;
+    }
+
+    public void setChecksumAlgorithm(String checksumAlgorithm) {
+        this.checksumAlgorithm = checksumAlgorithm;
+    }
+
+    public Boolean getCompressed() {
+        return compressed;
+    }
+
+    public void setCompressed(Boolean compressed) {
+        this.compressed = compressed;
+    }
+
+    public Long getOriginalSizeBytes() {
+        return originalSizeBytes;
+    }
+
+    public void setOriginalSizeBytes(Long originalSizeBytes) {
+        this.originalSizeBytes = originalSizeBytes;
+    }
+
+    public String getConvertedFromMime() {
+        return convertedFromMime;
+    }
+
+    public void setConvertedFromMime(String convertedFromMime) {
+        this.convertedFromMime = convertedFromMime;
     }
 
     public boolean isArchivedForRemoval() {

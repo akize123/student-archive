@@ -15,7 +15,70 @@ import {
   officeMembersForRole,
   roleLabel
 } from '../adminOfficeUtils'
-import { CheckIcon, XIcon } from './Icons'
+import OcrSettingsPanel from './OcrSettingsPanel'
+
+function AdminBarChart({ title, items }) {
+  const max = Math.max(1, ...items.map((item) => item.value))
+  return (
+    <article className="admin-chart-card">
+      <h3>{title}</h3>
+      <div className="admin-bar-chart" role="img" aria-label={title}>
+        {items.length ? items.map((item) => (
+          <div key={item.label} className="admin-bar-row">
+            <span className="admin-bar-label">{item.label}</span>
+            <div className="admin-bar-track">
+              <div
+                className="admin-bar-fill"
+                style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }}
+              />
+            </div>
+            <strong className="admin-bar-value">{item.value}</strong>
+          </div>
+        )) : (
+          <p className="admin-muted-cell">No data yet.</p>
+        )}
+      </div>
+    </article>
+  )
+}
+
+function AdminDonutChart({ title, items }) {
+  const total = items.reduce((sum, item) => sum + item.value, 0) || 1
+  const colors = ['#0078d4', '#498205', '#ca5010', '#8764b8', '#038387', '#a4262c', '#69797e']
+  let offset = 0
+  const segments = items.map((item, index) => {
+    const pct = (item.value / total) * 100
+    const start = offset
+    offset += pct
+    return { ...item, start, end: offset, color: colors[index % colors.length] }
+  })
+  const gradient = segments.length
+    ? `conic-gradient(${segments.map((s) => `${s.color} ${s.start}% ${s.end}%`).join(', ')})`
+    : 'conic-gradient(#e1dfdd 0% 100%)'
+
+  return (
+    <article className="admin-chart-card">
+      <h3>{title}</h3>
+      <div className="admin-donut-wrap">
+        <div className="admin-donut" style={{ background: gradient }} aria-hidden="true">
+          <div className="admin-donut-hole">
+            <strong>{total === 1 && !items.length ? 0 : items.reduce((sum, item) => sum + item.value, 0)}</strong>
+            <span>users</span>
+          </div>
+        </div>
+        <ul className="admin-donut-legend">
+          {segments.map((item) => (
+            <li key={item.label}>
+              <i style={{ background: item.color }} />
+              <span>{item.label}</span>
+              <em>{item.value}</em>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </article>
+  )
+}
 
 const roleOptions = [
   { value: 'ADMIN', label: 'System Administrator' },
@@ -123,11 +186,12 @@ export default function AdminDashboard({ onNotify }) {
   const [enabledCategories, setEnabledCategories] = useState([])
   const [editingUser, setEditingUser] = useState(null)
   const [form, setForm] = useState(emptyUserForm)
-  const [activityScope, setActivityScope] = useState('REGISTRAR')
+  const [activityScope, setActivityScope] = useState('ALL')
   const [activePanel, setActivePanel] = useState('activity')
   const [roleActivities, setRoleActivities] = useState([])
   const [activityTotal, setActivityTotal] = useState(0)
   const [activitiesLoading, setActivitiesLoading] = useState(false)
+  const [activityPage, setActivityPage] = useState(0)
 
   const officeMembers = useMemo(
     () => officeMembersForRole(offices, form.role),
@@ -139,19 +203,23 @@ export default function AdminDashboard({ onNotify }) {
     [form.role]
   )
 
-  async function loadRoleActivities(scope = activityScope) {
+  async function loadRoleActivities(scope = activityScope, page = 0, append = false) {
     setActivitiesLoading(true)
     try {
       const response = await getAdminActivity({
-        scope,
-        page: 0,
+        scope: scope === 'ALL' ? undefined : scope,
+        page,
         size: 100
       })
-      setRoleActivities(response?.items || [])
+      const items = response?.items || []
+      setRoleActivities((current) => (append ? [...current, ...items] : items))
       setActivityTotal(response?.total || 0)
+      setActivityPage(page)
     } catch (err) {
-      setRoleActivities([])
-      setActivityTotal(0)
+      if (!append) {
+        setRoleActivities([])
+        setActivityTotal(0)
+      }
       onNotify?.(err.message || 'Unable to load role activity.')
     } finally {
       setActivitiesLoading(false)
@@ -195,7 +263,7 @@ export default function AdminDashboard({ onNotify }) {
 
   useEffect(() => {
     if (!loading) {
-      loadRoleActivities(activityScope)
+      loadRoleActivities(activityScope, 0, false)
     }
   }, [activityScope, loading])
 
@@ -203,6 +271,36 @@ export default function AdminDashboard({ onNotify }) {
     const entries = Object.entries(data?.usersByRole || {})
     return entries.length ? entries : []
   }, [data])
+
+  const roleChartItems = useMemo(
+    () => roleBreakdown.map(([role, count]) => ({
+      label: roleLabel(role),
+      value: Number(count) || 0
+    })),
+    [roleBreakdown]
+  )
+
+  const activityCategoryChartItems = useMemo(() => {
+    const counts = {}
+    roleActivities.forEach((entry) => {
+      const key = activityCategoryLabel(entry.category)
+      counts[key] = (counts[key] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+  }, [roleActivities])
+
+  const activityRoleChartItems = useMemo(() => {
+    const counts = {}
+    roleActivities.forEach((entry) => {
+      const key = entry.sourceRole ? roleLabel(entry.sourceRole) : 'Other'
+      counts[key] = (counts[key] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value)
+  }, [roleActivities])
 
   const usersByRole = useMemo(() => {
     const grouped = {}
@@ -405,6 +503,13 @@ export default function AdminDashboard({ onNotify }) {
             >
               All users
             </button>
+            <button
+              type="button"
+              className={`admin-dashboard-tab ${activePanel === 'ocr' ? 'active' : ''}`}
+              onClick={() => setActivePanel('ocr')}
+            >
+              OCR settings
+            </button>
           </div>
           <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
             New user
@@ -415,7 +520,7 @@ export default function AdminDashboard({ onNotify }) {
       <div className="admin-overview">
         <dl className="admin-metrics">
           <div className="admin-metric">
-            <dt>Total</dt>
+            <dt>Total users</dt>
             <dd>{data?.totalUsers ?? 0}</dd>
           </div>
           <div className="admin-metric">
@@ -427,21 +532,16 @@ export default function AdminDashboard({ onNotify }) {
             <dd>{data?.inactiveUsers ?? 0}</dd>
           </div>
           <div className="admin-metric">
-            <dt>Roles</dt>
-            <dd>{roleBreakdown.length}</dd>
+            <dt>Activity log</dt>
+            <dd>{activityTotal}</dd>
           </div>
         </dl>
 
-        {roleBreakdown.length ? (
-          <div className="admin-role-row">
-            {roleBreakdown.map(([role, count]) => (
-              <span key={role} className="admin-role-tag">
-                {role.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}
-                <em>{count}</em>
-              </span>
-            ))}
-          </div>
-        ) : null}
+        <div className="admin-charts-grid">
+          <AdminDonutChart title="Users by role" items={roleChartItems} />
+          <AdminBarChart title="Loaded activity by type" items={activityCategoryChartItems} />
+          <AdminBarChart title="Loaded activity by office" items={activityRoleChartItems} />
+        </div>
       </div>
 
       <div className="admin-dashboard-panel">
@@ -449,8 +549,11 @@ export default function AdminDashboard({ onNotify }) {
       <div className="admin-card admin-activity-card admin-dashboard-activity-card">
         <div className="admin-activity-head">
           <div>
-            <h2>System activity</h2>
-            <p>All changes across offices and users ({activityTotal} total).</p>
+            <h2>System activity log</h2>
+            <p>
+              Showing {roleActivities.length} of {activityTotal} events
+              {activityScope === 'ALL' ? ' across all offices' : ` for ${roleLabel(activityScope)}`}.
+            </p>
           </div>
           <div className="admin-activity-filters">
             <div className="admin-activity-tabs">
@@ -479,7 +582,7 @@ export default function AdminDashboard({ onNotify }) {
               </tr>
             </thead>
             <tbody>
-              {activitiesLoading ? (
+              {activitiesLoading && !roleActivities.length ? (
                 <tr>
                   <td colSpan="5" className="admin-muted-cell">Loading activity...</td>
                 </tr>
@@ -501,7 +604,23 @@ export default function AdminDashboard({ onNotify }) {
             </tbody>
           </table>
         </div>
+        {roleActivities.length < activityTotal ? (
+          <div className="admin-activity-load-more">
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={activitiesLoading}
+              onClick={() => loadRoleActivities(activityScope, activityPage + 1, true)}
+            >
+              {activitiesLoading ? 'Loading…' : `Load more (${activityTotal - roleActivities.length} remaining)`}
+            </button>
+          </div>
+        ) : null}
       </div>
+      ) : activePanel === 'ocr' ? (
+        <div className="admin-card">
+          <OcrSettingsPanel onNotify={onNotify} />
+        </div>
       ) : (
       <div className="admin-card admin-dashboard-users-card">
         <div className="admin-activity-head">

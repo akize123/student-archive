@@ -1,9 +1,12 @@
 package com.auca.archive.controller;
 
+import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.dto.AddAcademicYearRequest;
 import com.auca.archive.dto.CreateFolderRequest;
 import com.auca.archive.dto.FolderDetailResponse;
 import com.auca.archive.dto.FolderImportResponse;
+import com.auca.archive.dto.ImportCommitRequest;
+import com.auca.archive.dto.ImportPreviewResponse;
 import com.auca.archive.dto.FolderNodeResponse;
 import com.auca.archive.dto.FolderTargetRequest;
 import com.auca.archive.dto.RenameFolderRequest;
@@ -203,6 +206,50 @@ public class FolderController {
                 archive,
                 files,
                 paths,
+                role,
+                actorName,
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+        );
+    }
+
+    @PostMapping(value = "/{id}/import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ImportPreviewResponse previewImport(
+            @PathVariable Long id,
+            @RequestPart(value = "archive", required = false) MultipartFile archive,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "paths", required = false) List<String> paths,
+            @RequestParam(value = "defaultCategory", required = false) StudentDocumentCategory defaultCategory,
+            @RequestParam(value = "defaultSubtypeId", required = false) Long defaultSubtypeId,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) throws IOException {
+        return folderImportService.previewImport(
+                id,
+                archive,
+                files,
+                paths,
+                role,
+                defaultCategory,
+                defaultSubtypeId
+        );
+    }
+
+    @PostMapping(value = "/{id}/import/commit", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public FolderImportResponse commitImport(
+            @PathVariable Long id,
+            @RequestPart("request") @Valid ImportCommitRequest request,
+            @RequestPart(value = "archive", required = false) MultipartFile archive,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam(value = "paths", required = false) List<String> paths,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId,
+            @RequestHeader(value = "X-User-Username", required = false) String username
+    ) throws IOException {
+        Map<String, byte[]> fileContents = folderImportService.buildFileContentMap(archive, files, paths);
+        return folderImportService.commitImport(
+                id,
+                request,
+                fileContents,
                 role,
                 actorName,
                 com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)

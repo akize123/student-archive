@@ -14,8 +14,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 @Service
 public class StudentService {
@@ -46,6 +48,13 @@ public class StudentService {
         String normalized = normalize(studentNumber);
         return studentRepository.findByStudentNumber(normalized)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found: " + normalized));
+    }
+
+    public Optional<StudentEntity> findByStudentNumber(String studentNumber) {
+        if (studentNumber == null || studentNumber.isBlank()) {
+            return Optional.empty();
+        }
+        return studentRepository.findByStudentNumber(normalize(studentNumber));
     }
 
     @Transactional
@@ -157,6 +166,48 @@ public class StudentService {
             return StudentLookupResponse.notFound(normalized);
         }
         return StudentLookupResponse.fromArchive(getStudentArchive(studentNumber, rawRole, rawSessionStudentNumber));
+    }
+
+    public List<String> detectConflicts(
+            String studentNumber,
+            String studentName,
+            String faculty,
+            String department,
+            boolean dryRun
+    ) {
+        List<String> conflicts = new ArrayList<>();
+        String normalizedNumber;
+        try {
+            normalizedNumber = normalize(studentNumber);
+        } catch (IllegalArgumentException ex) {
+            conflicts.add(ex.getMessage());
+            return conflicts;
+        }
+
+        StudentEntity existing = studentRepository.findByStudentNumber(normalizedNumber).orElse(null);
+        if (existing == null) {
+            return conflicts;
+        }
+
+        String normalizedName = normalizeName(studentName);
+        if (normalizedName != null && !existing.getFullName().equalsIgnoreCase(normalizedName)) {
+            conflicts.add("Student ID " + normalizedNumber + " already belongs to " + existing.getFullName());
+        }
+        if (department != null
+                && existing.getDepartment() != null
+                && !existing.getDepartment().isBlank()
+                && !existing.getDepartment().equalsIgnoreCase(department.trim())) {
+            conflicts.add("Student " + normalizedNumber + " is registered under " + existing.getDepartment()
+                    + ", not " + department.trim());
+        }
+        if (faculty != null
+                && existing.getFaculty() != null
+                && !existing.getFaculty().isBlank()
+                && !existing.getFaculty().equalsIgnoreCase(faculty.trim())) {
+            conflicts.add("Student " + normalizedNumber + " is registered under " + existing.getFaculty()
+                    + ", not " + faculty.trim());
+        }
+        return conflicts;
     }
 
     private void rejectCrossDepartmentPlacement(

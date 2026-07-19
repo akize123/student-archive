@@ -53,6 +53,12 @@ public class ArchivedDocumentIndex {
     private String semester;
 
     @Field(type = FieldType.Text, analyzer = "standard")
+    private String documentTypeName;
+
+    @Field(type = FieldType.Text, analyzer = "standard")
+    private String folderPath;
+
+    @Field(type = FieldType.Text, analyzer = "standard")
     private String course;
 
     @Field(type = FieldType.Text, analyzer = "standard")
@@ -183,6 +189,22 @@ public class ArchivedDocumentIndex {
 
     public void setSemester(String semester) {
         this.semester = semester;
+    }
+
+    public String getDocumentTypeName() {
+        return documentTypeName;
+    }
+
+    public void setDocumentTypeName(String documentTypeName) {
+        this.documentTypeName = documentTypeName;
+    }
+
+    public String getFolderPath() {
+        return folderPath;
+    }
+
+    public void setFolderPath(String folderPath) {
+        this.folderPath = folderPath;
     }
 
     public String getCourse() {

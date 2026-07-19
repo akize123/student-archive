@@ -36,6 +36,15 @@ public record DocumentDetailResponse(
         String externalLinks,
         String reviewNote,
         String coverPhotoPath,
-        String downloadUrl
+        String downloadUrl,
+        Long documentTypeId,
+        String documentTypeName,
+        String contentChecksumSha256,
+        String checksumAlgorithm,
+        Boolean compressed,
+        Long originalSizeBytes,
+        String convertedFromMime,
+        String integrityStatus,
+        String folderPath
 ) {
 }

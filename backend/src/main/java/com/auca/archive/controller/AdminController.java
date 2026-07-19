@@ -9,10 +9,15 @@ import com.auca.archive.dto.RequestActor;
 import com.auca.archive.dto.UpdateUserRequest;
 import com.auca.archive.dto.UserAccountResponse;
 import com.auca.archive.service.ActivityService;
+import com.auca.archive.dto.OcrSettingsResponse;
+import com.auca.archive.dto.UpdateOcrSettingsRequest;
+import com.auca.archive.service.DocumentTextExtractionService;
+import com.auca.archive.service.OcrSettingsService;
 import com.auca.archive.service.AdminService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,10 +34,19 @@ import java.util.Map;
 public class AdminController {
     private final AdminService adminService;
     private final ActivityService activityService;
+    private final DocumentTextExtractionService textExtractionService;
+    private final OcrSettingsService ocrSettingsService;
 
-    public AdminController(AdminService adminService, ActivityService activityService) {
+    public AdminController(
+            AdminService adminService,
+            ActivityService activityService,
+            DocumentTextExtractionService textExtractionService,
+            OcrSettingsService ocrSettingsService
+    ) {
         this.adminService = adminService;
         this.activityService = activityService;
+        this.textExtractionService = textExtractionService;
+        this.ocrSettingsService = ocrSettingsService;
     }
 
     @GetMapping("/dashboard")
@@ -81,6 +95,51 @@ public class AdminController {
             @RequestHeader(value = "X-User-Role", required = false) String role
     ) {
         return adminService.archiveTemplate(role);
+    }
+
+    @GetMapping("/ocr-health")
+    public Map<String, Object> ocrHealth(@RequestHeader(value = "X-User-Role", required = false) String role) {
+        adminService.requireAdmin(role);
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("ocrEnabled", ocrSettingsService.isEnabled());
+        response.put("configuredEnabled", ocrSettingsService.isConfiguredEnabled());
+        response.put("ocrAvailable", textExtractionService.isOcrAvailable());
+        response.put("tessdataPath", ocrSettingsService.tessDataPath());
+        return response;
+    }
+
+    @GetMapping("/ocr-settings")
+    public OcrSettingsResponse ocrSettings(@RequestHeader(value = "X-User-Role", required = false) String role) {
+        adminService.requireAdmin(role);
+        return buildOcrSettingsResponse();
+    }
+
+    @PatchMapping("/ocr-settings")
+    public OcrSettingsResponse updateOcrSettings(
+            @RequestBody UpdateOcrSettingsRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) {
+        adminService.requireAdmin(role);
+        if (request.enabled() != null) {
+            ocrSettingsService.setEnabled(request.enabled());
+        }
+        return buildOcrSettingsResponse();
+    }
+
+    private OcrSettingsResponse buildOcrSettingsResponse() {
+        boolean available = textExtractionService.isOcrAvailable();
+        String note = ocrSettingsService.isEnabled()
+                ? (available
+                ? "OCR is enabled and Tesseract is available."
+                : "OCR is enabled but Tesseract is not available. Install Tesseract and set archive.ocr.tessdata-path in application.properties.")
+                : "OCR is disabled. Turn it on below or set archive.ocr.enabled=true in application.properties.";
+        return new OcrSettingsResponse(
+                ocrSettingsService.isEnabled(),
+                ocrSettingsService.isConfiguredEnabled(),
+                available,
+                ocrSettingsService.tessDataPath(),
+                note
+        );
     }
 
     @PostMapping("/users")

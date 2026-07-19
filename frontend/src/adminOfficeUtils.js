@@ -45,11 +45,13 @@ export const CATEGORY_LABELS = {
 }
 
 export const activityScopeTabs = [
+  { value: 'ALL', label: 'All activity' },
   { value: 'REGISTRAR', label: 'Registrar' },
   { value: 'EXAMINATION_OFFICER', label: 'Examination' },
   { value: 'HOD', label: 'HOD' },
   { value: 'LIBRARIAN', label: 'Librarian' },
-  { value: 'STUDENT', label: 'Student' }
+  { value: 'STUDENT', label: 'Student' },
+  { value: 'ADMIN', label: 'Admin' }
 ]
 
 export function roleLabel(role) {

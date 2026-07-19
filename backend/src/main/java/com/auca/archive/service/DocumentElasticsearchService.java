@@ -4,6 +4,7 @@ import com.auca.archive.config.AucaFacultyCatalog;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.repository.DocumentRepository;
+import com.auca.archive.repository.DocumentTypeDefinitionRepository;
 import com.auca.archive.search.ArchivedDocumentIndex;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
@@ -20,7 +21,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -31,15 +31,21 @@ public class DocumentElasticsearchService {
 
     private final ElasticsearchOperations elasticsearchOperations;
     private final DocumentRepository documentRepository;
+    private final DocumentTypeDefinitionRepository documentTypeDefinitionRepository;
+    private final FolderService folderService;
     private final boolean enabled;
 
     public DocumentElasticsearchService(
             ElasticsearchOperations elasticsearchOperations,
             DocumentRepository documentRepository,
+            DocumentTypeDefinitionRepository documentTypeDefinitionRepository,
+            FolderService folderService,
             @Value("${archive.search.elasticsearch.enabled:true}") boolean enabled
     ) {
         this.elasticsearchOperations = elasticsearchOperations;
         this.documentRepository = documentRepository;
+        this.documentTypeDefinitionRepository = documentTypeDefinitionRepository;
+        this.folderService = folderService;
         this.enabled = enabled;
     }
 
@@ -175,6 +181,8 @@ public class DocumentElasticsearchService {
         index.setExamType(document.getExamType());
         index.setAcademicYear(document.getAcademicYear());
         index.setSemester(document.getSemester());
+        index.setDocumentTypeName(resolveDocumentTypeName(document));
+        index.setFolderPath(resolveFolderPath(document.getFolderId()));
         index.setCourse(document.getCourse());
         index.setExamRoom(document.getExamRoom());
         index.setUploadedBy(document.getUploadedBy());
@@ -199,6 +207,8 @@ public class DocumentElasticsearchService {
         addPart(parts, document.getExamType());
         addPart(parts, document.getAcademicYear());
         addPart(parts, document.getSemester());
+        addPart(parts, resolveDocumentTypeName(document));
+        addPart(parts, resolveFolderPath(document.getFolderId()));
         addPart(parts, document.getCourse());
         addPart(parts, document.getExamRoom());
         addPart(parts, document.getUploadedBy());
@@ -211,11 +221,30 @@ public class DocumentElasticsearchService {
                 .collect(Collectors.joining(" "));
     }
 
+    private String resolveDocumentTypeName(DocumentEntity document) {
+        if (document.getDocumentTypeId() == null) {
+            return document.getCategory() == null ? null : document.getCategory().getDisplayName();
+        }
+        return documentTypeDefinitionRepository.findById(document.getDocumentTypeId())
+                .map(type -> type.getName())
+                .orElse(null);
+    }
+
+    private String resolveFolderPath(Long folderId) {
+        if (folderId == null) {
+            return null;
+        }
+        try {
+            return folderService.buildBreadcrumbPath(folderId);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
     private String resolveFaculty(String department) {
         if (department == null || department.isBlank()) {
             return null;
         }
-        String normalizedDepartment = department.trim().toLowerCase(Locale.ROOT);
         for (AucaFacultyCatalog.FacultyEntry faculty : AucaFacultyCatalog.FACULTIES) {
             boolean matches = faculty.departments().stream()
                     .anyMatch(item -> item.trim().equalsIgnoreCase(department.trim()));

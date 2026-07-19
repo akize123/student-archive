@@ -48,10 +48,27 @@ public class DocumentController {
     public List<DocumentListItemResponse> search(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) StudentDocumentCategory category,
+            @RequestParam(required = false) List<StudentDocumentCategory> categories,
+            @RequestParam(required = false) List<StudentDocumentCategory> excludeCategories,
+            @RequestParam(required = false) List<Long> documentTypeIds,
+            @RequestParam(required = false) String academicYear,
+            @RequestParam(required = false) String semester,
+            @RequestParam(required = false) String office,
+            @RequestParam(required = false) String kind,
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
-        return documentService.search(q, category, role, studentNumber);
+        return documentService.search(new com.auca.archive.dto.DocumentSearchFilter(
+                q,
+                category,
+                categories,
+                excludeCategories,
+                documentTypeIds,
+                academicYear,
+                semester,
+                office,
+                kind
+        ), role, studentNumber);
     }
 
     @GetMapping("/archived")
@@ -90,6 +107,14 @@ public class DocumentController {
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
         return documentService.getDocument(id, role, studentNumber);
+    }
+
+    @GetMapping("/{id}/integrity")
+    public com.auca.archive.dto.DocumentIntegrityResponse verifyIntegrity(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role
+    ) throws IOException {
+        return documentService.verifyIntegrity(id, role);
     }
 
     @GetMapping("/{id}/download")
@@ -136,7 +161,8 @@ public class DocumentController {
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
             @RequestHeader(value = "X-User-Username", required = false) String username,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestParam(value = "validationOverride", defaultValue = "false") boolean validationOverride
     ) throws IOException {
         return documentService.upload(
                 metadata,
@@ -144,7 +170,8 @@ public class DocumentController {
                 coverPhoto,
                 role,
                 studentNumber,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                validationOverride
         );
     }
 

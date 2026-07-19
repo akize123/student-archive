@@ -5,6 +5,10 @@ import com.auca.archive.util.FileSignatureValidator;
 import com.auca.archive.dto.MobileScanPageResponse;
 import com.auca.archive.dto.MobileScanReorderRequest;
 import com.auca.archive.dto.MobileScanSessionResponse;
+import com.auca.archive.model.MobileScanPageEntity;
+import com.auca.archive.model.MobileScanSessionEntity;
+import com.auca.archive.repository.MobileScanPageRepository;
+import com.auca.archive.repository.MobileScanSessionRepository;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -13,6 +17,7 @@ import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
@@ -32,16 +37,22 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class MobileScanSessionService {
     private static final int SESSION_MINUTES = 20;
 
-    private final Map<String, SessionState> sessions = new ConcurrentHashMap<>();
+    private final MobileScanSessionRepository sessionRepository;
+    private final MobileScanPageRepository pageRepository;
     private final int apiPort;
 
-    public MobileScanSessionService(@Value("${server.port:8081}") int apiPort) {
+    public MobileScanSessionService(
+            MobileScanSessionRepository sessionRepository,
+            MobileScanPageRepository pageRepository,
+            @Value("${server.port:8081}") int apiPort
+    ) {
+        this.sessionRepository = sessionRepository;
+        this.pageRepository = pageRepository;
         this.apiPort = apiPort;
     }
 
@@ -60,22 +71,27 @@ public class MobileScanSessionService {
         );
     }
 
+    @Transactional
     public MobileScanSessionResponse createSession() {
         cleanupExpired();
         String token = UUID.randomUUID().toString().replace("-", "");
-        SessionState session = new SessionState(token, LocalDateTime.now().plusMinutes(SESSION_MINUTES));
-        sessions.put(token, session);
-        return toResponse(session);
+        MobileScanSessionEntity session = new MobileScanSessionEntity();
+        session.setToken(token);
+        session.setExpiresAt(LocalDateTime.now().plusMinutes(SESSION_MINUTES));
+        session.setReady(false);
+        sessionRepository.save(session);
+        return toResponse(session, List.of());
     }
 
     public MobileScanSessionResponse getSession(String token) {
-        SessionState session = requireSession(token);
-        return toResponse(session);
+        MobileScanSessionEntity session = requireSession(token);
+        return toResponse(session, loadPages(token));
     }
 
+    @Transactional
     public MobileScanPageResponse addPage(String token, MultipartFile file) throws IOException {
-        SessionState session = requireSession(token);
-        if (session.ready) {
+        MobileScanSessionEntity session = requireSession(token);
+        if (session.isReady()) {
             throw new IllegalArgumentException("This scan session is already finalized.");
         }
         if (file == null || file.isEmpty()) {
@@ -89,90 +105,115 @@ public class MobileScanSessionService {
             throw new IllegalArgumentException("Only image files can be uploaded as scan pages.");
         }
 
+        List<MobileScanPageEntity> pages = loadPages(token);
         String pageId = UUID.randomUUID().toString().replace("-", "");
-        session.pages.put(pageId, new PageEntry(pageId, session.pages.size() + 1, bytes));
-        session.ready = false;
-        session.pdfBytes = null;
-        return new MobileScanPageResponse(pageId, session.pages.get(pageId).order());
+        MobileScanPageEntity page = new MobileScanPageEntity();
+        page.setSessionToken(token);
+        page.setPageId(pageId);
+        page.setPageOrder(pages.size() + 1);
+        page.setImageBytes(bytes);
+        pageRepository.save(page);
+
+        session.setReady(false);
+        session.setPdfBytes(null);
+        sessionRepository.save(session);
+        return new MobileScanPageResponse(pageId, page.getPageOrder());
     }
 
+    @Transactional
     public MobileScanSessionResponse reorderPages(String token, MobileScanReorderRequest request) {
-        SessionState session = requireSession(token);
-        if (session.ready) {
+        MobileScanSessionEntity session = requireSession(token);
+        if (session.isReady()) {
             throw new IllegalArgumentException("This scan session is already finalized.");
         }
         if (request == null || request.pageIds() == null || request.pageIds().isEmpty()) {
             throw new IllegalArgumentException("Page order is required.");
         }
 
-        List<String> requested = request.pageIds();
-        if (requested.size() != session.pages.size()) {
+        List<MobileScanPageEntity> pages = loadPages(token);
+        if (request.pageIds().size() != pages.size()) {
             throw new IllegalArgumentException("Provide every page id when reordering.");
         }
 
-        Map<String, PageEntry> nextPages = new LinkedHashMap<>();
+        Map<String, MobileScanPageEntity> byId = new LinkedHashMap<>();
+        pages.forEach(page -> byId.put(page.getPageId(), page));
+
         int order = 1;
-        for (String pageId : requested) {
-            PageEntry page = session.pages.get(pageId);
+        for (String pageId : request.pageIds()) {
+            MobileScanPageEntity page = byId.get(pageId);
             if (page == null) {
                 throw new IllegalArgumentException("Unknown page id: " + pageId);
             }
-            nextPages.put(pageId, new PageEntry(page.id(), order++, page.imageBytes()));
+            page.setPageOrder(order++);
+            pageRepository.save(page);
         }
-        session.pages.clear();
-        session.pages.putAll(nextPages);
-        session.pdfBytes = null;
-        return toResponse(session);
+
+        session.setPdfBytes(null);
+        session.setReady(false);
+        sessionRepository.save(session);
+        return toResponse(session, loadPages(token));
     }
 
-    public void deletePage(String token, String pageId) {
-        SessionState session = requireSession(token);
-        if (session.ready) {
+    @Transactional
+    public MobileScanSessionResponse deletePage(String token, String pageId) {
+        MobileScanSessionEntity session = requireSession(token);
+        if (session.isReady()) {
             throw new IllegalArgumentException("This scan session is already finalized.");
         }
-        if (session.pages.remove(pageId) == null) {
-            throw new IllegalArgumentException("Page not found.");
-        }
-        renumberPages(session);
-        session.pdfBytes = null;
+
+        List<MobileScanPageEntity> pages = loadPages(token);
+        MobileScanPageEntity target = pages.stream()
+                .filter(page -> page.getPageId().equals(pageId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Page not found."));
+        pageRepository.delete(target);
+        renumberPages(loadPages(token));
+
+        session.setPdfBytes(null);
+        session.setReady(false);
+        sessionRepository.save(session);
+        return toResponse(session, loadPages(token));
     }
 
+    @Transactional
     public MobileScanSessionResponse finalizeSession(String token) throws IOException {
-        SessionState session = requireSession(token);
-        if (session.pages.isEmpty()) {
+        MobileScanSessionEntity session = requireSession(token);
+        List<MobileScanPageEntity> pages = loadPages(token);
+        if (pages.isEmpty()) {
             throw new IllegalArgumentException("Add at least one scanned page before finishing.");
         }
-        session.pdfBytes = buildPdf(session);
-        session.ready = true;
-        return toResponse(session);
+        session.setPdfBytes(buildPdf(pages));
+        session.setReady(true);
+        sessionRepository.save(session);
+        return toResponse(session, pages);
     }
 
     public byte[] getPdf(String token) {
-        SessionState session = requireSession(token);
-        if (!session.ready || session.pdfBytes == null) {
+        MobileScanSessionEntity session = requireSession(token);
+        if (!session.isReady() || session.getPdfBytes() == null) {
             throw new IllegalArgumentException("The scanned PDF is not ready yet.");
         }
-        return session.pdfBytes;
+        return session.getPdfBytes();
     }
 
-    private byte[] buildPdf(SessionState session) throws IOException {
-        List<PageEntry> ordered = session.pages.values().stream()
-                .sorted(Comparator.comparingInt(PageEntry::order))
+    private byte[] buildPdf(List<MobileScanPageEntity> pages) throws IOException {
+        List<MobileScanPageEntity> ordered = pages.stream()
+                .sorted(Comparator.comparingInt(MobileScanPageEntity::getPageOrder))
                 .toList();
 
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            for (PageEntry page : ordered) {
-                BufferedImage image = ImageIO.read(new ByteArrayInputStream(page.imageBytes()));
+            for (MobileScanPageEntity page : ordered) {
+                BufferedImage image = ImageIO.read(new ByteArrayInputStream(page.getImageBytes()));
                 if (image == null) {
                     continue;
                 }
-                float width = image.getWidth();
-                float height = image.getHeight();
-                PDPage pdfPage = new PDPage(new PDRectangle(width, height));
+                float imageWidth = image.getWidth();
+                float imageHeight = image.getHeight();
+                PDPage pdfPage = new PDPage(new PDRectangle(imageWidth, imageHeight));
                 document.addPage(pdfPage);
                 PDImageXObject pdImage = LosslessFactory.createFromImage(document, image);
                 try (PDPageContentStream contentStream = new PDPageContentStream(document, pdfPage)) {
-                    contentStream.drawImage(pdImage, 0, 0, width, height);
+                    contentStream.drawImage(pdImage, 0, 0, imageWidth, imageHeight);
                 }
             }
             document.save(output);
@@ -180,33 +221,37 @@ public class MobileScanSessionService {
         }
     }
 
-    private void renumberPages(SessionState session) {
-        List<PageEntry> ordered = session.pages.values().stream()
-                .sorted(Comparator.comparingInt(PageEntry::order))
+    private void renumberPages(List<MobileScanPageEntity> pages) {
+        List<MobileScanPageEntity> ordered = pages.stream()
+                .sorted(Comparator.comparingInt(MobileScanPageEntity::getPageOrder))
                 .toList();
-        session.pages.clear();
         int order = 1;
-        for (PageEntry page : ordered) {
-            session.pages.put(page.id(), new PageEntry(page.id(), order++, page.imageBytes()));
+        for (MobileScanPageEntity page : ordered) {
+            page.setPageOrder(order++);
+            pageRepository.save(page);
         }
     }
 
-    private SessionState requireSession(String token) {
+    private MobileScanSessionEntity requireSession(String token) {
         cleanupExpired();
-        SessionState session = sessions.get(token);
-        if (session == null) {
-            throw new IllegalArgumentException("Scan session not found or expired.");
-        }
-        if (session.expiresAt.isBefore(LocalDateTime.now())) {
-            sessions.remove(token);
-            throw new IllegalArgumentException("Scan session expired. Start a new phone scan.");
-        }
-        return session;
+        return sessionRepository.findById(token)
+                .filter(session -> session.getExpiresAt().isAfter(LocalDateTime.now()))
+                .orElseThrow(() -> new IllegalArgumentException("Scan session not found or expired."));
+    }
+
+    private List<MobileScanPageEntity> loadPages(String token) {
+        return pageRepository.findBySessionTokenOrderByPageOrderAsc(token);
     }
 
     private void cleanupExpired() {
-        LocalDateTime now = LocalDateTime.now();
-        sessions.entrySet().removeIf(entry -> entry.getValue().expiresAt.isBefore(now));
+        LocalDateTime cutoff = LocalDateTime.now();
+        List<MobileScanSessionEntity> expired = sessionRepository.findAll().stream()
+                .filter(session -> session.getExpiresAt().isBefore(cutoff))
+                .toList();
+        for (MobileScanSessionEntity session : expired) {
+            pageRepository.deleteBySessionToken(session.getToken());
+            sessionRepository.delete(session);
+        }
     }
 
     private String resolveLanHost() {
@@ -291,35 +336,19 @@ public class MobileScanSessionService {
         return 4;
     }
 
-    private MobileScanSessionResponse toResponse(SessionState session) {
-        List<MobileScanPageResponse> pages = session.pages.values().stream()
-                .sorted(Comparator.comparingInt(PageEntry::order))
-                .map(page -> new MobileScanPageResponse(page.id(), page.order()))
+    private MobileScanSessionResponse toResponse(MobileScanSessionEntity session, List<MobileScanPageEntity> pages) {
+        List<MobileScanPageResponse> pageResponses = pages.stream()
+                .sorted(Comparator.comparingInt(MobileScanPageEntity::getPageOrder))
+                .map(page -> new MobileScanPageResponse(page.getPageId(), page.getPageOrder()))
                 .toList();
-        String status = session.ready ? "READY" : pages.isEmpty() ? "WAITING" : "IN_PROGRESS";
+        String status = session.isReady() ? "READY" : pageResponses.isEmpty() ? "WAITING" : "IN_PROGRESS";
         return new MobileScanSessionResponse(
-                session.token,
-                session.expiresAt,
+                session.getToken(),
+                session.getExpiresAt(),
                 status,
-                session.ready,
-                pages.size(),
-                pages
+                session.isReady(),
+                pageResponses.size(),
+                pageResponses
         );
-    }
-
-    private static final class SessionState {
-        private final String token;
-        private final LocalDateTime expiresAt;
-        private final Map<String, PageEntry> pages = new LinkedHashMap<>();
-        private boolean ready;
-        private byte[] pdfBytes;
-
-        private SessionState(String token, LocalDateTime expiresAt) {
-            this.token = token;
-            this.expiresAt = expiresAt;
-        }
-    }
-
-    private record PageEntry(String id, int order, byte[] imageBytes) {
     }
 }

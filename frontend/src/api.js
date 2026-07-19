@@ -117,11 +117,80 @@ export function getSessionProfile() {
   return request('/api/auth/me')
 }
 
-export function searchDocuments(query, category) {
+export function searchDocuments(query, filters = {}) {
   const params = new URLSearchParams()
+  const normalizedFilters = typeof filters === 'string'
+    ? { category: filters }
+    : (filters || {})
   if (query) params.set('q', query)
+  if (normalizedFilters.category) params.set('category', normalizedFilters.category)
+  if (normalizedFilters.office) params.set('office', normalizedFilters.office)
+  if (normalizedFilters.faculty) params.set('faculty', normalizedFilters.faculty)
+  if (normalizedFilters.department) params.set('department', normalizedFilters.department)
+  if (normalizedFilters.academicYear) params.set('academicYear', normalizedFilters.academicYear)
+  if (normalizedFilters.semester) params.set('semester', normalizedFilters.semester)
+  if (normalizedFilters.kind) params.set('kind', normalizedFilters.kind)
+  if (normalizedFilters.documentTypeId) params.set('documentTypeIds', String(normalizedFilters.documentTypeId))
+  if (Array.isArray(normalizedFilters.documentTypeIds)) {
+    normalizedFilters.documentTypeIds.forEach((id) => params.append('documentTypeIds', String(id)))
+  }
+  if (Array.isArray(normalizedFilters.categories)) {
+    normalizedFilters.categories.forEach((value) => params.append('categories', value))
+  }
+  if (Array.isArray(normalizedFilters.excludeCategories)) {
+    normalizedFilters.excludeCategories.forEach((value) => params.append('excludeCategories', value))
+  }
+  const queryString = params.toString()
+  return request(`/api/documents${queryString ? `?${queryString}` : ''}`)
+}
+
+export function getDocumentCategories({ office, faculty, department } = {}) {
+  const params = new URLSearchParams()
+  if (office) params.set('office', office)
+  if (faculty) params.set('faculty', faculty)
+  if (department) params.set('department', department)
+  const query = params.toString()
+  return request(`/api/document-categories${query ? `?${query}` : ''}`)
+}
+
+export function createDocumentCategory(payload) {
+  return request('/api/document-categories', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getDocumentTypes({ category, categoryDefinitionId, office, faculty, department } = {}) {
+  const params = new URLSearchParams()
   if (category) params.set('category', category)
-  return request(`/api/documents${params.toString() ? `?${params.toString()}` : ''}`)
+  if (categoryDefinitionId) params.set('categoryDefinitionId', String(categoryDefinitionId))
+  if (office) params.set('office', office)
+  if (faculty) params.set('faculty', faculty)
+  if (department) params.set('department', department)
+  const query = params.toString()
+  return request(`/api/document-types${query ? `?${query}` : ''}`)
+}
+
+export function createDocumentType(payload) {
+  return request('/api/document-types', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getUserPreferences() {
+  return request('/api/users/me/preferences')
+}
+
+export function updateUserPreferences(payload) {
+  return request('/api/users/me/preferences', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function verifyDocumentIntegrity(documentId) {
+  return request(`/api/documents/${encodeURIComponent(documentId)}/integrity`)
 }
 
 export function getStudentArchive(studentNumber) {
@@ -190,6 +259,120 @@ export function importFolderArchive(folderId, { archive, files = [], paths = [] 
   return request(`/api/folders/${encodeURIComponent(folderId)}/import`, {
     method: 'POST',
     body: formData
+  })
+}
+
+function appendImportPayload(formData, { archive, files = [], paths = [] } = {}) {
+  if (archive) {
+    formData.append('archive', archive, archive.name || 'import.zip')
+  }
+  if (files.length) {
+    files.forEach((file) => {
+      formData.append('files', file, file.name)
+    })
+    paths.forEach((path) => {
+      formData.append('paths', path)
+    })
+  }
+}
+
+export function previewFolderImport(folderId, payload = {}, { defaultCategory, defaultSubtypeId } = {}) {
+  const formData = new FormData()
+  appendImportPayload(formData, payload)
+  const params = new URLSearchParams()
+  if (defaultCategory) params.set('defaultCategory', defaultCategory)
+  if (defaultSubtypeId) params.set('defaultSubtypeId', String(defaultSubtypeId))
+  const query = params.toString()
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import/preview${query ? `?${query}` : ''}`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export function commitFolderImport(folderId, commitRequest, payload = {}) {
+  const formData = new FormData()
+  formData.append('request', new Blob([JSON.stringify(commitRequest)], { type: 'application/json' }))
+  appendImportPayload(formData, payload)
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import/commit`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export function getDocumentSubtypes({ category, department } = {}) {
+  const params = new URLSearchParams()
+  if (category) params.set('category', category)
+  if (department) params.set('department', department)
+  const query = params.toString()
+  return request(`/api/document-subtypes${query ? `?${query}` : ''}`)
+}
+
+export function createDocumentSubtype(payload) {
+  return request('/api/document-subtypes', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getDocumentTemplates({ category, office, faculty, department } = {}) {
+  const params = new URLSearchParams()
+  if (category) params.set('category', category)
+  if (office) params.set('office', office)
+  if (faculty) params.set('faculty', faculty)
+  if (department) params.set('department', department)
+  const query = params.toString()
+  return request(`/api/document-templates${query ? `?${query}` : ''}`)
+}
+
+export function uploadDocumentTemplate({
+  file,
+  category,
+  documentTypeName,
+  office,
+  faculty,
+  department,
+  title,
+  similarityThreshold
+}) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const params = new URLSearchParams()
+  params.set('category', category)
+  params.set('documentTypeName', documentTypeName)
+  params.set('office', office)
+  if (faculty) params.set('faculty', faculty)
+  if (department) params.set('department', department)
+  if (title) params.set('title', title)
+  if (similarityThreshold != null) params.set('similarityThreshold', String(similarityThreshold))
+  return request(`/api/document-templates?${params.toString()}`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export function updateDocumentTemplate(templateId, payload) {
+  return request(`/api/document-templates/${templateId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getDocumentTemplatePreviewText(templateId) {
+  return request(`/api/document-templates/${templateId}/preview-text`)
+}
+
+export function getOcrHealth() {
+  return request('/api/admin/ocr-health')
+}
+
+export function getOcrSettings() {
+  return request('/api/admin/ocr-settings')
+}
+
+export function updateOcrSettings(payload) {
+  return request('/api/admin/ocr-settings', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
   })
 }
 
@@ -420,14 +603,15 @@ export function permanentlyDeleteDocument(documentId) {
   })
 }
 
-export function submitUpload(metadata, file, coverPhoto) {
+export function submitUpload(metadata, file, coverPhoto, { validationOverride = false } = {}) {
   const formData = new FormData()
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
   formData.append('file', file)
   if (coverPhoto) {
     formData.append('coverPhoto', coverPhoto)
   }
-  return request('/api/documents/upload', {
+  const query = validationOverride ? '?validationOverride=true' : ''
+  return request(`/api/documents/upload${query}`, {
     method: 'POST',
     body: formData
   })

@@ -273,7 +273,19 @@ public class ArchiveTreeService {
             UploadDocumentRequest request,
             StudentEntity student,
             ExamPaperType examPaperType,
-            UserRole role
+            UserRole role,
+            String documentTypeName
+    ) {
+        return resolveUploadFolder(request, student, examPaperType, role, documentTypeName, documentTypeName);
+    }
+
+    public FolderEntity resolveUploadFolder(
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType,
+            UserRole role,
+            String categoryName,
+            String documentTypeName
     ) {
         boolean staffPlacementUpload = role != null && role != UserRole.STUDENT;
         StudentUploadPlacement placement = resolveStaffUploadPlacement(student, request, role);
@@ -286,16 +298,107 @@ public class ArchiveTreeService {
                 !staffPlacementUpload
         );
 
-        if (staffPlacementUpload) {
-            return workspace.studentRoot();
-        }
-
-        StudentDocumentCategory category = request.category();
-        if (category == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+        if (role == UserRole.STUDENT && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
             return workspace.myProjectsPending();
         }
-        FolderEntity bucket = isOfficialCategory(category) ? workspace.officialDocuments() : workspace.myProjectsPending();
-        return bucket;
+
+        return ensureStudentDocumentPath(
+                workspace.studentRoot(),
+                request.academicYear(),
+                request.semester(),
+                categoryName,
+                documentTypeName
+        );
+    }
+
+    public FolderEntity resolveUploadFolder(
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType,
+            UserRole role
+    ) {
+        return resolveUploadFolder(
+                request,
+                student,
+                examPaperType,
+                role,
+                request.category().getDisplayName(),
+                request.category().getDisplayName()
+        );
+    }
+
+    /**
+     * Legacy overload: category and type share the same label.
+     */
+    @Transactional
+    public FolderEntity ensureStudentDocumentPath(
+            FolderEntity studentRoot,
+            String academicYear,
+            String semester,
+            String documentTypeName
+    ) {
+        return ensureStudentDocumentPath(studentRoot, academicYear, semester, documentTypeName, documentTypeName);
+    }
+
+    /**
+     * Inside student folder only:
+     * {@code {DocAY}/{DocSem}/{Category}/{SubType}/}
+     * Document year/semester arrange files under the student ID — they do not move the student folder.
+     */
+    @Transactional
+    public FolderEntity ensureStudentDocumentPath(
+            FolderEntity studentRoot,
+            String documentAcademicYear,
+            String documentSemester,
+            String categoryName,
+            String documentTypeName
+    ) {
+        FolderEntity parent = studentRoot;
+        AcademicTermService.ResolvedTerm term = null;
+        try {
+            if ((documentAcademicYear != null && !documentAcademicYear.isBlank())
+                    || (documentSemester != null && !documentSemester.isBlank())) {
+                term = academicTermService.resolveTerm(
+                        studentRoot.getName(),
+                        documentAcademicYear,
+                        documentSemester
+                );
+            }
+        } catch (IllegalArgumentException ignored) {
+            term = null;
+        }
+
+        if (term != null) {
+            String yearLabel = term.academicYear();
+            String semesterLabel = term.semesterFolderName();
+            FolderEntity yearFolder = folderService.resolveOrCreateFolder(
+                    yearLabel,
+                    studentRoot.getCode() + "-INAY-" + sanitizeCode(yearLabel),
+                    studentRoot.getId()
+            );
+            parent = folderService.resolveOrCreateFolder(
+                    semesterLabel,
+                    yearFolder.getCode() + "-INSEM-" + sanitizeCode(semesterLabel),
+                    yearFolder.getId()
+            );
+        }
+
+        String categoryLabel = firstNonBlank(categoryName, documentTypeName, "Documents");
+        String typeLabel = firstNonBlank(documentTypeName, categoryLabel);
+
+        FolderEntity categoryFolder = folderService.resolveOrCreateFolder(
+                categoryLabel,
+                parent.getCode() + "-CAT-" + sanitizeCode(categoryLabel),
+                parent.getId()
+        );
+        if (categoryLabel.equalsIgnoreCase(typeLabel)) {
+            return categoryFolder;
+        }
+        return folderService.resolveOrCreateFolder(
+                typeLabel,
+                categoryFolder.getCode() + "-TYP-" + sanitizeCode(typeLabel),
+                categoryFolder.getId()
+        );
     }
 
     public FolderEntity resolveUploadFolder(
@@ -358,14 +461,15 @@ public class ArchiveTreeService {
             UploadDocumentRequest request,
             StudentEntity student,
             ExamPaperType examPaperType,
-            UserRole role
+            UserRole role,
+            String documentTypeName
     ) {
         StudentUploadPlacement placement = resolveStaffUploadPlacement(student, request, role);
         String faculty = preferOverride(placement.faculty(), student.getFaculty(), "Faculty is required");
         String department = preferOverride(placement.department(), student.getDepartment(), "Department is required");
         String studentNumber = student.getStudentNumber();
 
-        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
+        AcademicTermService.ResolvedTerm outerTerm = academicTermService.resolveTerm(
                 studentNumber,
                 placement.academicYear(),
                 placement.semester()
@@ -374,18 +478,163 @@ public class ArchiveTreeService {
         Path studentBase = storageRoot
                 .resolve(sanitizePath(faculty))
                 .resolve(sanitizePath(department))
+                .resolve(sanitizePath(outerTerm.academicYear()))
+                .resolve(sanitizePath(outerTerm.semesterFolderName()))
+                .resolve(sanitizePath(studentNumber));
+
+        if (role == UserRole.STUDENT && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            return studentBase.resolve(sanitizePath(FINAL_YEAR_PROJECT_SUFFIX));
+        }
+
+        return appendDocumentInnerPath(
+                studentBase,
+                request.academicYear(),
+                request.semester(),
+                studentNumber,
+                request.category() == null ? null : request.category().getDisplayName(),
+                documentTypeName
+        );
+    }
+
+    public Path resolveStoragePath(
+            Path storageRoot,
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType,
+            UserRole role,
+            String categoryName,
+            String documentTypeName
+    ) {
+        StudentUploadPlacement placement = resolveStaffUploadPlacement(student, request, role);
+        String faculty = preferOverride(placement.faculty(), student.getFaculty(), "Faculty is required");
+        String department = preferOverride(placement.department(), student.getDepartment(), "Department is required");
+        String studentNumber = student.getStudentNumber();
+
+        AcademicTermService.ResolvedTerm outerTerm = academicTermService.resolveTerm(
+                studentNumber,
+                placement.academicYear(),
+                placement.semester()
+        );
+
+        Path studentBase = storageRoot
+                .resolve(sanitizePath(faculty))
+                .resolve(sanitizePath(department))
+                .resolve(sanitizePath(outerTerm.academicYear()))
+                .resolve(sanitizePath(outerTerm.semesterFolderName()))
+                .resolve(sanitizePath(studentNumber));
+
+        if (role == UserRole.STUDENT && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            return studentBase.resolve(sanitizePath(FINAL_YEAR_PROJECT_SUFFIX));
+        }
+
+        return appendDocumentInnerPath(
+                studentBase,
+                request.academicYear(),
+                request.semester(),
+                studentNumber,
+                categoryName,
+                documentTypeName
+        );
+    }
+
+    public Path resolveStoragePath(
+            Path storageRoot,
+            UploadDocumentRequest request,
+            StudentEntity student,
+            ExamPaperType examPaperType,
+            UserRole role
+    ) {
+        String label = request.category().getDisplayName();
+        return resolveStoragePath(storageRoot, request, student, examPaperType, role, label, label);
+    }
+
+    public Path resolveImportStoragePath(
+            Path storageRoot,
+            StudentEntity student,
+            String faculty,
+            String department,
+            String academicYear,
+            String semester,
+            String documentTypeName
+    ) {
+        return resolveImportStoragePath(
+                storageRoot,
+                student,
+                faculty,
+                department,
+                academicYear,
+                semester,
+                documentTypeName,
+                documentTypeName
+        );
+    }
+
+    public Path resolveImportStoragePath(
+            Path storageRoot,
+            StudentEntity student,
+            String faculty,
+            String department,
+            String academicYear,
+            String semester,
+            String categoryName,
+            String documentTypeName
+    ) {
+        String studentNumber = student.getStudentNumber();
+        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(studentNumber, academicYear, semester);
+        Path studentBase = storageRoot
+                .resolve(sanitizePath(faculty))
+                .resolve(sanitizePath(department))
                 .resolve(sanitizePath(term.academicYear()))
                 .resolve(sanitizePath(term.semesterFolderName()))
                 .resolve(sanitizePath(studentNumber));
+        return appendDocumentInnerPath(
+                studentBase,
+                academicYear,
+                semester,
+                studentNumber,
+                categoryName,
+                documentTypeName
+        );
+    }
 
-        if (role != null && role != UserRole.STUDENT) {
-            return studentBase;
+    /**
+     * Under student ID only: {@code {DocAY}/{DocSem}/{Category}/{SubType}/}.
+     */
+    private Path appendDocumentInnerPath(
+            Path studentBase,
+            String documentAcademicYear,
+            String documentSemester,
+            String studentNumber,
+            String categoryName,
+            String documentTypeName
+    ) {
+        Path parent = studentBase;
+        if ((documentAcademicYear != null && !documentAcademicYear.isBlank())
+                || (documentSemester != null && !documentSemester.isBlank())) {
+            try {
+                AcademicTermService.ResolvedTerm innerTerm = academicTermService.resolveTerm(
+                        studentNumber,
+                        documentAcademicYear,
+                        documentSemester
+                );
+                parent = studentBase
+                        .resolve(sanitizePath(innerTerm.academicYear()))
+                        .resolve(sanitizePath(innerTerm.semesterFolderName()));
+            } catch (IllegalArgumentException ignored) {
+                parent = studentBase;
+            }
         }
+        return appendCategoryTypePath(parent, categoryName, documentTypeName);
+    }
 
-        String bucket = isOfficialCategory(request.category())
-                ? OFFICIAL_DOCUMENTS_SUFFIX
-                : FINAL_YEAR_PROJECT_SUFFIX;
-        return studentBase.resolve(sanitizePath(bucket));
+    private Path appendCategoryTypePath(Path studentBase, String categoryName, String documentTypeName) {
+        String categoryLabel = firstNonBlank(categoryName, documentTypeName, "Documents");
+        String typeLabel = firstNonBlank(documentTypeName, categoryLabel);
+        Path categoryPath = studentBase.resolve(sanitizePath(categoryLabel));
+        if (categoryLabel.equalsIgnoreCase(typeLabel)) {
+            return categoryPath;
+        }
+        return categoryPath.resolve(sanitizePath(typeLabel));
     }
 
     public StudentUploadPlacement resolveStudentUploadPlacement(StudentEntity student) {
@@ -420,16 +669,26 @@ public class ArchiveTreeService {
             );
         }
 
+        // Prefer the student's existing archive folder so document year/semester never move the student.
         StudentUploadPlacement existing = resolveStudentUploadPlacement(student);
         if (existing.hasArchiveLocation()) {
             return existing;
         }
 
+        // New student: outer Faculty/Dept/Year/Sem come from browse placement only.
+        String outerYear = trim(request.placementAcademicYear());
+        String outerSemester = trim(request.placementSemester());
+        if (outerYear == null || outerSemester == null) {
+            throw new IllegalArgumentException(
+                    "Open a semester folder to upload. Document year and semester only arrange files inside the student folder."
+            );
+        }
+
         return new StudentUploadPlacement(
                 preferOverride(request.faculty(), student.getFaculty(), null),
                 preferOverride(request.department(), student.getDepartment(), null),
-                request.academicYear(),
-                request.semester()
+                outerYear,
+                outerSemester
         );
     }
 
@@ -575,13 +834,6 @@ public class ArchiveTreeService {
         return folderService.resolveOrCreateFolder(studentNumber, studentCode, semesterFolder.getId());
     }
 
-    private boolean isOfficialCategory(StudentDocumentCategory category) {
-        return category == StudentDocumentCategory.REGISTRATION_FORM
-                || category == StudentDocumentCategory.REINTEGRATION_FORM
-                || category == StudentDocumentCategory.APPLICATION_DOCUMENTS
-                || category == StudentDocumentCategory.EXAMINATION_DOCUMENTS;
-    }
-
     private FolderEntity resolveFacultyFolder(String facultyName, Long rootId) {
         for (AucaFacultyCatalog.FacultyEntry faculty : AucaFacultyCatalog.FACULTIES) {
             if (faculty.name().equalsIgnoreCase(facultyName.trim())) {
@@ -649,6 +901,23 @@ public class ArchiveTreeService {
             return "UNKNOWN";
         }
         return value.replaceAll("[^a-zA-Z0-9._' /-]", "_");
+    }
+
+    private String firstNonBlank(String primary, String fallback) {
+        String value = trim(primary);
+        if (value != null) {
+            return value;
+        }
+        return trim(fallback);
+    }
+
+    private String firstNonBlank(String primary, String secondary, String tertiary) {
+        String value = firstNonBlank(primary, secondary);
+        if (value != null) {
+            return value;
+        }
+        String last = trim(tertiary);
+        return last == null ? "Documents" : last;
     }
 
     public record StudentWorkspace(

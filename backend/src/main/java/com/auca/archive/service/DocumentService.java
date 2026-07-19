@@ -47,11 +47,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class DocumentService {
-    private static final float PAGE_SIZE_TOLERANCE = 12f;
-    private static final float A4_WIDTH = 595f;
-    private static final float A4_HEIGHT = 842f;
-    private static final float LETTER_WIDTH = 612f;
-    private static final float LETTER_HEIGHT = 792f;
     private static final long FYP_ZIP_MAX_BYTES = 1024L * 1024L;
 
     private final DocumentRepository documentRepository;
@@ -67,6 +62,11 @@ public class DocumentService {
     private final DocumentElasticsearchService documentElasticsearchService;
     private final StudentStorageService studentStorageService;
     private final ReservationService reservationService;
+    private final DocumentChecksumService checksumService;
+    private final DocumentTypeDefinitionService documentTypeDefinitionService;
+    private final DocumentCategoryDefinitionService documentCategoryDefinitionService;
+    private final FileConversionService fileConversionService;
+    private final PdfOptimizationService pdfOptimizationService;
     private final Path storageRoot;
     private final long minUploadSizeBytes;
     private final long maxUploadSizeBytes;
@@ -87,6 +87,11 @@ public class DocumentService {
             DocumentElasticsearchService documentElasticsearchService,
             StudentStorageService studentStorageService,
             ReservationService reservationService,
+            DocumentChecksumService checksumService,
+            DocumentTypeDefinitionService documentTypeDefinitionService,
+            DocumentCategoryDefinitionService documentCategoryDefinitionService,
+            FileConversionService fileConversionService,
+            PdfOptimizationService pdfOptimizationService,
             @Value("${archive.min-upload-size-bytes:1024}") long minUploadSizeBytes,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes,
             @Value("${archive.student.max-upload-size-bytes:5242880}") long studentMaxUploadSizeBytes,
@@ -105,6 +110,11 @@ public class DocumentService {
         this.documentElasticsearchService = documentElasticsearchService;
         this.studentStorageService = studentStorageService;
         this.reservationService = reservationService;
+        this.checksumService = checksumService;
+        this.documentTypeDefinitionService = documentTypeDefinitionService;
+        this.documentCategoryDefinitionService = documentCategoryDefinitionService;
+        this.fileConversionService = fileConversionService;
+        this.pdfOptimizationService = pdfOptimizationService;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
         this.minUploadSizeBytes = minUploadSizeBytes;
         this.maxUploadSizeBytes = maxUploadSizeBytes;
@@ -129,9 +139,29 @@ public class DocumentService {
             String rawRole,
             String rawStudentNumber
     ) {
+        return search(new com.auca.archive.dto.DocumentSearchFilter(
+                query,
+                category,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        ), rawRole, rawStudentNumber);
+    }
+
+    public List<DocumentListItemResponse> search(
+            com.auca.archive.dto.DocumentSearchFilter filter,
+            String rawRole,
+            String rawStudentNumber
+    ) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
+        String query = filter == null ? null : filter.q();
+        StudentDocumentCategory category = filter == null ? null : filter.category();
         boolean hasQuery = query != null && !query.isBlank();
         List<DocumentEntity> documents;
 
@@ -149,13 +179,49 @@ public class DocumentService {
                     })
                     .toList();
         } else {
-            String trimmed = query.trim();
-            documents = searchDocumentsFromStore(trimmed, category);
+            documents = searchDocumentsFromStore(query.trim(), category);
         }
 
-        if (category != null) {
+        if (filter != null && filter.categories() != null && !filter.categories().isEmpty()) {
+            documents = documents.stream()
+                    .filter(document -> filter.categories().contains(document.getCategory()))
+                    .toList();
+        } else if (category != null) {
             documents = documents.stream()
                     .filter(document -> category.equals(document.getCategory()))
+                    .toList();
+        }
+        if (filter != null && filter.excludeCategories() != null && !filter.excludeCategories().isEmpty()) {
+            documents = documents.stream()
+                    .filter(document -> !filter.excludeCategories().contains(document.getCategory()))
+                    .toList();
+        }
+        if (filter != null && filter.documentTypeIds() != null && !filter.documentTypeIds().isEmpty()) {
+            documents = documents.stream()
+                    .filter(document -> document.getDocumentTypeId() != null
+                            && filter.documentTypeIds().contains(document.getDocumentTypeId()))
+                    .toList();
+        }
+        if (filter != null && filter.academicYear() != null && !filter.academicYear().isBlank()) {
+            documents = documents.stream()
+                    .filter(document -> filter.academicYear().equalsIgnoreCase(String.valueOf(document.getAcademicYear())))
+                    .toList();
+        }
+        if (filter != null && filter.semester() != null && !filter.semester().isBlank()) {
+            documents = documents.stream()
+                    .filter(document -> filter.semester().equalsIgnoreCase(String.valueOf(document.getSemester())))
+                    .toList();
+        }
+        if (filter != null && filter.office() != null && !filter.office().isBlank()) {
+            java.util.Set<Long> officeTypeIds = documentTypeDefinitionService.listByOffice(
+                    rawRole,
+                    filter.office()
+            ).stream()
+                    .map(com.auca.archive.dto.DocumentTypeDefinitionResponse::id)
+                    .collect(java.util.stream.Collectors.toSet());
+            documents = documents.stream()
+                    .filter(document -> document.getDocumentTypeId() != null
+                            && officeTypeIds.contains(document.getDocumentTypeId()))
                     .toList();
         }
 
@@ -313,6 +379,19 @@ public class DocumentService {
             String rawStudentNumber,
             RequestActor requestActor
     ) throws IOException {
+        return upload(request, file, coverPhoto, rawRole, rawStudentNumber, requestActor, false);
+    }
+
+    @Transactional
+    public DocumentDetailResponse upload(
+            UploadDocumentRequest request,
+            MultipartFile file,
+            MultipartFile coverPhoto,
+            String rawRole,
+            String rawStudentNumber,
+            RequestActor requestActor,
+            boolean validationOverride
+    ) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String sessionStudentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, sessionStudentNumber);
@@ -320,8 +399,17 @@ public class DocumentService {
             throw new IllegalArgumentException("Document file is required");
         }
         byte[] fileBytes = file.getBytes();
-        validateUpload(request, file, fileBytes, role);
-        if (!accessService.canUploadCategory(role, request.category())) {
+        String convertedFromMime = null;
+        if (!isStudentProjectZip(request, file, fileBytes)) {
+            fileConversionService.requireAllowedMime(file.getContentType());
+            if (!FileSignatureValidator.isPdf(fileBytes)) {
+                convertedFromMime = file.getContentType();
+                fileBytes = fileConversionService.normalizeToPdf(fileBytes, file.getContentType(), file.getOriginalFilename());
+            }
+        }
+        validateUpload(request, file, fileBytes, role, validationOverride);
+        StudentDocumentCategory uploadCategory = resolveUploadCategory(request);
+        if (!accessService.canUploadCategory(role, uploadCategory)) {
             throw new IllegalArgumentException("You are not allowed to upload this document category");
         }
         if (role == UserRole.STUDENT) {
@@ -337,9 +425,26 @@ public class DocumentService {
                 request.department(),
                 usesArchivePlacementContext(role)
         );
-        FolderEntity folder = archiveTreeService.resolveUploadFolder(request, student, examPaperType, role);
+        String categoryFolderName = resolveCategoryFolderName(request);
+        String documentTypeName = resolveDocumentTypeName(request);
+        FolderEntity folder = archiveTreeService.resolveUploadFolder(
+                request,
+                student,
+                examPaperType,
+                role,
+                categoryFolderName,
+                documentTypeName
+        );
 
-        Path studentRoot = archiveTreeService.resolveStoragePath(storageRoot, request, student, examPaperType, role);
+        Path studentRoot = archiveTreeService.resolveStoragePath(
+                storageRoot,
+                request,
+                student,
+                examPaperType,
+                role,
+                categoryFolderName,
+                documentTypeName
+        );
         Files.createDirectories(studentRoot);
 
         String originalName = file.getOriginalFilename() == null || file.getOriginalFilename().isBlank()
@@ -391,11 +496,22 @@ public class DocumentService {
         // Registrar and other office uploads enter the archive immediately (no pending gate).
         entity.setStatus(studentFypSubmission ? DocumentStatus.PENDING : DocumentStatus.APPROVED);
         entity.setType(isStudentProjectZip(request, file, fileBytes) ? DocumentType.ZIP : DocumentType.PDF);
-        entity.setCategory(request.category());
+        entity.setCategory(resolveUploadCategory(request));
+        entity.setDocumentSubtypeId(request.documentSubtypeId());
+        entity.setDocumentTypeId(request.documentTypeId());
+        entity.setCategoryDefinitionId(resolveCategoryDefinitionId(request));
+        entity.setContentChecksumSha256(checksumService.sha256Hex(fileBytes));
+        entity.setChecksumAlgorithm("SHA-256");
+        entity.setCompressed(Boolean.FALSE);
+        entity.setOriginalSizeBytes(file.getSize());
+        entity.setConvertedFromMime(convertedFromMime);
         entity.setCreatedAt(LocalDateTime.now());
         entity.setModifiedAt(LocalDateTime.now());
 
         DocumentEntity saved = documentRepository.save(entity);
+        if (saved.getType() == DocumentType.PDF) {
+            pdfOptimizationService.optimizeDocumentAsync(saved.getId());
+        }
         if (studentFypSubmission) {
             createLibrarianApprovalTask(saved);
             activityService.recordAction(
@@ -416,6 +532,15 @@ public class DocumentService {
                     activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
                     requestActor
             );
+            if (validationOverride) {
+                activityService.recordAction(
+                        "Validation override applied for \"" + saved.getTitle() + "\"",
+                        saved.getUploadedBy(),
+                        ActivityCategory.UPLOAD,
+                        activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
+                        requestActor
+                );
+            }
         }
         return toDetail(saved);
     }
@@ -481,13 +606,15 @@ public class DocumentService {
 
         if (file != null && !file.isEmpty()) {
             byte[] fileBytes = file.getBytes();
-            validateUpload(request == null
+            UploadDocumentRequest uploadRequest = request == null
                     ? new UploadDocumentRequest(
                     title,
                     entity.getStudentNumber(),
                     entity.getOwnerName(),
                     null,
                     entity.getDepartment(),
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -502,9 +629,13 @@ public class DocumentService {
                     entity.getTags(),
                     entity.getGithubUrl(),
                     entity.getExternalLinks(),
-                    title
+                    title,
+                    null,
+                    null,
+                    null
             )
-                    : request, file, fileBytes, role);
+                    : request;
+            validateUpload(uploadRequest, file, fileBytes, role);
             if (fileBytes.length > FYP_ZIP_MAX_BYTES) {
                 throw new IllegalArgumentException("Final year project ZIP must be 1 MB or smaller");
             }
@@ -864,6 +995,16 @@ public class DocumentService {
     }
 
     private void validateUpload(UploadDocumentRequest request, MultipartFile file, byte[] fileBytes, UserRole role) throws IOException {
+        validateUpload(request, file, fileBytes, role, false);
+    }
+
+    private void validateUpload(
+            UploadDocumentRequest request,
+            MultipartFile file,
+            byte[] fileBytes,
+            UserRole role,
+            boolean validationOverride
+    ) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Document file is required");
         }
@@ -905,9 +1046,11 @@ public class DocumentService {
                 throw new IllegalArgumentException("PDF has no pages");
             }
 
-            validatePageSizes(pdfDocument, role);
-
-            documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename());
+            if (!validationOverride) {
+                documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename(), role.getDepartment());
+            } else if (role != UserRole.ADMIN && role != UserRole.REGISTRAR) {
+                throw new IllegalArgumentException("Only administrators or registrars can override document validation.");
+            }
         }
     }
 
@@ -921,26 +1064,6 @@ public class DocumentService {
             // Fall back to the client-provided count.
         }
         return requested == null || requested < 1 ? 1 : requested;
-    }
-
-    private void validatePageSizes(PDDocument pdfDocument, UserRole role) {
-        int invalidPages = 0;
-        for (PDPage page : pdfDocument.getPages()) {
-            if (!isNormalPageSize(page.getMediaBox())) {
-                invalidPages += 1;
-            }
-        }
-        if (invalidPages == 0) {
-            return;
-        }
-        if (invalidPages == pdfDocument.getNumberOfPages()) {
-            throw new IllegalArgumentException("PDF pages must use A4 or Letter size.");
-        }
-        if (role != UserRole.STUDENT && invalidPages <= pdfDocument.getNumberOfPages() / 2) {
-            return;
-        }
-        throw new IllegalArgumentException("Only A4 or Letter page sizes are allowed. "
-                + invalidPages + " page(s) use an unsupported size.");
     }
 
     private DocumentType resolveReplacementType(byte[] fileBytes) {
@@ -1132,6 +1255,14 @@ public class DocumentService {
     }
 
     private DocumentDetailResponse toDetail(DocumentEntity document) {
+        String documentTypeName = null;
+        if (document.getDocumentTypeId() != null) {
+            try {
+                documentTypeName = documentTypeDefinitionService.requireActive(document.getDocumentTypeId()).getName();
+            } catch (IllegalArgumentException ignored) {
+                documentTypeName = null;
+            }
+        }
         return new DocumentDetailResponse(
                 document.getId(),
                 document.getTitle(),
@@ -1167,26 +1298,129 @@ public class DocumentService {
                 document.getCoverPhotoPath() == null || document.getCoverPhotoPath().isBlank()
                         ? null
                         : "/api/documents/" + document.getId() + "/cover",
-                "/api/documents/" + document.getId() + "/download"
+                "/api/documents/" + document.getId() + "/download",
+                document.getDocumentTypeId(),
+                documentTypeName,
+                document.getContentChecksumSha256(),
+                document.getChecksumAlgorithm(),
+                document.getCompressed(),
+                document.getOriginalSizeBytes(),
+                document.getConvertedFromMime(),
+                resolveIntegrityStatus(document),
+                buildFolderPath(document.getFolderId())
         );
     }
 
-    private boolean isNormalPageSize(PDRectangle box) {
-        if (box == null) {
-            return false;
-        }
-        float width = box.getWidth();
-        float height = box.getHeight();
-        return matchesPageSize(width, height, A4_WIDTH, A4_HEIGHT)
-                || matchesPageSize(width, height, A4_HEIGHT, A4_WIDTH)
-                || matchesPageSize(width, height, LETTER_WIDTH, LETTER_HEIGHT)
-                || matchesPageSize(width, height, LETTER_HEIGHT, LETTER_WIDTH);
+    public com.auca.archive.dto.DocumentIntegrityResponse verifyIntegrity(Long id, String rawRole) throws IOException {
+        accessService.resolveRole(rawRole);
+        DocumentEntity document = documentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        byte[] bytes = readDecryptedBytes(document);
+        boolean verified = checksumService.matches(document.getContentChecksumSha256(), bytes);
+        String status = document.getContentChecksumSha256() == null
+                ? "unknown"
+                : (verified ? "verified" : "modified");
+        String message = switch (status) {
+            case "verified" -> "File checksum matches the stored value.";
+            case "modified" -> "File checksum does not match. The file may have been modified outside the archive.";
+            default -> "No checksum was stored for this document.";
+        };
+        return new com.auca.archive.dto.DocumentIntegrityResponse(
+                document.getId(),
+                document.getContentChecksumSha256(),
+                status,
+                message
+        );
     }
 
-    private boolean matchesPageSize(float width, float height, float expectedWidth, float expectedHeight) {
-        return Math.abs(width - expectedWidth) <= PAGE_SIZE_TOLERANCE
-                && Math.abs(height - expectedHeight) <= PAGE_SIZE_TOLERANCE;
+    private String resolveIntegrityStatus(DocumentEntity document) {
+        if (document.getContentChecksumSha256() == null || document.getContentChecksumSha256().isBlank()) {
+            return "unknown";
+        }
+        try {
+            byte[] bytes = readDecryptedBytes(document);
+            return checksumService.matches(document.getContentChecksumSha256(), bytes) ? "verified" : "modified";
+        } catch (IOException ex) {
+            return "unknown";
+        }
     }
+
+    private byte[] readDecryptedBytes(DocumentEntity document) throws IOException {
+        Path path = Path.of(document.getFilePath());
+        byte[] stored = Files.readAllBytes(path);
+        if (Boolean.TRUE.equals(document.getEncrypted())) {
+            return fileEncryptionService.decrypt(stored, document.getEncryptionIv());
+        }
+        return stored;
+    }
+
+    private String buildFolderPath(Long folderId) {
+        if (folderId == null) {
+            return null;
+        }
+        try {
+            return folderService.buildBreadcrumbPath(folderId);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private StudentDocumentCategory resolveUploadCategory(UploadDocumentRequest request) {
+        if (request.categoryDefinitionId() != null) {
+            var categoryDefinition = documentCategoryDefinitionService.requireActive(request.categoryDefinitionId());
+            if (categoryDefinition.getLegacyCategory() != null) {
+                return categoryDefinition.getLegacyCategory();
+            }
+        }
+        if (request.documentTypeId() != null) {
+            var typeDefinition = documentTypeDefinitionService.requireActive(request.documentTypeId());
+            if (typeDefinition.getCategory() != null) {
+                return typeDefinition.getCategory();
+            }
+        }
+        return request.category();
+    }
+
+    private Long resolveCategoryDefinitionId(UploadDocumentRequest request) {
+        if (request.categoryDefinitionId() != null) {
+            return request.categoryDefinitionId();
+        }
+        if (request.documentTypeId() != null) {
+            return documentTypeDefinitionService.requireActive(request.documentTypeId()).getCategoryDefinitionId();
+        }
+        return null;
+    }
+
+    private String resolveCategoryFolderName(UploadDocumentRequest request) {
+        if (request.categoryDefinitionId() != null) {
+            return documentCategoryDefinitionService.requireActive(request.categoryDefinitionId()).getName();
+        }
+        if (request.documentTypeId() != null) {
+            var typeDefinition = documentTypeDefinitionService.requireActive(request.documentTypeId());
+            if (typeDefinition.getCategoryDefinitionId() != null) {
+                return documentCategoryDefinitionService.requireActive(typeDefinition.getCategoryDefinitionId()).getName();
+            }
+            if (typeDefinition.getCategory() != null) {
+                return typeDefinition.getCategory().getDisplayName();
+            }
+        }
+        if (request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            return FINAL_YEAR_PROJECT_NAME;
+        }
+        return request.category() == null ? "Documents" : request.category().getDisplayName();
+    }
+
+    private String resolveDocumentTypeName(UploadDocumentRequest request) {
+        if (request.documentTypeId() != null) {
+            return documentTypeDefinitionService.requireActive(request.documentTypeId()).getName();
+        }
+        if (request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+            return FINAL_YEAR_PROJECT_NAME;
+        }
+        return request.category() == null ? "Documents" : request.category().getDisplayName();
+    }
+
+    private static final String FINAL_YEAR_PROJECT_NAME = "Final Year Project";
 
     private String resolveFolderName(DocumentEntity document) {
         if (document.getFolderId() == null) {

@@ -16,6 +16,10 @@ public record UploadDocumentRequest(
         String examType,
         String academicYear,
         String semester,
+        /** Browse-context year for outer student folder (Faculty/Dept/Year/Sem/Student). */
+        String placementAcademicYear,
+        /** Browse-context semester for outer student folder. */
+        String placementSemester,
         String course,
         Integer marks,
         String examRoom,
@@ -27,6 +31,9 @@ public record UploadDocumentRequest(
         String tags,
         String githubUrl,
         String externalLinks,
-        String projectTitle
+        String projectTitle,
+        Long documentSubtypeId,
+        Long documentTypeId,
+        Long categoryDefinitionId
 ) {
 }

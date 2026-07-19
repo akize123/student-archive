@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getPublishedArchiveTree, getSessionProfile, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
+import { useResizable, useResizableFromRight } from './hooks/useResizable'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getPublishedArchiveTree, getSessionProfile, getSharedWithMe, getSharedWithMeCount, getStudentArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, previewFolderImport, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import AdminOfficeView from './components/AdminOfficeView'
 import { buildAdminOffices, filterArchiveTreeForOffice } from './adminOfficeUtils'
 import AcademicYearField from './components/AcademicYearField'
 import MobileScanPage from './components/MobileScanPage'
 import UploadPhoneScanPanel from './components/UploadPhoneScanPanel'
+import ImportPreviewWizard from './components/ImportPreviewWizard'
+import DocumentTypePicker from './components/DocumentTypePicker'
+import StaffStudentFolderBuilder from './components/StaffStudentFolderBuilder'
+import ExplorerDetailsPane from './components/ExplorerDetailsPane'
+import UserAppearanceSettings, { applyFolderColorMode } from './components/UserAppearanceSettings'
 import LibrarianDashboard from './components/LibrarianDashboard'
 import StudentDashboard from './components/StudentDashboard'
 import StudentBookReservationControls from './components/StudentBookReservationControls'
@@ -1227,6 +1233,24 @@ function getRoleDashboardConfig(role) {
   return roleDashboardConfig[role] || roleDashboardConfig.REGISTRAR
 }
 
+/** Office used for document category/type catalog (not academic department). */
+function resolveCatalogOffice(role) {
+  switch (role) {
+    case 'REGISTRAR':
+      return 'Registrar Office'
+    case 'EXAMINATION_OFFICER':
+      return 'Examination Office'
+    case 'LIBRARIAN':
+    case 'STUDENT':
+      return 'University Library'
+    case 'HOD':
+    case 'ADMIN':
+      return ''
+    default:
+      return getRoleDashboardConfig(role).department || ''
+  }
+}
+
 function getInitials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean)
   if (!parts.length) {
@@ -1364,12 +1388,15 @@ function applyUploadPlacementContext(form, placement) {
     ...form,
     faculty: placement?.faculty || form.faculty,
     department: placement?.department || form.department,
-    academicYear: placement?.academicYear || form.academicYear,
-    semester: placement?.semester || form.semester
+    placementAcademicYear: placement?.academicYear || form.placementAcademicYear,
+    placementSemester: placement?.semester || form.placementSemester,
+    // Default document term from browse context only when not already chosen.
+    academicYear: form.academicYear || placement?.academicYear || '',
+    semester: form.semester || placement?.semester || ''
   }
 }
 
-function applyExistingStudentPlacement(form, profile) {
+function applyExistingStudentPlacement(form, profile, { preserveDocumentTerm = false } = {}) {
   if (!profile?.studentNumber) {
     return form
   }
@@ -1379,8 +1406,12 @@ function applyExistingStudentPlacement(form, profile) {
     studentName: profile.studentName || form.studentName,
     faculty: profile.faculty || form.faculty,
     department: profile.department || form.department,
-    academicYear: profile.academicYear || form.academicYear,
-    semester: profile.semester || form.semester
+    ...(preserveDocumentTerm
+      ? {}
+      : {
+          academicYear: profile.academicYear || form.academicYear,
+          semester: profile.semester || form.semester
+        })
   }
 }
 
@@ -1401,9 +1432,15 @@ function buildDefaultUploadForm() {
     department: '',
     uploadedBy: '',
     category: 'REGISTRATION_FORM',
+    categoryDefinitionId: '',
+    documentTypeId: '',
+    typeName: '',
+    categoryName: '',
     examType: 'MID_SEM',
     academicYear: '',
     semester: '',
+    placementAcademicYear: '',
+    placementSemester: '',
     course: '',
     marks: '',
     examRoom: '',
@@ -1433,8 +1470,9 @@ function getExamPaperTypeMeta(value) {
 }
 
 function buildPlacementUploadTitle(form, studentNumber) {
+  const label = form.typeName || getCategoryMeta(form.category).label
   return [
-    getCategoryMeta(form.category).label,
+    label,
     String(studentNumber || '').trim(),
     String(form.academicYear || '').trim(),
     String(form.semester || '').trim()
@@ -1536,6 +1574,30 @@ function collectExpandedPath(nodes, activeFolderId, expanded = new Set()) {
   return expanded
 }
 
+function resolveFolderTone(node) {
+  const code = String(node?.code || '').toUpperCase()
+  const name = String(node?.name || '').trim()
+  if (code === 'AUCA' || (code.startsWith('FAC-') && !code.includes('-DEPT-'))) {
+    return 'faculty'
+  }
+  if (code.includes('-DEPT-')) {
+    return 'department'
+  }
+  if (code.includes('-AY-') || code.includes('-INAY-') || /^\d{4}-\d{4}$/.test(name)) {
+    return 'year'
+  }
+  if (code.includes('-SEM-') || code.includes('-INSEM-') || /^\d{4}\/\d$/.test(name)) {
+    return 'semester'
+  }
+  if (code.includes('-STU-')) {
+    return 'student'
+  }
+  if (code.includes('-TYP-')) {
+    return 'document'
+  }
+  return 'document'
+}
+
 function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFolderContextMenu, expandedIds, onToggleExpand, allowDeleteFolder = true }) {
   return (
     <ul className="tree-list" role="tree">
@@ -1575,14 +1637,14 @@ function SidebarTree({ nodes, activeFolderId, onOpenFolder, onDeleteFolder, onFo
                 onClick={() => onOpenFolder?.(node.id)}
                 title={`Open ${node.name}`}
               >
-                <FolderIcon className="icon folder tree-folder" />
+                <FolderIcon className={`icon folder tree-folder folder-tone-${resolveFolderTone(node)}`} />
                 <span className="tree-label">{node.name}</span>
               </button>
               <span className="tree-count">{node.itemCount ?? 0}</span>
               {canDelete ? (
                 <button
                   type="button"
-                  className="tree-delete-btn"
+                  className="tree-delete-btn btn-danger"
                   aria-label={`Delete ${node.name}`}
                   title="Delete folder"
                   onClick={(event) => {
@@ -1924,7 +1986,8 @@ function ProfileMenu({
   storageLimitBytes,
   storagePercent,
   onLogout,
-  formatBytes
+  formatBytes,
+  onNotify
 }) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef(null)
@@ -1983,6 +2046,8 @@ function ProfileMenu({
               <span>{formatBytes(storageLimitBytes)}</span>
             </div>
           </div>
+
+          <UserAppearanceSettings onNotify={onNotify} />
 
           <button type="button" className="ghost-btn logout-btn topbar-profile-logout" onClick={onLogout}>
             Sign out
@@ -2085,6 +2150,9 @@ function ConfirmDialog({
   selectOptions,
   selectValue,
   onSelectChange,
+  folderBuilderPlacement,
+  folderBuilderError,
+  onFolderBuilderChange,
   hideConfirmButton = false,
   onConfirm,
   onCancel,
@@ -2094,10 +2162,22 @@ function ConfirmDialog({
     return null
   }
 
+  const confirmValue = folderBuilderPlacement
+    ? inputValue
+    : inputLabel
+      ? inputValue
+      : selectLabel
+        ? selectValue
+        : undefined
+  const confirmDisabled = busy
+    || (folderBuilderPlacement ? Boolean(folderBuilderError) || !String(inputValue || '').trim() : false)
+    || (!folderBuilderPlacement && inputLabel ? !String(inputValue || '').trim() : false)
+    || (selectLabel ? !String(selectValue || '').trim() : false)
+
   return (
     <div className="modal-backdrop confirm-backdrop" onClick={busy ? undefined : onCancel} role="presentation">
       <div
-        className="modal confirm-modal"
+        className={`modal confirm-modal${folderBuilderPlacement ? ' confirm-modal-wide' : ''}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -2109,7 +2189,15 @@ function ConfirmDialog({
           </div>
         </div>
         <p className="confirm-message">{message}</p>
-        {inputLabel ? (
+        {folderBuilderPlacement ? (
+          <StaffStudentFolderBuilder
+            placement={folderBuilderPlacement}
+            value={inputValue}
+            onChange={onFolderBuilderChange}
+            disabled={busy}
+          />
+        ) : null}
+        {!folderBuilderPlacement && inputLabel ? (
           <label className="confirm-input-label">
             <span>{inputLabel}</span>
             <input
@@ -2132,7 +2220,7 @@ function ConfirmDialog({
             <select
               value={selectValue || ''}
               onChange={(event) => onSelectChange?.(event.target.value)}
-              autoFocus={!inputLabel}
+              autoFocus={!inputLabel && !folderBuilderPlacement}
               disabled={busy}
             >
               {(selectOptions || []).map((option) => (
@@ -2151,10 +2239,12 @@ function ConfirmDialog({
             <button
               type="button"
               className={tone === 'danger' ? 'danger-btn' : 'primary-btn'}
-              onClick={() => onConfirm?.(inputLabel ? inputValue : selectLabel ? selectValue : undefined)}
-              disabled={busy || (inputLabel ? !String(inputValue || '').trim() : false) || (selectLabel ? !String(selectValue || '').trim() : false)}
+              onClick={() => onConfirm?.(confirmValue)}
+              disabled={confirmDisabled}
             >
-              {busy ? 'Working...' : confirmLabel}
+              {busy
+                ? (folderBuilderPlacement ? 'Creating…' : confirmLabel === 'Create folder' ? 'Creating…' : 'Working…')
+                : confirmLabel}
             </button>
           )}
         </div>
@@ -2302,6 +2392,7 @@ function FolderView({
   const [confirmState, setConfirmState] = useState(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+  const [folderBuilderError, setFolderBuilderError] = useState('')
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
   const [documentContextMenu, setDocumentContextMenu] = useState(null)
   const [shareOpen, setShareOpen] = useState(false)
@@ -2335,14 +2426,24 @@ function FolderView({
       ? (isSemesterOrDeeperFolder(folder) || isDepartmentFolder(folder))
       : !isProtectedArchiveStructureFolder(folder)
   )
-  const canReplace = !isStudent && isSemesterOrDeeperFolder(folder)
+  // Files live under student folders; replace only makes sense below the semester root.
+  const canReplace = !isStudent && isSemesterOrDeeperFolder(folder) && !isSemesterFolder(folder)
   const canImport = !isStudent && isSemesterOrDeeperFolder(folder) && isOfficeArchiveRole(userRole)
+  const isSemesterRoot = !isStudent && isSemesterFolder(folder)
   const canFilterDocuments = isOfficeArchiveRole(userRole)
     ? isSemesterOrDeeperFolder(folder)
     : !isStudent
   const replaceInputRef = useRef(null)
   const importInputRef = useRef(null)
+  const { width: detailsWidth, startResize: startDetailsResize } = useResizableFromRight('auca-details-width', {
+    initial: 320,
+    min: 260,
+    max: 520
+  })
   const [importBusy, setImportBusy] = useState(false)
+  const [importPreviewOpen, setImportPreviewOpen] = useState(false)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importPayload, setImportPayload] = useState(null)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
@@ -2370,6 +2471,7 @@ function FolderView({
     }
     setConfirmState(null)
     setNewFolderName('')
+    setFolderBuilderError('')
   }
 
   function openConfirm(config) {
@@ -2377,6 +2479,7 @@ function FolderView({
   }
 
   function toggleFolderSelection(folderId) {
+    setSelectedDocumentIds(new Set())
     setSelectedFolderIds((current) => {
       const next = new Set(current)
       if (next.has(folderId)) {
@@ -2389,12 +2492,13 @@ function FolderView({
   }
 
   function toggleDocumentSelection(documentId) {
+    const id = Number(documentId)
     setSelectedDocumentIds((current) => {
       const next = new Set(current)
-      if (next.has(documentId)) {
-        next.delete(documentId)
+      if (next.has(id)) {
+        next.delete(id)
       } else {
-        next.add(documentId)
+        next.add(id)
       }
       return next
     })
@@ -2435,19 +2539,22 @@ function FolderView({
   }
 
   function handleDocumentClick(event, documentItem) {
+    const id = Number(documentItem.id)
+    // Selecting a file always clears folder selection so the Properties pane can open.
+    setSelectedFolderIds(new Set())
     if (event.ctrlKey || event.metaKey) {
-      toggleDocumentSelection(documentItem.id)
+      toggleDocumentSelection(id)
       return
     }
-    setSelectedFolderIds(new Set())
-    setSelectedDocumentIds(new Set([documentItem.id]))
+    setSelectedDocumentIds(new Set([id]))
   }
 
   function handleDocumentContextMenu(event, documentItem) {
     event.preventDefault()
     event.stopPropagation()
+    const id = Number(documentItem.id)
     setSelectedFolderIds(new Set())
-    setSelectedDocumentIds(new Set([documentItem.id]))
+    setSelectedDocumentIds(new Set([id]))
     setDocumentContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -2458,14 +2565,15 @@ function FolderView({
   function handleDocumentKeyDown(event, documentItem) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
+      const id = Number(documentItem.id)
       setSelectedFolderIds(new Set())
-      setSelectedDocumentIds(new Set([documentItem.id]))
+      setSelectedDocumentIds(new Set([id]))
     }
   }
 
   function getSelectedDocuments(allDocuments) {
     if (selectedDocumentIds.size) {
-      return allDocuments.filter((document) => selectedDocumentIds.has(document.id))
+      return allDocuments.filter((document) => selectedDocumentIds.has(Number(document.id)))
     }
     return allDocuments
   }
@@ -2569,6 +2677,15 @@ function FolderView({
   const selectedDocuments = getSelectedDocuments(documents)
   const selectedFolders = getSelectedFolders(children)
   const selectionCount = selectedFolderIds.size + selectedDocumentIds.size
+  // Properties pane: show for the latest selected file whenever any file is selected.
+  const primarySelectedDocumentId = selectedDocumentIds.size
+    ? [...selectedDocumentIds][selectedDocumentIds.size - 1]
+    : null
+  const selectedDetailDocument = primarySelectedDocumentId == null
+    ? null
+    : documents.find((document) => Number(document.id) === primarySelectedDocumentId)
+      || visibleDocumentsForGrid.find((document) => Number(document.id) === primarySelectedDocumentId)
+      || null
   const showExplorerFilter = !isStructureBrowseOnly && !showDepartmentShareTools
   const filterIsActive = filterType !== 'all' || sortBy !== 'modified'
 
@@ -2596,14 +2713,17 @@ function FolderView({
 
   function handleNewFolderClick() {
     setNewFolderName('')
+    setFolderBuilderError('')
+    const placement = resolveFolderUploadPlacement(folder)
     openConfirm({
       title: 'Create new folder',
       message: isStudent
         ? `Create a personal folder inside "${folder.name}" for your project files?`
-        : `Create a subfolder inside "${folder.name}". Name format: ${STAFF_FOLDER_NAME_HINT}.`,
+        : `Create a student folder inside "${folder.name}". Enter the Student ID — uploaded files for that student go inside this folder.`,
       confirmLabel: 'Create folder',
-      inputLabel: 'Folder name',
-      inputPlaceholder: isStudent ? 'Enter folder name' : 'e.g. 20251SENG041',
+      inputLabel: isStudent ? 'Folder name' : undefined,
+      inputPlaceholder: isStudent ? 'Enter folder name' : undefined,
+      folderBuilderPlacement: isStudent ? null : placement,
       onConfirm: async (folderName) => {
         const trimmedName = String(folderName || '').trim()
         if (!trimmedName) {
@@ -2626,7 +2746,9 @@ function FolderView({
   function handleUploadClick() {
     openConfirm({
       title: 'Upload document',
-      message: `Upload a new document to "${folder.name}"?`,
+      message: isSemesterRoot
+        ? `Upload into semester "${folder.name}". The form will ask for the student ID, document year/semester, and type — then create the student folder and store the file inside it.`
+        : `Upload a document under "${folder.name}". For a new student, use Upload with their Student ID, or create their folder first.`,
       confirmLabel: 'Continue to upload',
       onConfirm: async () => {
         onUpload?.()
@@ -2637,20 +2759,29 @@ function FolderView({
   async function runFolderImport(payload) {
     setImportBusy(true)
     try {
-      const result = await importFolderArchive(folder.id, payload)
-      const skippedNote = result.skippedCount
-        ? ` ${result.skippedCount} item${result.skippedCount === 1 ? '' : 's'} skipped.`
-        : ''
-      onNotify?.(
-        `Imported ${result.importedCount} document${result.importedCount === 1 ? '' : 's'} into "${folder.name}". `
-        + `ZIP archives are unzipped here — open folders below to browse the real content.${skippedNote}`
-      )
-      await onDataChange?.()
+      const preview = await previewFolderImport(folder.id, payload)
+      setImportPayload(payload)
+      setImportPreview(preview)
+      setImportPreviewOpen(true)
     } catch (err) {
-      onNotify?.(err.message || 'Import failed.')
+      onNotify?.(err.message || 'Import preview failed.')
     } finally {
       setImportBusy(false)
     }
+  }
+
+  async function handleImportCommitted(result) {
+    const skippedNote = result.skippedCount
+      ? ` ${result.skippedCount} item${result.skippedCount === 1 ? '' : 's'} skipped.`
+      : ''
+    onNotify?.(
+      `Imported ${result.importedCount} document${result.importedCount === 1 ? '' : 's'} into "${folder.name}". `
+      + `ZIP archives are unzipped here — open folders below to browse the real content.${skippedNote}`
+    )
+    setImportPreviewOpen(false)
+    setImportPreview(null)
+    setImportPayload(null)
+    await onDataChange?.()
   }
 
   async function collectDirectoryFiles(directoryHandle, parentPath = '') {
@@ -2986,6 +3117,12 @@ function FolderView({
         inputPlaceholder={confirmState?.inputPlaceholder}
         inputValue={newFolderName}
         onInputChange={setNewFolderName}
+        folderBuilderPlacement={confirmState?.folderBuilderPlacement}
+        folderBuilderError={folderBuilderError}
+        onFolderBuilderChange={(name, error) => {
+          setNewFolderName(name || '')
+          setFolderBuilderError(error || '')
+        }}
         busy={confirmBusy}
         onCancel={closeConfirm}
         onConfirm={(submittedValue) => runConfirmAction(() => confirmState?.onConfirm?.(submittedValue))}
@@ -3363,6 +3500,12 @@ function FolderView({
       ) : null}
 
       <div
+        className={`explorer-layout-with-details ${selectedDetailDocument ? 'has-details' : ''}`}
+        style={selectedDetailDocument
+          ? { '--explorer-details-width': `${Math.max(260, detailsWidth || 320)}px` }
+          : undefined}
+      >
+      <div
         className={`explorer-content ${viewMode === 'list' ? 'list-view' : 'grid-view'} ${showArchiveGallery ? 'project-profile-gallery' : ''}`}
         onContextMenu={(event) => {
           if (!onFolderContextMenu || !folder) {
@@ -3441,11 +3584,11 @@ function FolderView({
             key={document.id}
             role="button"
             tabIndex={0}
-            className={`explorer-item explorer-file ${selectedDocumentIds.has(document.id) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
+            className={`explorer-item explorer-file ${selectedDocumentIds.has(Number(document.id)) ? 'selected' : ''} ${openingDocumentId === document.id ? 'opening' : ''}`}
             onClick={(event) => handleDocumentClick(event, document)}
             onContextMenu={(event) => handleDocumentContextMenu(event, document)}
             onKeyDown={(event) => handleDocumentKeyDown(event, document)}
-            title="Click to select. Right-click for open and download."
+            title="Click to select and show Properties. Right-click for open and download."
           >
             <ExplorerStatusBadge status={document.status} userRole={userRole} />
             <div className="explorer-item-icon file">
@@ -3479,9 +3622,11 @@ function FolderView({
                 ? 'Use Submit final year project to start the guided 5-step upload.'
                 : showArchiveGallery || showProfileHeader
                   ? 'Accepted project profiles will appear here after librarian approval.'
-                  : canUpload
-                    ? 'Upload a document or create a subfolder to get started.'
-                    : 'Accepted project profiles will appear here after librarian approval.'}
+                  : isSemesterRoot
+                    ? 'Files are not stored directly in the semester. Create a student folder (Student ID), or use Upload to enter the student ID and file together.'
+                    : canUpload
+                      ? 'Upload a document or create a student folder to get started.'
+                      : 'Open a semester folder to manage student documents.'}
             </span>
             {showFypSubmit ? (
               <button type="button" className="primary-btn" onClick={() => onSubmitFinalYearProject?.()}>
@@ -3493,6 +3638,26 @@ function FolderView({
         ) : null}
       </div>
 
+      {selectedDetailDocument ? (
+        <>
+          <div
+            className="layout-resizer layout-resizer-details"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize details pane"
+            onMouseDown={startDetailsResize}
+          />
+          <ExplorerDetailsPane
+            key={selectedDetailDocument.id}
+            documentItem={selectedDetailDocument}
+            onNotify={onNotify}
+            onOpenDocument={handleOpenDocument}
+            onDownloadDocument={handleDownloadDocument}
+          />
+        </>
+      ) : null}
+      </div>
+
       <DocumentContextMenu
         open={Boolean(documentContextMenu)}
         x={documentContextMenu?.x || 0}
@@ -3502,6 +3667,21 @@ function FolderView({
         onOpenInNewWindow={handleOpenDocument}
         onDownload={handleDownloadDocument}
         onClose={() => setDocumentContextMenu(null)}
+      />
+
+      <ImportPreviewWizard
+        open={importPreviewOpen}
+        folderId={folder?.id}
+        preview={importPreview}
+        importPayload={importPayload}
+        categoryOptions={getVisibleDocumentCategories(userRole)}
+        onClose={() => {
+          setImportPreviewOpen(false)
+          setImportPreview(null)
+          setImportPayload(null)
+        }}
+        onCommitted={handleImportCommitted}
+        onNotify={onNotify}
       />
     </section>
   )
@@ -3515,7 +3695,20 @@ function looksLikeStudentId(query) {
   return /[\d]/.test(trimmed) && /^[\w./-]+$/.test(trimmed)
 }
 
-function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onDownloadDocument, onOpenFolder, onClear, mode = 'documents' }) {
+function GlobalSearchResults({
+  query,
+  busy,
+  results,
+  studentProfile,
+  onOpenDocument,
+  onDownloadDocument,
+  onOpenFolder,
+  onClear,
+  mode = 'documents',
+  filters = {},
+  filterOptions = {},
+  onFilterChange
+}) {
   const [documentContextMenu, setDocumentContextMenu] = useState(null)
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
 
@@ -3564,9 +3757,18 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
 
   const isProjectMode = mode === 'projects' || mode === 'registrar'
   const isRegistrarMode = mode === 'registrar'
-  const documentResults = (results || []).filter((row) => row.kind !== 'folder' && row.kind !== 'project')
-  const locationResults = (results || []).filter((row) => row.kind === 'folder' || row.kind === 'project')
-  const resultCount = results?.length || 0
+  const filteredResults = (results || []).filter((row) => {
+    if (filters.kind === 'documents') {
+      return row.kind !== 'folder' && row.kind !== 'project'
+    }
+    if (filters.kind === 'folders') {
+      return row.kind === 'folder' || row.kind === 'project'
+    }
+    return true
+  })
+  const documentResults = filteredResults.filter((row) => row.kind !== 'folder' && row.kind !== 'project')
+  const locationResults = filteredResults.filter((row) => row.kind === 'folder' || row.kind === 'project')
+  const resultCount = filteredResults.length
   const documentCount = documentResults.length
 
   let summary = `${resultCount} match${resultCount === 1 ? '' : 'es'} for "${query}" across the archive`
@@ -3599,6 +3801,117 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
           </button>
         ) : null}
       </div>
+      {onFilterChange ? (
+        <div className="global-search-filters" aria-label="Search filters">
+          {(filterOptions.categories || []).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`global-search-filter-chip ${filters.category === option.value ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                category: filters.category === option.value ? '' : option.value
+              })}
+            >
+              {option.label}
+            </button>
+          ))}
+          {(filterOptions.offices || []).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`global-search-filter-chip ${filters.office === option ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                office: filters.office === option ? '' : option
+              })}
+            >
+              {option}
+            </button>
+          ))}
+          {(filterOptions.faculties || []).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`global-search-filter-chip ${filters.faculty === option ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                faculty: filters.faculty === option ? '' : option
+              })}
+            >
+              {option}
+            </button>
+          ))}
+          {(filterOptions.departments || []).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`global-search-filter-chip ${filters.department === option ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                department: filters.department === option ? '' : option
+              })}
+            >
+              {option}
+            </button>
+          ))}
+          {(filterOptions.academicYears || []).slice(0, 6).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`global-search-filter-chip ${filters.academicYear === option ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                academicYear: filters.academicYear === option ? '' : option
+              })}
+            >
+              {option}
+            </button>
+          ))}
+          {(filterOptions.semesters || []).slice(0, 6).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className={`global-search-filter-chip ${filters.semester === option ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                semester: filters.semester === option ? '' : option
+              })}
+            >
+              {option}
+            </button>
+          ))}
+          {(filterOptions.excludeCategories || []).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`global-search-filter-chip exclude ${(filters.excludeCategories || []).includes(option.value) ? 'active' : ''}`}
+              onClick={() => {
+                const current = filters.excludeCategories || []
+                const next = current.includes(option.value)
+                  ? current.filter((value) => value !== option.value)
+                  : [...current, option.value]
+                onFilterChange({ ...filters, excludeCategories: next })
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+          {(filterOptions.kinds || []).map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`global-search-filter-chip ${filters.kind === option.value ? 'active' : ''}`}
+              onClick={() => onFilterChange({
+                ...filters,
+                kind: filters.kind === option.value ? '' : option.value
+              })}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="table-shell dash-table-shell">
         <table className="dash-table">
           <thead>
@@ -3615,8 +3928,8 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
               <tr>
                 <td colSpan="5" className="empty-state">Searching...</td>
               </tr>
-            ) : results?.length ? (
-              results.map((fileRow) => {
+            ) : filteredResults.length ? (
+              filteredResults.map((fileRow) => {
                 const isDocument = fileRow.kind !== 'folder' && fileRow.kind !== 'project'
                 return (
                   <tr
@@ -3781,23 +4094,42 @@ function App() {
   })
   const [dashboard, setDashboard] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchPopupOpen, setSearchPopupOpen] = useState(false)
   const mainSearchInputRef = useRef(null)
   const deferredQuery = useDeferredValue(searchQuery.trim())
   const [settledSearchQuery, setSettledSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState(null)
   const [searchBusy, setSearchBusy] = useState(false)
+  const { width: sidebarWidth, startResize: startSidebarResize } = useResizable('auca-sidebar-width', {
+    initial: 248,
+    min: 200,
+    max: 420
+  })
+  const [searchFilters, setSearchFilters] = useState({
+    category: '',
+    office: '',
+    faculty: '',
+    department: '',
+    documentTypeId: '',
+    academicYear: '',
+    semester: '',
+    kind: '',
+    excludeCategories: []
+  })
   const [studentSearchProfile, setStudentSearchProfile] = useState(null)
   const [selectedCategory, setSelectedCategory] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [uploadSourceMode, setUploadSourceMode] = useState('file')
+  const [uploadDragOver, setUploadDragOver] = useState(false)
   const [studentFypWizardOpen, setStudentFypWizardOpen] = useState(false)
   const [studentFypEditId, setStudentFypEditId] = useState(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [scanBusy, setScanBusy] = useState(false)
   const [scanResult, setScanResult] = useState(null)
   const [scanError, setScanError] = useState('')
+  const [validationOverride, setValidationOverride] = useState(false)
   const [dashboardView, setDashboardView] = useState('default')
   const [sharedItems, setSharedItems] = useState([])
   const [sharedBusy, setSharedBusy] = useState(false)
@@ -3815,6 +4147,7 @@ function App() {
   const [appConfirmBusy, setAppConfirmBusy] = useState(false)
   const [appConfirmInput, setAppConfirmInput] = useState('')
   const [appConfirmSelect, setAppConfirmSelect] = useState('')
+  const [appFolderBuilderError, setAppFolderBuilderError] = useState('')
   const [folderClipboard, setFolderClipboard] = useState(null)
   const [folderContextMenu, setFolderContextMenu] = useState(null)
   const [notice, setNotice] = useState('')
@@ -3889,12 +4222,17 @@ function App() {
 
   const [form, setForm] = useState(buildDefaultUploadForm)
   const [file, setFile] = useState(null)
+  const [uploadQueue, setUploadQueue] = useState([])
   const [filePreviewOpen, setFilePreviewOpen] = useState(false)
   const [filePreviewUrl, setFilePreviewUrl] = useState('')
   const uploadFileInputRef = useRef(null)
   const roleConfig = getRoleDashboardConfig(session?.role)
   const visibleDocumentCategories = getVisibleDocumentCategories(session?.role)
   const documentTypeLocked = visibleDocumentCategories.length === 1
+
+  useEffect(() => {
+    applyFolderColorMode()
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -4096,6 +4434,8 @@ function App() {
       course: String(form.course || '').trim(),
       faculty: String(form.faculty || '').trim(),
       department: String(form.department || '').trim(),
+      office: roleDashboardConfig[session?.role]?.department || '',
+      documentSubtypeId: form.documentTypeId ? Number(form.documentTypeId) : null,
       fileName: file.name
     }
 
@@ -4128,6 +4468,7 @@ function App() {
     form.course,
     form.faculty,
     form.department,
+    session?.role,
     file?.name
   ])
 
@@ -4463,7 +4804,17 @@ function App() {
           setStudentSearchProfile(null)
         }
 
-        const data = await searchDocuments(settledSearchQuery)
+        const data = await searchDocuments(settledSearchQuery, {
+          category: searchFilters.category || undefined,
+          office: searchFilters.office || undefined,
+          faculty: searchFilters.faculty || undefined,
+          department: searchFilters.department || undefined,
+          documentTypeId: searchFilters.documentTypeId || undefined,
+          academicYear: searchFilters.academicYear || undefined,
+          semester: searchFilters.semester || undefined,
+          kind: searchFilters.kind || undefined,
+          excludeCategories: searchFilters.excludeCategories?.length ? searchFilters.excludeCategories : undefined
+        })
         if (active) {
           const docs = enrichResultsWithLocation(data, archiveTree)
           if (registrarMode) {
@@ -4495,7 +4846,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [settledSearchQuery, session, dashboard])
+  }, [settledSearchQuery, session, dashboard, searchFilters])
 
   function toggleQuickAccess() {
     setQuickAccessOpen((current) => {
@@ -4605,6 +4956,26 @@ function App() {
   const selectedCategoryMeta = selectedCategory && visibleDocumentCategories.some((category) => category.value === selectedCategory)
     ? getCategoryMeta(selectedCategory)
     : null
+  const searchFilterOptions = {
+    categories: visibleDocumentCategories,
+    excludeCategories: [
+      { value: 'FINAL_YEAR_PROJECT', label: 'Exclude FYP' },
+      { value: 'EXAMINATION_DOCUMENTS', label: 'Exclude exams' }
+    ],
+    offices: [...new Set([roleConfig.department, ...(adminOffices || []).map((office) => office.department || office.label).filter(Boolean)])],
+    faculties: [...new Set((data.archiveTree || []).map((node) => node.name).filter(Boolean))],
+    departments: [...new Set(flattenFolderNodes(data.archiveTree || []).map((node) => node.name).filter(Boolean))],
+    academicYears: [...new Set(flattenFolderNodes(data.archiveTree || [])
+      .map((node) => node.name)
+      .filter((name) => /^\d{4}-\d{4}$/.test(String(name || ''))))],
+    semesters: [...new Set(flattenFolderNodes(data.archiveTree || [])
+      .map((node) => node.name)
+      .filter((name) => /^\d{4}\/\d$/.test(String(name || ''))))],
+    kinds: [
+      { value: 'documents', label: 'Documents only' },
+      { value: 'folders', label: 'Folders only' }
+    ]
+  }
   const archiveList = archiveRevision >= 0 ? archiveItems : []
   const rawActivities = activities.length ? activities : (data.departmentActivity || [])
   const dashboardActivities = rawActivities
@@ -4646,14 +5017,12 @@ function App() {
   const archiveSemesterOptions = semesterOptionsForAcademicYear(form.academicYear)
   const uploadPlacement = usesPlacementUpload ? resolveFolderUploadPlacement(folderDetail) : null
   const uploadPlacementSummary = formatUploadPlacementSummary(uploadPlacement)
-  const effectiveUploadPlacementSummary = studentEntryMode === 'existing'
-    ? formatUploadPlacementSummary({
-        faculty: form.faculty,
-        department: form.department,
-        academicYear: form.academicYear,
-        semester: form.semester
-      })
-    : uploadPlacementSummary
+  const effectiveUploadPlacementSummary = formatUploadPlacementSummary({
+    faculty: form.faculty || uploadPlacement?.faculty,
+    department: form.department || uploadPlacement?.department,
+    academicYear: form.placementAcademicYear || uploadPlacement?.academicYear,
+    semester: form.placementSemester || uploadPlacement?.semester
+  })
   const uploadTitlePreview = usesPlacementUpload
     ? buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
     : getCategoryMeta(form.category).label
@@ -4770,7 +5139,7 @@ function App() {
       )
       if (populateForm) {
         if (usesPlacementUpload) {
-          setForm((current) => applyExistingStudentPlacement(current, profile))
+          setForm((current) => applyExistingStudentPlacement(current, profile, { preserveDocumentTerm: true }))
         } else {
           setForm((current) => applyStudentIdDefaults({
             ...current,
@@ -4952,14 +5321,20 @@ function App() {
     }
 
     setAppConfirmInput('')
+    setAppFolderBuilderError('')
+    const parentFolder = folderDetail?.id === parentId
+      ? folderDetail
+      : (parentId ? findFolderNode(data.archiveTree || [], parentId) : null)
+    const placement = resolveFolderUploadPlacement(parentFolder || folderDetail)
     setAppConfirm({
       title: 'Create new folder',
       message: isStudent
         ? `Create a subfolder inside "${parentName}". The default folders themselves cannot be renamed or deleted.`
-        : `Create a subfolder inside "${parentName}". Name format: ${STAFF_FOLDER_NAME_HINT}.`,
+        : `Create a student folder inside "${parentName}". Enter the Student ID — uploaded files for that student go inside this folder.`,
       confirmLabel: 'Create folder',
-      inputLabel: 'Folder name',
-      inputPlaceholder: isStudent ? 'Enter folder name' : 'e.g. 20251SENG041',
+      inputLabel: isStudent ? 'Folder name' : undefined,
+      inputPlaceholder: isStudent ? 'Enter folder name' : undefined,
+      folderBuilderPlacement: isStudent ? null : placement,
       onConfirm: async (folderName) => {
         const trimmedName = String(folderName || '').trim()
         if (!trimmedName) {
@@ -4998,7 +5373,7 @@ function App() {
     }
     setAppConfirmBusy(true)
     try {
-      const submittedValue = appConfirm.inputLabel
+      const submittedValue = appConfirm.folderBuilderPlacement || appConfirm.inputLabel
         ? appConfirmInput
         : appConfirm.selectLabel
           ? appConfirmSelect
@@ -5320,10 +5695,31 @@ function App() {
       return
     }
     setFile(nextFile)
+    setUploadQueue((current) => [...current, {
+      id: `${Date.now()}-${nextFile.name}`,
+      file: nextFile,
+      status: 'pending',
+      documentTypeId: form.documentTypeId,
+      categoryDefinitionId: form.categoryDefinitionId,
+      academicYear: form.academicYear,
+      semester: form.semester,
+      category: form.category
+    }])
     const pages = await countPdfPages(nextFile)
     if (pages) {
       setForm((current) => ({ ...current, pageCount: pages }))
     }
+  }
+
+  function removeQueuedUpload(queueId) {
+    setUploadQueue((current) => {
+      const next = current.filter((item) => item.id !== queueId)
+      if (file && current.find((item) => item.id === queueId)?.file === file) {
+        const replacement = next[next.length - 1]?.file || null
+        setFile(replacement)
+      }
+      return next
+    })
   }
 
   function openUploadModal() {
@@ -5339,6 +5735,7 @@ function App() {
     setScanError('')
     setScanBusy(false)
     setFilePreviewOpen(false)
+    setUploadQueue([])
     clearSelectedUploadFile()
     setStudentLookupResult(null)
     setStudentLookupError('')
@@ -5350,6 +5747,8 @@ function App() {
       uploadedBy: session?.fullName || session?.username || '',
       faculty: placement?.faculty || '',
       department: placement?.department || '',
+      placementAcademicYear: placement?.academicYear || '',
+      placementSemester: placement?.semester || '',
       academicYear: placement?.academicYear || '',
       semester: placement?.semester || '',
       issueDate: todayInputValue()
@@ -5363,7 +5762,9 @@ function App() {
     setScanResult(null)
     setScanError('')
     setScanBusy(false)
+    setValidationOverride(false)
     setFilePreviewOpen(false)
+    setUploadQueue([])
     clearSelectedUploadFile()
   }
 
@@ -5377,7 +5778,7 @@ function App() {
       showNotice('Please wait while the document is being scanned.')
       return
     }
-    if (!scanResult?.verified) {
+    if (!scanResult?.verified && !validationOverride) {
       showNotice(scanError || scanResult?.summary || 'This document could not be confirmed as an AUCA record.')
       return
     }
@@ -5423,8 +5824,16 @@ function App() {
       showNotice('Enter the student name to link this new student ID.')
       return
     }
-    if (usesPlacementUpload && (!form.faculty || !form.department || !form.academicYear || !form.semester)) {
+    if (usesPlacementUpload && (!form.faculty || !form.department || !form.placementAcademicYear || !form.placementSemester)) {
       showNotice('Upload placement could not be determined. Open a semester folder under a department and try again.')
+      return
+    }
+    if (usesPlacementUpload && (!form.academicYear || !form.semester)) {
+      showNotice('Select the document academic year and semester used to arrange files inside the student folder.')
+      return
+    }
+    if (usesPlacementUpload && !form.documentTypeId) {
+      showNotice('Select a document sub-category before uploading.')
       return
     }
     setUploadBusy(true)
@@ -5439,10 +5848,14 @@ function App() {
             department: form.department,
             uploadedBy: form.uploadedBy,
             category: form.category,
+            categoryDefinitionId: form.categoryDefinitionId ? Number(form.categoryDefinitionId) : null,
+            documentTypeId: form.documentTypeId ? Number(form.documentTypeId) : null,
             pageCount: resolvedPageCount,
             academicYear: String(form.academicYear || '').trim() || null,
             semester: String(form.semester || '').trim() || null,
-            issueDate: todayInputValue(),
+            placementAcademicYear: String(form.placementAcademicYear || '').trim() || null,
+            placementSemester: String(form.placementSemester || '').trim() || null,
+            issueDate: form.issueDate || todayInputValue(),
             title: buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || studentNumber),
             description: null,
             tags: null,
@@ -5454,16 +5867,41 @@ function App() {
         : {
             ...form,
             studentNumber,
+            categoryDefinitionId: form.categoryDefinitionId ? Number(form.categoryDefinitionId) : null,
+            documentTypeId: form.documentTypeId ? Number(form.documentTypeId) : null,
             title: getCategoryMeta(form.category).label,
             pageCount: resolvedPageCount,
             marks: form.marks === '' ? null : Number(form.marks),
             academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
             semester: isStudent ? null : String(form.semester || '').trim() || null
           }
-      await submitUpload(payload, file)
-      showNotice('Document uploaded successfully.')
+      const queueItems = uploadQueue.length ? uploadQueue : [{
+        id: 'current',
+        file,
+        status: 'pending',
+        documentTypeId: form.documentTypeId,
+        categoryDefinitionId: form.categoryDefinitionId,
+        academicYear: form.academicYear,
+        semester: form.semester,
+        category: form.category
+      }]
+      for (const item of queueItems) {
+        const itemPayload = {
+          ...payload,
+          category: item.category || payload.category,
+          categoryDefinitionId: item.categoryDefinitionId
+            ? Number(item.categoryDefinitionId)
+            : payload.categoryDefinitionId,
+          documentTypeId: item.documentTypeId ? Number(item.documentTypeId) : payload.documentTypeId,
+          academicYear: String(item.academicYear || payload.academicYear || '').trim() || null,
+          semester: String(item.semester || payload.semester || '').trim() || null
+        }
+        await submitUpload(itemPayload, item.file, null, { validationOverride })
+      }
+      showNotice(queueItems.length > 1 ? `Uploaded ${queueItems.length} documents successfully.` : 'Document uploaded successfully.')
       closeUploadModal()
       setFile(null)
+      setUploadQueue([])
       setScanResult(null)
       setScanError('')
       const fresh = await getDashboard()
@@ -5489,12 +5927,13 @@ function App() {
       storagePercent={storagePercent}
       onLogout={handleLogout}
       formatBytes={formatBytes}
+      onNotify={showNotice}
     />
   )
 
   return (
     <div className="app-shell">
-      <div className="workspace">
+      <div className="workspace" style={{ '--fluent-sidebar-width': `${sidebarWidth}px` }}>
         <aside className="sidebar sidebar-archive-layout">
           <div className="sidebar-brand-block">
             <BrandLogo />
@@ -5639,6 +6078,13 @@ function App() {
             />
           ) : null}
         </aside>
+        <div
+          className="layout-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          onMouseDown={startSidebarResize}
+        />
 
         <main className="main-panel">
           {notice ? (
@@ -5646,42 +6092,83 @@ function App() {
               {notice}
             </div>
           ) : null}
-          {isFolderRoute && !hideFolderSearch ? (
-            <div className="main-search-bar">
-              <label className="main-search-field">
-                <SearchIcon className="icon search" />
-                <input
-                  ref={mainSearchInputRef}
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Search by letter, number, student ID, folder, or file across departments..."
-                  aria-label="Archive search across departments"
-                />
-                {searchQuery ? (
+          {searchPopupOpen ? (
+            <div className="modal-backdrop search-popup-backdrop" onClick={() => setSearchPopupOpen(false)} role="presentation">
+              <div
+                className="modal search-popup-modal"
+                onClick={(event) => event.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Archive search"
+              >
+                <div className="modal-head search-popup-head">
+                  <div>
+                    <p className="eyebrow">Archive search</p>
+                    <h2>Find folders and documents</h2>
+                  </div>
                   <button
                     type="button"
-                    className="ghost-icon main-search-clear"
-                    aria-label="Clear search"
-                    onClick={() => setSearchQuery('')}
+                    className="ghost-icon"
+                    aria-label="Close search"
+                    onClick={() => {
+                      setSearchPopupOpen(false)
+                      setSearchQuery('')
+                    }}
                   >
-                    <XIcon className="icon tiny" />
+                    <XIcon className="icon" />
                   </button>
-                ) : null}
-              </label>
+                </div>
+                <label className="main-search-field search-popup-field">
+                  <SearchIcon className="icon search" />
+                  <input
+                    ref={mainSearchInputRef}
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search by letter, number, student ID, folder, or file..."
+                    aria-label="Archive search"
+                    autoFocus
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      className="ghost-icon main-search-clear"
+                      aria-label="Clear search"
+                      onClick={() => setSearchQuery('')}
+                    >
+                      <XIcon className="icon tiny" />
+                    </button>
+                  ) : null}
+                </label>
+                <div className="search-popup-body">
+                  {deferredQuery ? (
+                    <GlobalSearchResults
+                      query={settledSearchQuery || deferredQuery}
+                      busy={searchBusy || (Boolean(searchQuery.trim()) && searchQuery.trim() !== settledSearchQuery)}
+                      results={searchResults}
+                      studentProfile={studentSearchProfile}
+                      mode={usesOfficeDashboardFormat(session.role) ? 'registrar' : 'documents'}
+                      filters={searchFilters}
+                      filterOptions={searchFilterOptions}
+                      onFilterChange={setSearchFilters}
+                      onClear={() => setSearchQuery('')}
+                      onOpenDocument={(documentId) => {
+                        setSearchPopupOpen(false)
+                        return openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))
+                      }}
+                      onDownloadDocument={handleDownloadDocumentById}
+                      onOpenFolder={(folderId) => {
+                        setSearchPopupOpen(false)
+                        handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)
+                      }}
+                    />
+                  ) : (
+                    <p className="inline-note search-popup-hint">
+                      Type a student ID, document name, or folder name to search across the archive.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-          ) : null}
-          {deferredQuery && isFolderRoute && !hideFolderSearch ? (
-            <GlobalSearchResults
-              query={settledSearchQuery || deferredQuery}
-              busy={searchBusy || (Boolean(searchQuery.trim()) && searchQuery.trim() !== settledSearchQuery)}
-              results={searchResults}
-              studentProfile={studentSearchProfile}
-              mode={usesOfficeDashboardFormat(session.role) ? 'registrar' : 'documents'}
-              onClear={() => setSearchQuery('')}
-              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
-              onDownloadDocument={handleDownloadDocumentById}
-              onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
-            />
           ) : null}
           {isFolderRoute ? (
             <FolderView
@@ -5704,7 +6191,10 @@ function App() {
               canGoBack={canGoBackFolder}
               canGoForward={canGoForwardFolder}
               canGoUp={canGoUpFolder}
-              onOpenSearch={() => mainSearchInputRef.current?.focus()}
+              onOpenSearch={() => {
+                setSearchPopupOpen(true)
+                window.setTimeout(() => mainSearchInputRef.current?.focus(), 50)
+              }}
               onNotify={showNotice}
               onDataChange={refreshExplorerData}
               onArchivedChange={handleArchivedChange}
@@ -5761,6 +6251,9 @@ function App() {
                   busy={searchBusy}
                   results={searchResults}
                   studentProfile={studentSearchProfile}
+                  filters={searchFilters}
+                  filterOptions={searchFilterOptions}
+                  onFilterChange={setSearchFilters}
                   onClear={() => setSearchQuery('')}
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
                   onDownloadDocument={handleDownloadDocumentById}
@@ -5943,6 +6436,9 @@ function App() {
                   results={searchResults}
                   studentProfile={studentSearchProfile}
                   mode="registrar"
+                  filters={searchFilters}
+                  filterOptions={searchFilterOptions}
+                  onFilterChange={setSearchFilters}
                   onClear={() => setSearchQuery('')}
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
                   onDownloadDocument={handleDownloadDocumentById}
@@ -6284,6 +6780,12 @@ function App() {
         inputPlaceholder={appConfirm?.inputPlaceholder}
         inputValue={appConfirmInput}
         onInputChange={setAppConfirmInput}
+        folderBuilderPlacement={appConfirm?.folderBuilderPlacement}
+        folderBuilderError={appFolderBuilderError}
+        onFolderBuilderChange={(name, error) => {
+          setAppConfirmInput(name || '')
+          setAppFolderBuilderError(error || '')
+        }}
         selectLabel={appConfirm?.selectLabel}
         selectOptions={appConfirm?.selectOptions}
         selectValue={appConfirmSelect}
@@ -6299,6 +6801,7 @@ function App() {
             .then(() => {
               setAppConfirm(null)
               setAppConfirmInput('')
+              setAppFolderBuilderError('')
               setAppConfirmSelect('')
             })
             .catch((err) => {
@@ -6364,6 +6867,25 @@ function App() {
             </div>
 
             <form className="upload-form" onSubmit={handleUpload}>
+              <section className="upload-doc-type-sticky">
+                <DocumentTypePicker
+                  categoryDefinitionId={form.categoryDefinitionId}
+                  documentTypeId={form.documentTypeId}
+                  onChange={({ categoryDefinitionId, documentTypeId, category, categoryName, typeName }) => {
+                    setForm((current) => ({
+                      ...current,
+                      categoryDefinitionId: categoryDefinitionId || '',
+                      documentTypeId: documentTypeId || '',
+                      category: category || current.category,
+                      categoryName: categoryName || '',
+                      typeName: typeName || ''
+                    }))
+                  }}
+                  category={form.category}
+                  office={resolveCatalogOffice(session?.role)}
+                  onNotify={showNotice}
+                />
+              </section>
 
               {usesPlacementUpload ? (
                 <section className="upload-student-panel">
@@ -6465,34 +6987,51 @@ function App() {
                       <strong>{form.department || '—'}</strong>
                     </div>
                     <div className="upload-context-field">
-                      <span>Academic year</span>
-                      <strong>{form.academicYear || '—'}</strong>
+                      <span>Student folder year</span>
+                      <strong>{form.placementAcademicYear || '—'}</strong>
                     </div>
                     <div className="upload-context-field">
-                      <span>Semester</span>
-                      <strong>{form.semester || '—'}</strong>
+                      <span>Student folder semester</span>
+                      <strong>{form.placementSemester || '—'}</strong>
                     </div>
-                    <div className="upload-context-field">
-                      <span>Date</span>
-                      <strong>{formatDisplayDate(form.issueDate)}</strong>
-                    </div>
-                  </div>
-
-                  {!documentTypeLocked ? (
-                    <label className="upload-type-field">
-                      <span>Document type</span>
+                    <AcademicYearField
+                      label="Document academic year"
+                      value={form.academicYear}
+                      onChange={(year) => setForm((current) => ({
+                        ...current,
+                        academicYear: year,
+                        semester: current.semester && semesterOptionsForAcademicYear(year).some((option) => option.value === current.semester)
+                          ? current.semester
+                          : ''
+                      }))}
+                    />
+                    <label>
+                      <span>Document semester</span>
                       <select
-                        value={form.category}
-                        onChange={(event) => setForm({ ...form, category: event.target.value })}
+                        value={form.semester}
+                        onChange={(event) => setForm((current) => ({ ...current, semester: event.target.value }))}
+                        disabled={!form.academicYear}
                       >
-                        {visibleDocumentCategories.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
+                        <option value="">Select semester</option>
+                        {archiveSemesterOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
                           </option>
                         ))}
                       </select>
+                      <small className="lookup-hint">
+                        Arranges the file inside the student ID folder: Student / Year / Semester / Category / Type.
+                      </small>
                     </label>
-                  ) : null}
+                    <label>
+                      <span>Issue date</span>
+                      <input
+                        type="date"
+                        value={form.issueDate}
+                        onChange={(event) => setForm({ ...form, issueDate: event.target.value })}
+                      />
+                    </label>
+                  </div>
 
                   {form.academicYear && form.semester && (form.studentNumber?.trim() || studentLookupResult?.studentNumber) ? (
                     <p className="upload-generated-title">
@@ -6780,22 +7319,66 @@ function App() {
               </section>
 
               {uploadSourceMode === 'phone' ? (
-                <UploadPhoneScanPanel
-                  onNotify={showNotice}
-                  onImport={(importedFile, pageCount) => {
-                    setUploadSourceMode('file')
-                    setFile(importedFile)
-                    setScanResult(null)
-                    setScanError('')
-                    if (pageCount) {
-                      setForm((current) => ({ ...current, pageCount }))
-                    }
-                  }}
-                />
+                <div className="phone-qr-modal-backdrop" onClick={() => setUploadSourceMode('file')} role="presentation">
+                  <div className="phone-qr-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-label="Phone scanner">
+                    <UploadPhoneScanPanel
+                      variant="modal"
+                      onClose={() => setUploadSourceMode('file')}
+                      onNotify={showNotice}
+                      category={form.category}
+                      office={resolveCatalogOffice(session?.role)}
+                      documentTypeId={form.documentTypeId}
+                      onDocumentTypeChange={(documentTypeId) => setForm((current) => ({ ...current, documentTypeId: documentTypeId || '' }))}
+                      studentNumber={form.studentNumber}
+                      studentName={form.studentName}
+                      onImport={(importedFile, pageCount, reviewMeta = {}) => {
+                        setUploadSourceMode('file')
+                        setFile(importedFile)
+                        setScanResult(reviewMeta.scanResult || null)
+                        setScanError('')
+                        setForm((current) => ({
+                          ...current,
+                          pageCount: pageCount || current.pageCount
+                        }))
+                        if (reviewMeta.files?.length) {
+                          setUploadQueue(reviewMeta.files.map((queuedFile, index) => ({
+                            id: `${Date.now()}-${index}-${queuedFile.name}`,
+                            file: queuedFile,
+                            status: 'pending'
+                          })))
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
               ) : null}
 
               {uploadSourceMode === 'file' ? (
-              <div className="upload-file-section full-width">
+              <div
+                className={`upload-file-section full-width upload-drop-zone${uploadDragOver ? ' is-drag-over' : ''}`}
+                onDragEnter={(event) => {
+                  event.preventDefault()
+                  setUploadDragOver(true)
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setUploadDragOver(true)
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault()
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setUploadDragOver(false)
+                  }
+                }}
+                onDrop={async (event) => {
+                  event.preventDefault()
+                  setUploadDragOver(false)
+                  const droppedFile = event.dataTransfer?.files?.[0] || null
+                  if (droppedFile) {
+                    await handleUploadFileSelect(droppedFile)
+                  }
+                }}
+              >
                 <span className="upload-file-label">File</span>
                 <input
                   ref={uploadFileInputRef}
@@ -6859,6 +7442,21 @@ function App() {
               </div>
               ) : null}
 
+              {uploadSourceMode === 'file' && uploadQueue.length ? (
+                <div className="upload-batch-queue">
+                  <p className="eyebrow">Upload queue ({uploadQueue.length})</p>
+                  {uploadQueue.map((item) => (
+                    <div key={item.id} className="upload-batch-queue-item">
+                      <div className="upload-batch-queue-copy">
+                        <strong>{item.file.name}</strong>
+                        <span>{item.academicYear || '—'} · {item.semester || '—'} · {item.documentTypeId ? `Type #${item.documentTypeId}` : 'Default type'}</span>
+                      </div>
+                      <button type="button" className="ghost-btn tiny-btn btn-danger" onClick={() => removeQueuedUpload(item.id)}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               {uploadSourceMode === 'file' && file ? (
                 <div className={`upload-scan-panel ${scanBusy ? 'is-scanning' : scanResult?.verified ? 'is-verified' : scanResult ? 'is-rejected' : ''}`}>
                   {scanBusy ? (
@@ -6878,6 +7476,17 @@ function App() {
                         <strong>{scanResult.verified ? 'AUCA document confirmed' : 'Document not accepted'}</strong>
                       </div>
                       <p>{scanResult.summary}</p>
+                      {scanResult.similarityScore != null ? (
+                        <p className="upload-scan-similarity">
+                          Similarity: {scanResult.similarityScore}%
+                          {scanResult.templateTitle ? ` · ${scanResult.templateTitle}` : ''}
+                        </p>
+                      ) : null}
+                      {scanResult.failedRules?.length ? (
+                        <ul className="upload-scan-failed-rules">
+                          {scanResult.failedRules.map((rule) => <li key={rule}>{rule}</li>)}
+                        </ul>
+                      ) : null}
                       {scanResult.matchedSignals?.length ? (
                         <ul className="upload-scan-signals">
                           {scanResult.matchedSignals.map((signal) => (
@@ -6897,6 +7506,17 @@ function App() {
                 </div>
               ) : null}
 
+              {!isStudent && (session?.role === 'ADMIN' || session?.role === 'REGISTRAR') && scanResult && !scanResult.verified ? (
+                <label className="upload-override-field">
+                  <input
+                    type="checkbox"
+                    checked={validationOverride}
+                    onChange={(event) => setValidationOverride(event.target.checked)}
+                  />
+                  <span>Override validation (audit logged)</span>
+                </label>
+              ) : null}
+
               <div className="modal-actions">
                 <button
                   type="button"
@@ -6908,7 +7528,7 @@ function App() {
                 <button
                   type="submit"
                   className="primary-btn"
-                  disabled={!file || uploadBusy || scanBusy || !scanResult?.verified}
+                  disabled={!file || uploadBusy || scanBusy || (!scanResult?.verified && !validationOverride)}
                 >
                   <UploadIcon className="icon" />
                   {uploadBusy ? 'Uploading...' : 'Upload to archive'}

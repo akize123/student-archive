@@ -196,30 +196,15 @@ public class FolderService {
                     .toList();
         } else {
             List<FolderEntity> rawChildren = childrenByParent.getOrDefault(folder.getId(), List.of());
-            boolean flattenStudentRoot = role != null
-                    && role != UserRole.STUDENT
-                    && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode());
 
             children = rawChildren.stream()
                     .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
-                    .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isStudentDefaultFolderCode(child.getCode()))
                     .sorted(Comparator.comparing(FolderEntity::getName))
                     .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, isFolderVisibleByParent(folder, role, studentNumber)).stream())
                     .toList();
 
             List<DocumentEntity> folderDocuments;
-            if (flattenStudentRoot) {
-                folderDocuments = new ArrayList<>(
-                        documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())
-                );
-                for (FolderEntity child : rawChildren) {
-                    if (ArchiveTreeService.isStudentDefaultFolderCode(child.getCode())) {
-                        folderDocuments.addAll(
-                                documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(child.getId())
-                        );
-                    }
-                }
-            } else if (isArchiveProjectFolder(folder)) {
+            if (isArchiveProjectFolder(folder)) {
                 folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
             } else {
                 folderDocuments = resolveFolderDocuments(folder, childrenByParent);
@@ -369,11 +354,22 @@ public class FolderService {
 
     @Transactional
     public FolderNodeResponse createSubfolder(Long parentId, String name, String rawRole) {
-        return createSubfolder(parentId, name, rawRole, null);
+        return createSubfolder(parentId, name, rawRole, null, false);
     }
 
     @Transactional
     public FolderNodeResponse createSubfolder(Long parentId, String name, String rawRole, String rawStudentNumber) {
+        return createSubfolder(parentId, name, rawRole, rawStudentNumber, false);
+    }
+
+    @Transactional
+    public FolderNodeResponse createSubfolder(
+            Long parentId,
+            String name,
+            String rawRole,
+            String rawStudentNumber,
+            boolean importMode
+    ) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
@@ -397,8 +393,11 @@ public class FolderService {
             throw new IllegalArgumentException("Folder name is required");
         }
         if (role != UserRole.STUDENT) {
-            // Staff archive folders must follow year + semester + department + student sequence.
-            studentIdFormatService.requireStaffFolderName(trimmedName);
+            if (importMode) {
+                studentIdFormatService.requireRecognizedFormat(trimmedName);
+            } else {
+                studentIdFormatService.requireStaffFolderName(trimmedName);
+            }
             trimmedName = trimmedName.toUpperCase(Locale.ROOT);
         }
 
@@ -1235,6 +1234,22 @@ public class FolderService {
         return total;
     }
 
+    public String buildBreadcrumbPath(Long folderId) {
+        FolderEntity folder = getFolderOrThrow(folderId);
+        List<String> names = new ArrayList<>();
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            names.add(current.getName());
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        java.util.Collections.reverse(names);
+        return String.join(" / ", names);
+    }
+
     private List<FolderBreadcrumbResponse> buildBreadcrumbs(
             FolderEntity folder,
             Map<Long, FolderEntity> folderById,
@@ -1359,7 +1374,7 @@ public class FolderService {
         if (isMirroredSharedDocumentsFolder(folder)) {
             return false;
         }
-        if (folderShareRepository.findByFolderIdAndTargetRole(folder.getId(), role).isPresent()) {
+        if (folderShareRepository.findByFolderIdAndTargetRoleAndDocumentIdIsNull(folder.getId(), role).isPresent()) {
             return true;
         }
         FolderEntity current = folder;
@@ -1368,7 +1383,7 @@ public class FolderService {
             if (isMirroredSharedDocumentsFolder(current)) {
                 return false;
             }
-            if (folderShareRepository.findByFolderIdAndTargetRole(current.getId(), role).isPresent()) {
+            if (folderShareRepository.findByFolderIdAndTargetRoleAndDocumentIdIsNull(current.getId(), role).isPresent()) {
                 return true;
             }
             if (current.getParentId() == null) {
@@ -1484,13 +1499,6 @@ public class FolderService {
             current = folderRepository.findById(current.getParentId()).orElse(null);
         }
         return false;
-    }
-
-    private boolean isRegistrarCategoryFolder(String code) {
-        return code.endsWith("-SREG")
-                || code.endsWith("-SRIN")
-                || code.endsWith("-SAPP")
-                || code.endsWith("-SEXM");
     }
 
     private boolean isFacultyFolder(FolderEntity folder) {
@@ -1734,13 +1742,6 @@ public class FolderService {
             suffix = "PERSONAL";
         }
         return parent.getCode() + "-MY-" + suffix + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase(Locale.ROOT);
-    }
-
-    private void collectFolderIds(FolderEntity folder, Map<Long, List<FolderEntity>> childrenByParent, List<Long> folderIds) {
-        folderIds.add(folder.getId());
-        for (FolderEntity child : childrenByParent.getOrDefault(folder.getId(), List.of())) {
-            collectFolderIds(child, childrenByParent, folderIds);
-        }
     }
 
     private Map<Long, List<FolderEntity>> groupFoldersByParent(List<FolderEntity> folders) {

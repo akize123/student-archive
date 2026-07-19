@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { addAcademicYear, getAcademicYearOptions } from '../academicYears'
 
-export default function AcademicYearField({ value, onChange, disabled = false }) {
+export default function AcademicYearField({ value, onChange, disabled = false, label = 'Academic year' }) {
   const [options, setOptions] = useState(() => getAcademicYearOptions())
   const [adding, setAdding] = useState(false)
   const [draftYear, setDraftYear] = useState('')
@@ -33,7 +33,7 @@ export default function AcademicYearField({ value, onChange, disabled = false })
   return (
     <div className="academic-year-field">
       <label>
-        <span>Academic year</span>
+        <span>{label}</span>
         <select
           value={value}
           onChange={(event) => onChange(event.target.value)}

@@ -25,6 +25,49 @@ final class ZipBombGuard {
     record ExtractedEntry(String relativePath, byte[] bytes) {
     }
 
+    record AuditEntry(String relativePath, long sizeBytes, String action, String note) {
+    }
+
+    static List<AuditEntry> auditArchive(byte[] archiveBytes) throws IOException {
+        if (archiveBytes == null || archiveBytes.length == 0) {
+            throw new IllegalArgumentException("ZIP archive is empty.");
+        }
+        if (archiveBytes.length > MAX_ARCHIVE_BYTES) {
+            throw new IllegalArgumentException("ZIP archive is too large. Maximum size is 50 MB.");
+        }
+        List<AuditEntry> audit = new ArrayList<>();
+        try (ZipInputStream zipInputStream = new ZipInputStream(new java.io.ByteArrayInputStream(archiveBytes))) {
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+                String relativePath = sanitizeRelativePath(entry.getName());
+                if (relativePath == null) {
+                    audit.add(new AuditEntry(entry.getName(), entry.getSize(), classifySkipped(entry.getName()), "Skipped by import rules"));
+                    zipInputStream.closeEntry();
+                    continue;
+                }
+                if (!isPdfPath(relativePath)) {
+                    audit.add(new AuditEntry(relativePath, entry.getSize(), "skipped_non_pdf", "Only PDF files are imported"));
+                    zipInputStream.closeEntry();
+                    continue;
+                }
+                audit.add(new AuditEntry(relativePath, entry.getSize(), "imported", "Eligible PDF"));
+                zipInputStream.closeEntry();
+            }
+        }
+        return audit;
+    }
+
+    private static String classifySkipped(String rawPath) {
+        String lower = String.valueOf(rawPath).toLowerCase(Locale.ROOT);
+        if (lower.contains("__macosx") || lower.endsWith(".ds_store")) {
+            return "skipped_hidden";
+        }
+        if (lower.endsWith(".zip") || lower.endsWith(".jar") || lower.endsWith(".7z")) {
+            return "nested_archive";
+        }
+        return "skipped";
+    }
+
     private ZipBombGuard() {
     }
 
