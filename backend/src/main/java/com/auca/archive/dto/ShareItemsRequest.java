@@ -8,6 +8,9 @@ public record ShareItemsRequest(
         @NotBlank String targetRole,
         String permission,
         List<Long> folderIds,
-        List<Long> documentIds
+        List<Long> documentIds,
+        String expirationPreset,
+        String expiresAt,
+        Boolean allowReshare
 ) {
 }

@@ -12,6 +12,7 @@ public record LoginResponse(
         String dashboardTitle,
         String dashboardKey,
         List<String> privileges,
-        String studentNumber
+        String studentNumber,
+        Long accessVersion
 ) {
 }

@@ -54,6 +54,9 @@ public class AccountEntity {
     @Column(name = "student_number", length = 64)
     private String studentNumber;
 
+    @Column(name = "access_version", nullable = false)
+    private long accessVersion = 0L;
+
     public AccountEntity() {
     }
 
@@ -143,5 +146,13 @@ public class AccountEntity {
 
     public void setStudentNumber(String studentNumber) {
         this.studentNumber = studentNumber;
+    }
+
+    public long getAccessVersion() {
+        return accessVersion;
+    }
+
+    public void setAccessVersion(long accessVersion) {
+        this.accessVersion = accessVersion;
     }
 }

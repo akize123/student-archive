@@ -8,7 +8,9 @@ public record ReservationResponse(
         String documentTitle,
         String studentNumber,
         LocalDateTime createdAt,
+        LocalDateTime startsAt,
         LocalDateTime expiresAt,
+        String purpose,
         String status
 ) {
 }

@@ -70,6 +70,13 @@ public class ApprovalService {
             task.setStatus(ApprovalStatus.APPROVED);
             task.setNote(note.isBlank() ? "Approved by librarian" : note);
             documentService.updateStatus(task.getDocumentId(), DocumentStatus.APPROVED, task.getNote(), null);
+            ActivityScope studentApprovedScope = ActivityScope.builder()
+                    .sourceRole(UserRole.LIBRARIAN)
+                    .targetRole(UserRole.STUDENT)
+                    .documentCategory(StudentDocumentCategory.FINAL_YEAR_PROJECT)
+                    .academicDepartment(linkedDocument == null ? null : linkedDocument.getDepartment())
+                    .studentNumber(linkedDocument == null ? null : linkedDocument.getStudentNumber())
+                    .build();
             activityService.recordAction(
                     "Librarian approved final year project \"" + task.getDocumentTitle() + "\"",
                     requestActor.resolvedActorLabel("Librarian"),
@@ -77,6 +84,15 @@ public class ApprovalService {
                     activityService.enrichScope(approvalScope, requestActor),
                     requestActor
             );
+            if (linkedDocument != null && linkedDocument.getStudentNumber() != null) {
+                activityService.recordAction(
+                        "Your final year project \"" + task.getDocumentTitle() + "\" was approved and added to Archive project.",
+                        requestActor.resolvedActorLabel("Librarian"),
+                        ActivityCategory.APPROVAL,
+                        activityService.enrichScope(studentApprovedScope, requestActor),
+                        requestActor
+                );
+            }
         } else if ("reject".equals(decision)) {
             if (note.isBlank()) {
                 throw new IllegalArgumentException("Please provide feedback when rejecting a project");
@@ -84,11 +100,18 @@ public class ApprovalService {
             task.setStatus(ApprovalStatus.REJECTED);
             task.setNote(note);
             documentService.updateStatus(task.getDocumentId(), DocumentStatus.REJECTED, note, null);
+            ActivityScope studentScope = ActivityScope.builder()
+                    .sourceRole(UserRole.LIBRARIAN)
+                    .targetRole(UserRole.STUDENT)
+                    .documentCategory(StudentDocumentCategory.FINAL_YEAR_PROJECT)
+                    .academicDepartment(linkedDocument == null ? null : linkedDocument.getDepartment())
+                    .studentNumber(linkedDocument == null ? null : linkedDocument.getStudentNumber())
+                    .build();
             activityService.recordAction(
-                    "Librarian rejected final year project \"" + task.getDocumentTitle() + "\"",
+                    "Your final year project \"" + task.getDocumentTitle() + "\" was rejected. Feedback: " + note,
                     requestActor.resolvedActorLabel("Librarian"),
                     ActivityCategory.APPROVAL,
-                    activityService.enrichScope(approvalScope, requestActor),
+                    activityService.enrichScope(studentScope, requestActor),
                     requestActor
             );
         } else {

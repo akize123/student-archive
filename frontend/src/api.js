@@ -209,10 +209,19 @@ export function getPublishedArchiveTree() {
   return request('/api/folders/published-archive/tree')
 }
 
-export function reserveDocument(documentId) {
-  return request(`/api/reservations?documentId=${encodeURIComponent(documentId)}`, {
-    method: 'POST'
+export function reserveDocument(documentId, { startsAt, purpose } = {}) {
+  return request('/api/reservations', {
+    method: 'POST',
+    body: JSON.stringify({
+      documentId,
+      startsAt,
+      purpose: purpose || null
+    })
   })
+}
+
+export function getReservableBooks() {
+  return request('/api/reservations/books')
 }
 
 export function getMyReservations() {
@@ -225,8 +234,12 @@ export function releaseReservation(reservationId) {
   })
 }
 
-export function getReservationAvailability(documentId) {
-  return request(`/api/reservations/availability?documentId=${encodeURIComponent(documentId)}`)
+export function getReservationAvailability(documentId, startsAt) {
+  const params = new URLSearchParams({ documentId: String(documentId) })
+  if (startsAt) {
+    params.set('startsAt', startsAt)
+  }
+  return request(`/api/reservations/availability?${params.toString()}`)
 }
 
 export function createSubfolder(parentId, name) {
@@ -414,10 +427,26 @@ export function shareFolder(folderId, targetRole, permission = 'READ_ONLY') {
   })
 }
 
-export function shareItems({ targetRole, permission = 'READ_ONLY', folderIds = [], documentIds = [] }) {
+export function shareItems({
+  targetRole,
+  permission = 'READ_ONLY',
+  folderIds = [],
+  documentIds = [],
+  expirationPreset = 'NEVER',
+  expiresAt = null,
+  allowReshare = false
+}) {
   return request('/api/shares', {
     method: 'POST',
-    body: JSON.stringify({ targetRole, permission, folderIds, documentIds })
+    body: JSON.stringify({
+      targetRole,
+      permission,
+      folderIds,
+      documentIds,
+      expirationPreset,
+      expiresAt,
+      allowReshare
+    })
   })
 }
 

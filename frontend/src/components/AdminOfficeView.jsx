@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { getAdminActivity, getAdminDashboard, getAdminOffices, openDocument, searchDocuments } from '../api'
+import { getAdminActivity, getAdminDashboard, getAdminOffices, searchDocuments } from '../api'
 import {
   CATEGORY_LABELS,
   OFFICE_META,
@@ -33,6 +33,7 @@ function activityCategoryLabel(category) {
 export default function AdminOfficeView({
   officeRole,
   onNotify,
+  onOpenDocument,
   onOpenFolder,
   onBack,
   onShowArchiveTree
@@ -369,7 +370,7 @@ export default function AdminOfficeView({
                       <button
                         type="button"
                         className="admin-row-action"
-                        onClick={() => openDocument(doc.id).catch((err) => onNotify?.(err.message || 'Unable to open document.'))}
+                        onClick={() => onOpenDocument?.(doc.id, doc.title || doc.fileName)}
                       >
                         View
                       </button>

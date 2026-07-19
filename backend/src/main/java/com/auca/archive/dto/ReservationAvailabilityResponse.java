@@ -1,5 +1,8 @@
 package com.auca.archive.dto;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 public record ReservationAvailabilityResponse(
         Long documentId,
         int activeReservations,
@@ -7,6 +10,9 @@ public record ReservationAvailabilityResponse(
         int availableSlots,
         boolean reservedByMe,
         Long myReservationId,
-        java.time.LocalDateTime myReservationExpiresAt
+        LocalDateTime myReservationStartsAt,
+        LocalDateTime myReservationExpiresAt,
+        List<ReservationSlotResponse> bookedSlots,
+        Boolean requestedSlotAvailable
 ) {
 }

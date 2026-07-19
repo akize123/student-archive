@@ -2,6 +2,7 @@ package com.auca.archive.model;
 
 import com.auca.archive.domain.SharePermission;
 import com.auca.archive.domain.UserRole;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -31,6 +32,10 @@ public class FolderShareEntity {
 
     private String sharedBy;
     private LocalDateTime createdAt;
+    private LocalDateTime expiresAt;
+
+    @Column(name = "allow_reshare")
+    private Boolean allowReshare;
 
     public FolderShareEntity() {
     }
@@ -97,5 +102,21 @@ public class FolderShareEntity {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(LocalDateTime expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
+    public boolean isAllowReshare() {
+        return Boolean.TRUE.equals(allowReshare);
+    }
+
+    public void setAllowReshare(boolean allowReshare) {
+        this.allowReshare = allowReshare;
     }
 }

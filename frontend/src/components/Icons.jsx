@@ -259,3 +259,32 @@ export function EyeOffIcon(props) {
   )
 }
 
+export function MinimizeIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M5 19h14" />
+    </SvgIcon>
+  )
+}
+
+export function MaximizeIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M8 4h8v8H8z" />
+      <path d="M4 8h4" />
+      <path d="M16 8h4" />
+      <path d="M8 16v4" />
+      <path d="M16 16v4" />
+    </SvgIcon>
+  )
+}
+
+export function RestoreIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M8 4h8v8H8z" />
+      <path d="M4 8v8h8" />
+    </SvgIcon>
+  )
+}
+

@@ -17,6 +17,12 @@ public class AccountSchemaMigration implements CommandLineRunner {
     @Override
     public void run(String... args) {
         jdbcTemplate.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS student_number VARCHAR(64)");
+        jdbcTemplate.execute("ALTER TABLE accounts ADD COLUMN IF NOT EXISTS access_version BIGINT DEFAULT 0");
+        jdbcTemplate.execute("""
+                UPDATE accounts
+                SET access_version = 0
+                WHERE access_version IS NULL
+                """);
         jdbcTemplate.execute("ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_user_role_check");
         jdbcTemplate.execute("""
                 ALTER TABLE accounts

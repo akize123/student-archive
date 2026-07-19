@@ -309,10 +309,10 @@ export default function StudentFypWizard({
       }
       if (isEditMode) {
         await updatePendingFinalYearProject(existingDocumentId, metadata, form.zipFile, form.coverPhoto)
-        onNotify?.('Project updated and kept as pending for librarian approval.')
+        onNotify?.('Project updated and sent back to the librarian for review.')
       } else {
         await submitUpload(metadata, form.zipFile, form.coverPhoto)
-        onNotify?.('Project submitted. It is now pending librarian approval. You can still view and edit it while pending.')
+        onNotify?.('Project submitted. The librarian has been notified and will review your submission.')
       }
       onSubmitted?.()
       onClose?.()
