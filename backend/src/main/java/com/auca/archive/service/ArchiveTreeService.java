@@ -669,26 +669,27 @@ public class ArchiveTreeService {
             );
         }
 
-        // Prefer the student's existing archive folder so document year/semester never move the student.
+        // Prefer the open semester (browse placement) so staff uploads create/use the student
+        // ID folder under the semester they are viewing.
+        String outerYear = firstNonBlank(trim(request.placementAcademicYear()), trim(request.academicYear()));
+        String outerSemester = firstNonBlank(trim(request.placementSemester()), trim(request.semester()));
+        if (outerYear != null && outerSemester != null) {
+            return new StudentUploadPlacement(
+                    preferOverride(request.faculty(), student.getFaculty(), null),
+                    preferOverride(request.department(), student.getDepartment(), null),
+                    outerYear,
+                    outerSemester
+            );
+        }
+
+        // Fallback for older clients: reuse the student's existing archive location.
         StudentUploadPlacement existing = resolveStudentUploadPlacement(student);
         if (existing.hasArchiveLocation()) {
             return existing;
         }
 
-        // New student: outer Faculty/Dept/Year/Sem come from browse placement only.
-        String outerYear = trim(request.placementAcademicYear());
-        String outerSemester = trim(request.placementSemester());
-        if (outerYear == null || outerSemester == null) {
-            throw new IllegalArgumentException(
-                    "Open a semester folder to upload. Document year and semester only arrange files inside the student folder."
-            );
-        }
-
-        return new StudentUploadPlacement(
-                preferOverride(request.faculty(), student.getFaculty(), null),
-                preferOverride(request.department(), student.getDepartment(), null),
-                outerYear,
-                outerSemester
+        throw new IllegalArgumentException(
+                "Open a semester folder to upload. Enter a Student ID — if that student folder does not exist under the semester, it will be created automatically."
         );
     }
 

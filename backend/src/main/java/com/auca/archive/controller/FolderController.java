@@ -112,13 +112,16 @@ public class FolderController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
             @RequestHeader(value = "X-User-Username", required = false) String username,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return folderService.addAcademicYear(
                 departmentId,
                 request.academicYear(),
                 role,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
     }
 

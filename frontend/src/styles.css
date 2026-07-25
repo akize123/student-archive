@@ -30,19 +30,33 @@
   --radius-lg: 14px;
   --radius-md: 12px;
   --radius-sm: 8px;
+  --sidebar-width: clamp(220px, 22vw, 310px);
+  --shell-pad: clamp(8px, 1.1vw, 14px);
+  --panel-pad: clamp(14px, 1.8vw, 28px);
+  --content-gap: clamp(10px, 1.2vw, 14px);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  font-size: clamp(14px, 0.25vw + 13.2px, 16px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html, body, #root {
   min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body:has(.app-shell) {
   overflow: hidden;
   height: 100vh;
+  height: 100dvh;
 }
 
 body {
@@ -80,10 +94,14 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
   height: 100vh;
+  height: 100dvh;
   max-height: 100vh;
+  max-height: 100dvh;
   overflow: hidden;
-  padding: 14px;
+  padding: var(--shell-pad);
   box-sizing: border-box;
 }
 
@@ -516,9 +534,9 @@ body:has(.auth-landing)::before {
   z-index: 1;
   width: min(1180px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
-  gap: 18px;
-  padding: 18px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(min(340px, 100%), 0.85fr);
+  gap: clamp(12px, 1.5vw, 18px);
+  padding: clamp(12px, 1.5vw, 18px);
   border-radius: var(--radius-xl);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -980,11 +998,13 @@ body:has(.auth-landing)::before {
 
 .workspace {
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  gap: var(--content-gap);
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
+  width: 100%;
+  max-width: 100%;
   margin-top: 0;
   align-items: stretch;
   overflow: hidden;
@@ -3467,16 +3487,18 @@ tbody tr.document-row {
   z-index: 30;
   display: grid;
   place-items: center;
-  padding: 18px;
+  padding: clamp(10px, 2vw, 18px);
   background: rgba(13, 22, 45, 0.46);
   backdrop-filter: blur(8px);
 }
 
 .modal {
   width: min(760px, 100%);
+  max-width: calc(100vw - 24px);
   max-height: min(90vh, 820px);
+  max-height: min(90dvh, 820px);
   overflow: auto;
-  padding: 20px;
+  padding: clamp(14px, 2vw, 20px);
   border-radius: var(--radius-xl);
   background: #fff;
   border: 1px solid var(--line);
@@ -3728,28 +3750,12 @@ tbody tr.document-row {
     grid-template-columns: 1fr;
   }
 
+  :root {
+    --sidebar-width: clamp(200px, 26vw, 260px);
+  }
+
   .workspace {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-  }
-
-  .sidebar {
-    position: static;
-    height: auto;
-    max-height: none;
-    overflow: hidden;
-    order: 2;
-  }
-
-  .main-panel {
-    overflow-y: visible;
-    height: auto;
-    order: 1;
-  }
-
-  body:has(.app-shell) {
-    overflow: auto;
-    height: auto;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   }
 
   .content-grid {
@@ -3757,6 +3763,14 @@ tbody tr.document-row {
   }
 
   .category-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dash-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .student-default-folders {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -3773,6 +3787,37 @@ tbody tr.document-row {
 
   .topbar {
     grid-template-columns: 1fr;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    max-height: min(42vh, 360px);
+    overflow: auto;
+    order: 2;
+  }
+
+  .main-panel {
+    overflow-y: visible;
+    height: auto;
+    min-height: 0;
+    order: 1;
+  }
+
+  body:has(.app-shell) {
+    overflow: auto;
+    height: auto;
+  }
+
+  .app-shell {
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .stats-grid {
@@ -3851,6 +3896,23 @@ tbody tr.document-row {
     flex-direction: column;
     align-items: flex-start;
   }
+
+  .student-default-folders {
+    grid-template-columns: 1fr;
+  }
+
+  .dash-header-actions,
+  .explorer-address-actions,
+  .explorer-toolbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .explorer-tool-btn {
+    flex: 1 1 auto;
+    min-width: max(140px, 42%);
+    justify-content: center;
+  }
 }
 
 @media (max-width: 640px) {
@@ -3928,7 +3990,7 @@ tbody tr.document-row {
 }
 
 .explorer-panel {
-  padding: 28px;
+  padding: var(--panel-pad);
   border-radius: var(--radius-xl);
   background: #fff;
   border: 1px solid var(--line);
@@ -3941,6 +4003,7 @@ tbody tr.document-row {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   padding: 10px 14px;
   border-radius: var(--radius-lg);
   background: #fff;
@@ -5554,7 +5617,8 @@ tbody tr.document-row {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 16px 18px;
+  flex-wrap: wrap;
+  padding: clamp(12px, 1.4vw, 16px) clamp(12px, 1.6vw, 18px);
   border-radius: 12px;
   border: 1px solid var(--line);
   background:
@@ -5574,7 +5638,8 @@ tbody tr.document-row {
 }
 
 .dash-header-staff .dash-header-copy h1 {
-  font-size: 1.85rem;
+  font-size: clamp(1.25rem, 1.1vw + 1rem, 1.85rem);
+}
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.2;
@@ -5828,7 +5893,7 @@ tbody tr.document-row {
 
 .dash-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.72fr);
+  grid-template-columns: minmax(0, 1.5fr) minmax(min(280px, 100%), 0.72fr);
   gap: 10px;
   align-items: stretch;
   flex: 1;
@@ -6714,4 +6779,90 @@ tbody tr.document-row {
   .fyp-form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Cross-machine consistency: fluid layout under Windows scaling / laptop widths */
+@media (max-width: 1400px) {
+  :root {
+    --shell-pad: clamp(8px, 1vw, 12px);
+    --panel-pad: clamp(12px, 1.5vw, 22px);
+  }
+
+  .explorer-tool-btn {
+    padding-inline: 10px;
+    font-size: 0.86rem;
+  }
+}
+
+@media (max-width: 1100px) {
+  .dash-grid,
+  .dash-grid:not(.dash-grid-single) {
+    grid-template-columns: 1fr;
+  }
+
+  .dash-metrics,
+  .dash-metrics-registrar,
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modal,
+  .upload-modal,
+  .confirm-modal {
+    width: min(100%, 560px);
+    max-width: calc(100vw - 24px);
+  }
+}
+
+@media (max-width: 640px) {
+  .dash-metrics,
+  .dash-metrics-registrar,
+  .stats-grid,
+  .student-default-folders,
+  .category-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .explorer-tool-btn {
+    min-width: 100%;
+  }
+
+  .topbar-profile-trigger {
+    max-width: 100%;
+  }
+}
+
+@media (min-width: 901px) {
+  .workspace {
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100%;
+    max-height: 100%;
+    overflow: hidden;
+  }
+
+  .main-panel {
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+.main-panel,
+.explorer-panel,
+.dashboard-workspace,
+.modal,
+.upload-modal {
+  max-width: 100%;
 }

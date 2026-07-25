@@ -498,6 +498,7 @@ public class DocumentService {
                 categoryFolderName,
                 documentTypeName
         );
+        requireDocumentInsideStudentFolder(folder, role);
         folderService.requireHodFolderPlacement(folder, role, viewerDepartment);
 
         Path studentRoot = archiveTreeService.resolveStoragePath(
@@ -1537,7 +1538,25 @@ public class DocumentService {
         return role == UserRole.REGISTRAR
                 || role == UserRole.EXAMINATION_OFFICER
                 || role == UserRole.HOD
-                || role == UserRole.LIBRARIAN;
+                || role == UserRole.LIBRARIAN
+                || role == UserRole.ADMIN;
+    }
+
+    private void requireDocumentInsideStudentFolder(FolderEntity folder, UserRole role) {
+        if (role == null || role == UserRole.STUDENT || folder == null) {
+            return;
+        }
+        String code = folder.getCode() == null ? "" : folder.getCode().toUpperCase(Locale.ROOT);
+        if (code.contains("-SEM-") && !code.contains("-STU-")) {
+            throw new IllegalArgumentException(
+                    "Documents cannot be stored directly under a semester. Enter a Student ID so the file is saved inside that student's folder."
+            );
+        }
+        if (!code.contains("-STU-")) {
+            throw new IllegalArgumentException(
+                    "Documents must be uploaded inside a student ID folder under the semester."
+            );
+        }
     }
 
     private boolean isExamUpload(UploadDocumentRequest request) {

@@ -417,6 +417,7 @@ function canAddAcademicYearRole(userRole) {
   return userRole === 'REGISTRAR'
     || userRole === 'LIBRARIAN'
     || userRole === 'EXAMINATION_OFFICER'
+    || userRole === 'HOD'
 }
 
 function usesStructureArchiveBrowse(userRole) {
@@ -428,6 +429,7 @@ function usesSemesterFolderUpload(userRole) {
     || userRole === 'EXAMINATION_OFFICER'
     || userRole === 'HOD'
     || userRole === 'LIBRARIAN'
+    || userRole === 'ADMIN'
 }
 
 const roleDashboardConfig = {
@@ -2268,7 +2270,7 @@ function FolderView({
   const showFypSubmit = isStudent && isStudentFinalYearProjectFolder(folder)
   const canUpload = isStudent
     ? canStudentUploadInFolder(folder)
-    : usesStructureArchiveBrowse(userRole)
+    : usesStructureArchiveBrowse(userRole) || userRole === 'ADMIN'
       ? isSemesterOrDeeperFolder(folder)
       : !isProtectedArchiveStructureFolder(folder)
   const canDownload = isStudent
@@ -5330,6 +5332,8 @@ function App() {
             pageCount: resolvedPageCount,
             academicYear: String(form.academicYear || '').trim() || null,
             semester: String(form.semester || '').trim() || null,
+            placementAcademicYear: String(form.academicYear || '').trim() || null,
+            placementSemester: String(form.semester || '').trim() || null,
             issueDate: todayInputValue(),
             title: buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || studentNumber),
             description: null,
@@ -6285,7 +6289,7 @@ function App() {
                       {!form.faculty || !form.department ? (
                         <p className="inline-note">
                           {uploadPlacementSummary
-                            ? `This student will be linked under ${uploadPlacementSummary}.`
+                            ? `A student folder will be created under ${uploadPlacementSummary} if it does not already exist.`
                             : 'Faculty and department follow the folder you opened for upload.'}
                         </p>
                       ) : null}

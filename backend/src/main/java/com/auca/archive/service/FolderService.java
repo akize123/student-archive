@@ -272,6 +272,11 @@ public class FolderService {
                     .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toListItem)
                     .toList();
+
+            // Semester folders only hold student ID subfolders — never list files directly here.
+            if (role != UserRole.STUDENT && isSemesterFolderOnly(folder)) {
+                documents = List.of();
+            }
         }
 
         return new FolderDetailResponse(
@@ -461,6 +466,21 @@ public class FolderService {
             trimmedName = trimmedName.toUpperCase(Locale.ROOT);
         }
 
+        // Under a semester, student ID folders use the canonical -STU- code (not generic FLD-*).
+        if (role != UserRole.STUDENT && isSemesterFolderOnly(parent)) {
+            String studentCode = parent.getCode() + "-STU-" + sanitizeStudentFolderCode(trimmedName);
+            FolderEntity studentFolder = resolveOrCreateFolder(trimmedName, studentCode, parentId);
+            return new FolderNodeResponse(
+                    studentFolder.getId(),
+                    studentFolder.getName(),
+                    studentFolder.getCode(),
+                    studentFolder.getParentId(),
+                    0,
+                    ArchiveTreeService.isStudentDefaultFolderCode(studentFolder.getCode()),
+                    List.of()
+            );
+        }
+
         String code = role == UserRole.STUDENT
                 ? buildStudentPersonalFolderCode(parent, trimmedName)
                 : "FLD-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
@@ -478,7 +498,7 @@ public class FolderService {
 
     @Transactional
     public FolderNodeResponse addAcademicYear(Long departmentFolderId, String rawAcademicYear, String rawRole) {
-        return addAcademicYear(departmentFolderId, rawAcademicYear, rawRole, RequestActor.empty());
+        return addAcademicYear(departmentFolderId, rawAcademicYear, rawRole, RequestActor.empty(), null);
     }
 
     @Transactional
@@ -488,18 +508,38 @@ public class FolderService {
             String rawRole,
             RequestActor requestActor
     ) {
+        return addAcademicYear(departmentFolderId, rawAcademicYear, rawRole, requestActor, null);
+    }
+
+    @Transactional
+    public FolderNodeResponse addAcademicYear(
+            Long departmentFolderId,
+            String rawAcademicYear,
+            String rawRole,
+            RequestActor requestActor,
+            String rawViewerDepartment
+    ) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
-        if (role != UserRole.REGISTRAR && role != UserRole.LIBRARIAN && role != UserRole.EXAMINATION_OFFICER) {
-            throw new IllegalArgumentException("Only the registrar office, examination office, or librarian can add academic years");
+        if (role != UserRole.REGISTRAR
+                && role != UserRole.LIBRARIAN
+                && role != UserRole.EXAMINATION_OFFICER
+                && role != UserRole.HOD) {
+            throw new IllegalArgumentException(
+                    "Only the registrar office, examination office, librarian, or head of department can add academic years"
+            );
         }
 
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireHodDepartment(role, viewerDepartment);
+
         FolderEntity department = getFolderOrThrow(departmentFolderId);
-        if (!isFolderAccessible(department, role, null)) {
+        if (!isFolderAccessible(department, role, null, viewerDepartment)) {
             throw new IllegalArgumentException("Folder not found: " + departmentFolderId);
         }
         if (!isDepartmentFolder(department)) {
             throw new IllegalArgumentException("Academic years can only be added under a department folder");
         }
+        requireHodFolderPlacement(department, role, viewerDepartment);
         requireShareAtLeast(department, role, null, SharePermission.WRITE);
 
         String academicYear = academicTermService.normalizeAcademicYear(rawAcademicYear);
@@ -1858,6 +1898,22 @@ public class FolderService {
             return false;
         }
         return folder.getCode().toUpperCase(Locale.ROOT).contains("-SEM-");
+    }
+
+    private boolean isSemesterFolderOnly(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        String code = folder.getCode().toUpperCase(Locale.ROOT);
+        return code.contains("-SEM-") && !code.contains("-STU-");
+    }
+
+    private String sanitizeStudentFolderCode(String studentNumber) {
+        if (studentNumber == null) {
+            return "UNKNOWN";
+        }
+        String sanitized = studentNumber.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+        return sanitized.isBlank() ? "UNKNOWN" : sanitized;
     }
 
     private void requireModifiableFolder(FolderEntity folder, UserRole role, String studentNumber) {
