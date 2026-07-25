@@ -5639,7 +5639,6 @@ tbody tr.document-row {
 
 .dash-header-staff .dash-header-copy h1 {
   font-size: clamp(1.25rem, 1.1vw + 1rem, 1.85rem);
-}
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.2;
