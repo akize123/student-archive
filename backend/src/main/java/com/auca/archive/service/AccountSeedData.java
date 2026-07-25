@@ -1,5 +1,7 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.AcademicDepartmentCatalog;
+import com.auca.archive.domain.HodLoginPasswords;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.StudentRepository;
@@ -32,8 +34,18 @@ public class AccountSeedData implements CommandLineRunner {
         accountService.ensureAccount("admin", "System Administrator", "Admin@123", UserRole.ADMIN, UserRole.ADMIN.getDepartment());
         accountService.ensureAccount("registrar", "Registrar Office", "Registrar@123", UserRole.REGISTRAR, UserRole.REGISTRAR.getDepartment());
         accountService.ensureAccount("exam.officer", "Examination Officer", "Exam@123", UserRole.EXAMINATION_OFFICER, UserRole.EXAMINATION_OFFICER.getDepartment());
-        accountService.ensureAccount("hod", "Head of Department", "Hod@123", UserRole.HOD, "Software Engineering");
         accountService.ensureAccount("librarian", "University Librarian", "Library@123", UserRole.LIBRARIAN, UserRole.LIBRARIAN.getDepartment());
+
+        for (String department : AcademicDepartmentCatalog.all()) {
+            String username = HodLoginPasswords.demoUsernameForDepartment(department);
+            accountService.ensureDemoHodAccount(
+                    username,
+                    "Head of Department (" + department + ")",
+                    HodLoginPasswords.DEMO_PASSWORD,
+                    department
+            );
+        }
+        accountService.deactivateLegacyDemoHodAccounts(HodLoginPasswords.legacyDemoUsernames());
 
         StudentEntity student = studentRepository.findByStudentNumber(DEMO_STUDENT_NUMBER)
                 .or(() -> studentRepository.findByStudentNumber(LEGACY_DEMO_STUDENT_NUMBER))

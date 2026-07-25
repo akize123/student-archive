@@ -45,13 +45,11 @@ export const CATEGORY_LABELS = {
 }
 
 export const activityScopeTabs = [
-  { value: 'ALL', label: 'All activity' },
   { value: 'REGISTRAR', label: 'Registrar' },
   { value: 'EXAMINATION_OFFICER', label: 'Examination' },
   { value: 'HOD', label: 'HOD' },
   { value: 'LIBRARIAN', label: 'Librarian' },
-  { value: 'STUDENT', label: 'Student' },
-  { value: 'ADMIN', label: 'Admin' }
+  { value: 'STUDENT', label: 'Student' }
 ]
 
 export function roleLabel(role) {
@@ -207,7 +205,11 @@ export function buildAdminOffices(users = [], usersByRole = {}, officeApiData = 
   })
 }
 
-export function officeMembersForRole(offices, role) {
+export function officeMembersForRole(offices, role, department) {
   const office = (offices || []).find((entry) => entry.role === role)
-  return office?.members || []
+  const members = office?.members || []
+  if (role === 'HOD' && department) {
+    return members.filter((member) => String(member.department || '').trim().toLowerCase() === String(department).trim().toLowerCase())
+  }
+  return members
 }

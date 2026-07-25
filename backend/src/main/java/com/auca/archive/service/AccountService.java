@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
@@ -66,15 +67,20 @@ public class AccountService {
         return accountRepository.save(account);
     }
 
+    /**
+     * Demo HOD seed: always refresh password so keyword logins stay predictable across restarts.
+     */
+    @Transactional
+    public AccountEntity ensureDemoHodAccount(String username, String fullName, String rawPassword, String department) {
+        AccountEntity account = ensureAccount(username, fullName, rawPassword, UserRole.HOD, department);
+        account.setPasswordHash(passwordHasher.hash(rawPassword));
+        return accountRepository.save(account);
+    }
+
     @Transactional
     public LoginResponse login(LoginRequest request) {
         String username = normalizeUsername(request.username());
-        AccountEntity account = accountRepository.findByUsername(username)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
-
-        if (!Boolean.TRUE.equals(account.getActive()) || !passwordHasher.matches(request.password(), account.getPasswordHash())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
-        }
+        AccountEntity account = resolveLoginAccount(username, request.password());
 
         account.setLastLoginAt(LocalDateTime.now());
         if (account.getRole() == UserRole.STUDENT) {
@@ -83,6 +89,51 @@ public class AccountService {
         accountRepository.save(account);
 
         return toLoginResponse(account);
+    }
+
+    private AccountEntity resolveLoginAccount(String username, String rawPassword) {
+        if (rawPassword == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
+        }
+        String password = rawPassword.trim();
+        if (password.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
+        }
+
+        AccountEntity account = accountRepository.findByUsername(username)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
+
+        if (!Boolean.TRUE.equals(account.getActive()) || !passwordHasher.matches(password, account.getPasswordHash())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
+        }
+        return account;
+    }
+
+    @Transactional
+    public void deactivateLegacyDemoHodAccounts(List<String> usernames) {
+        if (usernames == null || usernames.isEmpty()) {
+            return;
+        }
+        for (String username : usernames) {
+            if (username == null || username.isBlank()) {
+                continue;
+            }
+            accountRepository.findByUsername(normalizeUsername(username)).ifPresent(account -> {
+                if (account.getRole() == UserRole.HOD && Boolean.TRUE.equals(account.getActive())) {
+                    account.setActive(Boolean.FALSE);
+                    accountRepository.save(account);
+                }
+            });
+        }
+    }
+
+    @Transactional
+    public void resetAccountPassword(String username, String rawPassword) {
+        String normalizedUsername = normalizeUsername(username);
+        AccountEntity account = accountRepository.findByUsername(normalizedUsername)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found: " + username));
+        account.setPasswordHash(passwordHasher.hash(rawPassword));
+        accountRepository.save(account);
     }
 
     public LoginResponse getSessionProfile(Long accountId) {
@@ -110,6 +161,37 @@ public class AccountService {
                 .map(AccountEntity::getStudentNumber)
                 .filter(value -> value != null && !value.isBlank())
                 .map(value -> value.trim().toUpperCase(Locale.ROOT));
+    }
+
+    public String resolveViewerDepartment(Long accountId, UserRole role, String headerDepartment) {
+        if (role != UserRole.HOD) {
+            return null;
+        }
+        if (accountId != null) {
+            Optional<String> fromAccount = accountRepository.findById(accountId)
+                    .filter(account -> account.getRole() == UserRole.HOD)
+                    .map(AccountEntity::getDepartment)
+                    .filter(value -> value != null && !value.isBlank())
+                    .map(String::trim);
+            if (fromAccount.isPresent()) {
+                return fromAccount.get();
+            }
+        }
+        if (headerDepartment == null || headerDepartment.isBlank()) {
+            return null;
+        }
+        return headerDepartment.trim();
+    }
+
+    public static Long parseAccountIdHeader(String rawAccountId) {
+        if (rawAccountId == null || rawAccountId.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(rawAccountId.trim());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private LoginResponse toLoginResponse(AccountEntity account) {

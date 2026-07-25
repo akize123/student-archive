@@ -117,10 +117,27 @@ public class FolderImportService {
             String rawUserName,
             RequestActor requestActor
     ) throws IOException {
+        return importIntoFolder(folderId, archive, files, paths, rawRole, rawUserName, requestActor, null);
+    }
+
+    @Transactional
+    public FolderImportResponse importIntoFolder(
+            Long folderId,
+            MultipartFile archive,
+            List<MultipartFile> files,
+            List<String> paths,
+            String rawRole,
+            String rawUserName,
+            RequestActor requestActor,
+            String rawViewerDepartment
+    ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
         requireImportRole(role);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireHodDepartment(role, viewerDepartment);
 
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
+        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
         folderService.requireShareAtLeast(targetFolder, role, null, SharePermission.WRITE);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
@@ -246,9 +263,25 @@ public class FolderImportService {
             StudentDocumentCategory defaultCategory,
             Long defaultSubtypeId
     ) throws IOException {
+        return previewImport(folderId, archive, files, paths, rawRole, defaultCategory, defaultSubtypeId, null);
+    }
+
+    public ImportPreviewResponse previewImport(
+            Long folderId,
+            MultipartFile archive,
+            List<MultipartFile> files,
+            List<String> paths,
+            String rawRole,
+            StudentDocumentCategory defaultCategory,
+            Long defaultSubtypeId,
+            String rawViewerDepartment
+    ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
         requireImportRole(role);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireHodDepartment(role, viewerDepartment);
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
+        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
         }
@@ -312,9 +345,25 @@ public class FolderImportService {
             String rawUserName,
             RequestActor requestActor
     ) throws IOException {
+        return commitImport(folderId, request, fileContents, rawRole, rawUserName, requestActor, null);
+    }
+
+    @Transactional
+    public FolderImportResponse commitImport(
+            Long folderId,
+            ImportCommitRequest request,
+            Map<String, byte[]> fileContents,
+            String rawRole,
+            String rawUserName,
+            RequestActor requestActor,
+            String rawViewerDepartment
+    ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
         requireImportRole(role);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireHodDepartment(role, viewerDepartment);
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
+        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
         folderService.requireShareAtLeast(targetFolder, role, null, SharePermission.WRITE);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
@@ -686,8 +735,7 @@ public class FolderImportService {
                 parent.getId(),
                 segment.toUpperCase(Locale.ROOT),
                 role.name(),
-                null,
-                true
+                null
         );
         folderCache.put(cacheKey, created.id());
         return new FolderResolution(folderService.getFolderOrThrow(created.id()), true);

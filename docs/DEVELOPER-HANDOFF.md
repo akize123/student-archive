@@ -183,9 +183,10 @@ Then start backend again.
 | Admin | `admin` | `Admin@123` |
 | Registrar | `registrar` | `Registrar@123` |
 | Examination Officer | `exam.officer` | `Exam@123` |
-| Head of Department | `hod` | `Hod@123` |
 | Librarian | `librarian` | `Library@123` |
 | Student | `20251SEN001` | `Student@123` |
+
+HOD: one seeded account per academic department with short usernames (`hod.acc`, `hod.sof`, `hod.psy`, …) and shared password `Hod@123`. See `README.md` and `HodLoginPasswords.java`.
 
 Seeded in `AccountSeedData.java`.
 

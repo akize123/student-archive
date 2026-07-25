@@ -15,70 +15,8 @@ import {
   officeMembersForRole,
   roleLabel
 } from '../adminOfficeUtils'
-import OcrSettingsPanel from './OcrSettingsPanel'
-
-function AdminBarChart({ title, items }) {
-  const max = Math.max(1, ...items.map((item) => item.value))
-  return (
-    <article className="admin-chart-card">
-      <h3>{title}</h3>
-      <div className="admin-bar-chart" role="img" aria-label={title}>
-        {items.length ? items.map((item) => (
-          <div key={item.label} className="admin-bar-row">
-            <span className="admin-bar-label">{item.label}</span>
-            <div className="admin-bar-track">
-              <div
-                className="admin-bar-fill"
-                style={{ width: `${Math.max(4, (item.value / max) * 100)}%` }}
-              />
-            </div>
-            <strong className="admin-bar-value">{item.value}</strong>
-          </div>
-        )) : (
-          <p className="admin-muted-cell">No data yet.</p>
-        )}
-      </div>
-    </article>
-  )
-}
-
-function AdminDonutChart({ title, items }) {
-  const total = items.reduce((sum, item) => sum + item.value, 0) || 1
-  const colors = ['#0078d4', '#498205', '#ca5010', '#8764b8', '#038387', '#a4262c', '#69797e']
-  let offset = 0
-  const segments = items.map((item, index) => {
-    const pct = (item.value / total) * 100
-    const start = offset
-    offset += pct
-    return { ...item, start, end: offset, color: colors[index % colors.length] }
-  })
-  const gradient = segments.length
-    ? `conic-gradient(${segments.map((s) => `${s.color} ${s.start}% ${s.end}%`).join(', ')})`
-    : 'conic-gradient(#e1dfdd 0% 100%)'
-
-  return (
-    <article className="admin-chart-card">
-      <h3>{title}</h3>
-      <div className="admin-donut-wrap">
-        <div className="admin-donut" style={{ background: gradient }} aria-hidden="true">
-          <div className="admin-donut-hole">
-            <strong>{total === 1 && !items.length ? 0 : items.reduce((sum, item) => sum + item.value, 0)}</strong>
-            <span>users</span>
-          </div>
-        </div>
-        <ul className="admin-donut-legend">
-          {segments.map((item) => (
-            <li key={item.label}>
-              <i style={{ background: item.color }} />
-              <span>{item.label}</span>
-              <em>{item.value}</em>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </article>
-  )
-}
+import { academicDepartmentOptions } from '../academicDepartments'
+import { CheckIcon, XIcon } from './Icons'
 
 const roleOptions = [
   { value: 'ADMIN', label: 'System Administrator' },
@@ -125,17 +63,12 @@ function activityCategoryLabel(category) {
   return normalized || 'Action'
 }
 
-const STUDENT_ID_HINT = 'YYYY + semester (1-3) + dept code + sequence (example: 20251SENG041)'
-
 function buildUserForm(overrides = {}) {
   const role = overrides.role || 'REGISTRAR'
   return {
     username: '',
     password: '',
     fullName: '',
-    studentNumber: '',
-    faculty: '',
-    academicDepartment: '',
     active: true,
     role,
     department: overrides.department ?? roleDepartments[role] ?? '',
@@ -186,16 +119,15 @@ export default function AdminDashboard({ onNotify }) {
   const [enabledCategories, setEnabledCategories] = useState([])
   const [editingUser, setEditingUser] = useState(null)
   const [form, setForm] = useState(emptyUserForm)
-  const [activityScope, setActivityScope] = useState('ALL')
+  const [activityScope, setActivityScope] = useState('REGISTRAR')
   const [activePanel, setActivePanel] = useState('activity')
   const [roleActivities, setRoleActivities] = useState([])
   const [activityTotal, setActivityTotal] = useState(0)
   const [activitiesLoading, setActivitiesLoading] = useState(false)
-  const [activityPage, setActivityPage] = useState(0)
 
   const officeMembers = useMemo(
-    () => officeMembersForRole(offices, form.role),
-    [offices, form.role]
+    () => officeMembersForRole(offices, form.role, form.role === 'HOD' ? form.department : null),
+    [offices, form.role, form.department]
   )
 
   const roleCategories = useMemo(
@@ -203,23 +135,19 @@ export default function AdminDashboard({ onNotify }) {
     [form.role]
   )
 
-  async function loadRoleActivities(scope = activityScope, page = 0, append = false) {
+  async function loadRoleActivities(scope = activityScope) {
     setActivitiesLoading(true)
     try {
       const response = await getAdminActivity({
-        scope: scope === 'ALL' ? undefined : scope,
-        page,
+        scope,
+        page: 0,
         size: 100
       })
-      const items = response?.items || []
-      setRoleActivities((current) => (append ? [...current, ...items] : items))
+      setRoleActivities(response?.items || [])
       setActivityTotal(response?.total || 0)
-      setActivityPage(page)
     } catch (err) {
-      if (!append) {
-        setRoleActivities([])
-        setActivityTotal(0)
-      }
+      setRoleActivities([])
+      setActivityTotal(0)
       onNotify?.(err.message || 'Unable to load role activity.')
     } finally {
       setActivitiesLoading(false)
@@ -263,7 +191,7 @@ export default function AdminDashboard({ onNotify }) {
 
   useEffect(() => {
     if (!loading) {
-      loadRoleActivities(activityScope, 0, false)
+      loadRoleActivities(activityScope)
     }
   }, [activityScope, loading])
 
@@ -271,36 +199,6 @@ export default function AdminDashboard({ onNotify }) {
     const entries = Object.entries(data?.usersByRole || {})
     return entries.length ? entries : []
   }, [data])
-
-  const roleChartItems = useMemo(
-    () => roleBreakdown.map(([role, count]) => ({
-      label: roleLabel(role),
-      value: Number(count) || 0
-    })),
-    [roleBreakdown]
-  )
-
-  const activityCategoryChartItems = useMemo(() => {
-    const counts = {}
-    roleActivities.forEach((entry) => {
-      const key = activityCategoryLabel(entry.category)
-      counts[key] = (counts[key] || 0) + 1
-    })
-    return Object.entries(counts)
-      .map(([label, value]) => ({ label, value }))
-      .sort((a, b) => b.value - a.value)
-  }, [roleActivities])
-
-  const activityRoleChartItems = useMemo(() => {
-    const counts = {}
-    roleActivities.forEach((entry) => {
-      const key = entry.sourceRole ? roleLabel(entry.sourceRole) : 'Other'
-      counts[key] = (counts[key] || 0) + 1
-    })
-    return Object.entries(counts)
-      .map(([label, value]) => ({ label, value }))
-      .sort((a, b) => b.value - a.value)
-  }, [roleActivities])
 
   const usersByRole = useMemo(() => {
     const grouped = {}
@@ -322,43 +220,21 @@ export default function AdminDashboard({ onNotify }) {
     setForm((current) => ({
       ...current,
       role,
-      department: roleDepartments[role] || current.department,
-      privileges: defaultPrivilegesByRole[role] || [],
-      studentNumber: role === 'STUDENT' ? current.studentNumber : '',
-      faculty: role === 'STUDENT' ? current.faculty : '',
-      academicDepartment: role === 'STUDENT' ? current.academicDepartment : ''
+      department: role === 'HOD' ? '' : (roleDepartments[role] || current.department),
+      privileges: defaultPrivilegesByRole[role] || []
     }))
     setEnabledCategories(OFFICE_META[role]?.categories || [])
-  }
-
-  function handleStudentNumberChange(studentNumber) {
-    setForm((current) => {
-      const normalizedUsername = studentNumber.trim().toLowerCase()
-      const usernameMatchesStudentId = !current.username.trim()
-        || current.username.trim().toLowerCase() === String(current.studentNumber || '').trim().toLowerCase()
-      return {
-        ...current,
-        studentNumber,
-        username: usernameMatchesStudentId ? normalizedUsername : current.username
-      }
-    })
   }
 
   function validateForm(step = null) {
     if (modalMode === 'create' && step === 4 && !form.username.trim()) {
       return 'Please enter a username.'
     }
-    if (form.role === 'STUDENT' && (step === null || step >= 4) && !form.studentNumber.trim()) {
-      return 'Please enter the student ID.'
-    }
-    if (modalMode === 'edit' && form.role === 'STUDENT' && !form.studentNumber.trim()) {
-      return 'Please enter the student ID.'
-    }
     if ((step === null || step >= 4) && !form.fullName.trim()) {
       return 'Please enter the user full name.'
     }
     if ((step === null || step >= 4) && !form.department.trim()) {
-      return 'Please enter a department.'
+      return form.role === 'HOD' ? 'Please select an academic department.' : 'Please enter a department.'
     }
     if (modalMode === 'create' && (step === null || step >= 4) && form.password.length < 6) {
       return 'Password must be at least 6 characters.'
@@ -375,9 +251,6 @@ export default function AdminDashboard({ onNotify }) {
       username: user.username,
       password: '',
       fullName: user.fullName,
-      studentNumber: user.studentNumber || '',
-      faculty: '',
-      academicDepartment: '',
       role: user.role,
       department: user.department,
       active: user.active,
@@ -444,10 +317,7 @@ export default function AdminDashboard({ onNotify }) {
           role: form.role,
           department: form.department.trim(),
           active: form.active,
-          privileges: form.privileges,
-          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() : null,
-          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
-          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
+          privileges: form.privileges
         })
         onNotify?.('User account created successfully.')
       } else if (editingUser) {
@@ -457,10 +327,7 @@ export default function AdminDashboard({ onNotify }) {
           department: form.department.trim(),
           active: form.active,
           privileges: form.privileges,
-          password: form.password.trim() || null,
-          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() || null : null,
-          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
-          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
+          password: form.password.trim() || null
         })
         onNotify?.('User account updated successfully.')
       }
@@ -503,13 +370,6 @@ export default function AdminDashboard({ onNotify }) {
             >
               All users
             </button>
-            <button
-              type="button"
-              className={`admin-dashboard-tab ${activePanel === 'ocr' ? 'active' : ''}`}
-              onClick={() => setActivePanel('ocr')}
-            >
-              OCR settings
-            </button>
           </div>
           <button type="button" className="primary-btn admin-btn-sm" onClick={openCreateModal}>
             New user
@@ -520,7 +380,7 @@ export default function AdminDashboard({ onNotify }) {
       <div className="admin-overview">
         <dl className="admin-metrics">
           <div className="admin-metric">
-            <dt>Total users</dt>
+            <dt>Total</dt>
             <dd>{data?.totalUsers ?? 0}</dd>
           </div>
           <div className="admin-metric">
@@ -532,16 +392,21 @@ export default function AdminDashboard({ onNotify }) {
             <dd>{data?.inactiveUsers ?? 0}</dd>
           </div>
           <div className="admin-metric">
-            <dt>Activity log</dt>
-            <dd>{activityTotal}</dd>
+            <dt>Roles</dt>
+            <dd>{roleBreakdown.length}</dd>
           </div>
         </dl>
 
-        <div className="admin-charts-grid">
-          <AdminDonutChart title="Users by role" items={roleChartItems} />
-          <AdminBarChart title="Loaded activity by type" items={activityCategoryChartItems} />
-          <AdminBarChart title="Loaded activity by office" items={activityRoleChartItems} />
-        </div>
+        {roleBreakdown.length ? (
+          <div className="admin-role-row">
+            {roleBreakdown.map(([role, count]) => (
+              <span key={role} className="admin-role-tag">
+                {role.replaceAll('_', ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())}
+                <em>{count}</em>
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="admin-dashboard-panel">
@@ -549,11 +414,8 @@ export default function AdminDashboard({ onNotify }) {
       <div className="admin-card admin-activity-card admin-dashboard-activity-card">
         <div className="admin-activity-head">
           <div>
-            <h2>System activity log</h2>
-            <p>
-              Showing {roleActivities.length} of {activityTotal} events
-              {activityScope === 'ALL' ? ' across all offices' : ` for ${roleLabel(activityScope)}`}.
-            </p>
+            <h2>System activity</h2>
+            <p>All changes across offices and users ({activityTotal} total).</p>
           </div>
           <div className="admin-activity-filters">
             <div className="admin-activity-tabs">
@@ -582,7 +444,7 @@ export default function AdminDashboard({ onNotify }) {
               </tr>
             </thead>
             <tbody>
-              {activitiesLoading && !roleActivities.length ? (
+              {activitiesLoading ? (
                 <tr>
                   <td colSpan="5" className="admin-muted-cell">Loading activity...</td>
                 </tr>
@@ -604,23 +466,7 @@ export default function AdminDashboard({ onNotify }) {
             </tbody>
           </table>
         </div>
-        {roleActivities.length < activityTotal ? (
-          <div className="admin-activity-load-more">
-            <button
-              type="button"
-              className="ghost-btn"
-              disabled={activitiesLoading}
-              onClick={() => loadRoleActivities(activityScope, activityPage + 1, true)}
-            >
-              {activitiesLoading ? 'Loading…' : `Load more (${activityTotal - roleActivities.length} remaining)`}
-            </button>
-          </div>
-        ) : null}
       </div>
-      ) : activePanel === 'ocr' ? (
-        <div className="admin-card">
-          <OcrSettingsPanel onNotify={onNotify} />
-        </div>
       ) : (
       <div className="admin-card admin-dashboard-users-card">
         <div className="admin-activity-head">
@@ -739,8 +585,16 @@ export default function AdminDashboard({ onNotify }) {
                     <div className="admin-office-assignment">
                       {officeMembers.length ? (
                         <>
-                          <strong>Join existing {roleLabel(form.role)} office</strong>
-                          <p>This user will share the same dashboard and archive tree with {officeMembers.length} existing member(s).</p>
+                          <strong>
+                            {form.role === 'HOD'
+                              ? `Join existing HOD access for ${form.department || 'this department'}`
+                              : `Join existing ${roleLabel(form.role)} office`}
+                          </strong>
+                          <p>
+                            {form.role === 'HOD'
+                              ? `This user will share the same department-scoped archive with ${officeMembers.length} existing HOD account(s).`
+                              : `This user will share the same dashboard and archive tree with ${officeMembers.length} existing member(s).`}
+                          </p>
                           <ul className="admin-office-member-list">
                             {officeMembers.map((member) => (
                               <li key={member.id}>{member.fullName} · {member.username}</li>
@@ -749,18 +603,37 @@ export default function AdminDashboard({ onNotify }) {
                         </>
                       ) : (
                         <>
-                          <strong>Creates new {roleLabel(form.role)} office</strong>
-                          <p>This is the first account for this role. They will use the shared global archive tree.</p>
+                          <strong>
+                            {form.role === 'HOD' ? 'First HOD for this department' : `Creates new ${roleLabel(form.role)} office`}
+                          </strong>
+                          <p>
+                            {form.role === 'HOD'
+                              ? 'They will only see their faculty path and this academic department in the archive tree.'
+                              : 'This is the first account for this role. They will use the shared global archive tree.'}
+                          </p>
                         </>
                       )}
                     </div>
                     <label>
-                      <span>Department</span>
-                      <input
-                        value={form.department}
-                        onChange={(event) => setForm({ ...form, department: event.target.value })}
-                        required
-                      />
+                      <span>{form.role === 'HOD' ? 'Academic department' : 'Department'}</span>
+                      {form.role === 'HOD' ? (
+                        <select
+                          value={form.department}
+                          onChange={(event) => setForm({ ...form, department: event.target.value })}
+                          required
+                        >
+                          <option value="">Select department…</option>
+                          {academicDepartmentOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          value={form.department}
+                          onChange={(event) => setForm({ ...form, department: event.target.value })}
+                          required
+                        />
+                      )}
                     </label>
                   </div>
                 ) : null}
@@ -797,42 +670,12 @@ export default function AdminDashboard({ onNotify }) {
 
                 {wizardStep === 4 ? (
                   <form className="admin-user-form" onSubmit={handleSubmit}>
-                    {form.role === 'STUDENT' ? (
-                      <>
-                        <label>
-                          <span>Student ID</span>
-                          <input
-                            value={form.studentNumber}
-                            onChange={(event) => handleStudentNumberChange(event.target.value)}
-                            placeholder="e.g. 20251SENG041"
-                            required
-                          />
-                          <small className="admin-muted-cell admin-field-hint">{STUDENT_ID_HINT}</small>
-                        </label>
-                        <label>
-                          <span>Faculty (optional for modern IDs)</span>
-                          <input
-                            value={form.faculty}
-                            onChange={(event) => setForm({ ...form, faculty: event.target.value })}
-                            placeholder="e.g. Faculty of Information Technology"
-                          />
-                        </label>
-                        <label>
-                          <span>Academic department (optional for modern IDs)</span>
-                          <input
-                            value={form.academicDepartment}
-                            onChange={(event) => setForm({ ...form, academicDepartment: event.target.value })}
-                            placeholder="e.g. Software Engineering"
-                          />
-                        </label>
-                      </>
-                    ) : null}
                     <label>
                       <span>Username</span>
                       <input
                         value={form.username}
                         onChange={(event) => setForm({ ...form, username: event.target.value })}
-                        placeholder={form.role === 'STUDENT' ? 'Usually same as student ID' : 'e.g. jane.doe'}
+                        placeholder="e.g. jane.doe"
                         required
                       />
                     </label>
@@ -897,34 +740,6 @@ export default function AdminDashboard({ onNotify }) {
                     required
                   />
                 </label>
-                {form.role === 'STUDENT' ? (
-                  <>
-                    <label>
-                      <span>Student ID</span>
-                      <input
-                        value={form.studentNumber}
-                        onChange={(event) => setForm({ ...form, studentNumber: event.target.value })}
-                        placeholder="e.g. 20251SENG041"
-                        required
-                      />
-                      <small className="admin-muted-cell admin-field-hint">{STUDENT_ID_HINT}</small>
-                    </label>
-                    <label>
-                      <span>Faculty (optional for modern IDs)</span>
-                      <input
-                        value={form.faculty}
-                        onChange={(event) => setForm({ ...form, faculty: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      <span>Academic department (optional for modern IDs)</span>
-                      <input
-                        value={form.academicDepartment}
-                        onChange={(event) => setForm({ ...form, academicDepartment: event.target.value })}
-                      />
-                    </label>
-                  </>
-                ) : null}
                 <label>
                   <span>Role</span>
                   <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
@@ -934,12 +749,25 @@ export default function AdminDashboard({ onNotify }) {
                   </select>
                 </label>
                 <label>
-                  <span>Department</span>
-                  <input
-                    value={form.department}
-                    onChange={(event) => setForm({ ...form, department: event.target.value })}
-                    required
-                  />
+                  <span>{form.role === 'HOD' ? 'Academic department' : 'Department'}</span>
+                  {form.role === 'HOD' ? (
+                    <select
+                      value={form.department}
+                      onChange={(event) => setForm({ ...form, department: event.target.value })}
+                      required
+                    >
+                      <option value="">Select department…</option>
+                      {academicDepartmentOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={form.department}
+                      onChange={(event) => setForm({ ...form, department: event.target.value })}
+                      required
+                    />
+                  )}
                 </label>
                 <label>
                   <span>New password (optional)</span>

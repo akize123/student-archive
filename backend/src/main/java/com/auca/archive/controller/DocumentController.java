@@ -8,8 +8,11 @@ import com.auca.archive.dto.DocumentScanContext;
 import com.auca.archive.dto.DocumentScanResponse;
 import com.auca.archive.dto.UpdateDocumentStatusRequest;
 import com.auca.archive.dto.UploadDocumentRequest;
+import com.auca.archive.service.AccountService;
+import com.auca.archive.service.ArchiveAccessService;
 import com.auca.archive.service.DocumentScanService;
 import com.auca.archive.service.DocumentService;
+import com.auca.archive.web.SessionRequestContext;
 import jakarta.validation.Valid;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -38,10 +41,23 @@ import java.util.Map;
 public class DocumentController {
     private final DocumentService documentService;
     private final DocumentScanService documentScanService;
+    private final AccountService accountService;
+    private final ArchiveAccessService accessService;
 
-    public DocumentController(DocumentService documentService, DocumentScanService documentScanService) {
+    public DocumentController(
+            DocumentService documentService,
+            DocumentScanService documentScanService,
+            AccountService accountService,
+            ArchiveAccessService accessService
+    ) {
         this.documentService = documentService;
         this.documentScanService = documentScanService;
+        this.accountService = accountService;
+        this.accessService = accessService;
+    }
+
+    private String resolveViewerDepartment(String role, String accountId, String departmentHeader) {
+        return SessionRequestContext.resolveViewerDepartment(accountService, accessService, role, accountId, departmentHeader);
     }
 
     @GetMapping
@@ -56,8 +72,11 @@ public class DocumentController {
             @RequestParam(required = false) String office,
             @RequestParam(required = false) String kind,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return documentService.search(new com.auca.archive.dto.DocumentSearchFilter(
                 q,
                 category,
@@ -68,7 +87,7 @@ public class DocumentController {
                 semester,
                 office,
                 kind
-        ), role, studentNumber);
+        ), role, studentNumber, viewerDepartment);
     }
 
     @GetMapping("/archived")
@@ -104,9 +123,12 @@ public class DocumentController {
     public DocumentDetailResponse getDocument(
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return documentService.getDocument(id, role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return documentService.getDocument(id, role, studentNumber, viewerDepartment);
     }
 
     @GetMapping("/{id}/integrity")
@@ -121,9 +143,12 @@ public class DocumentController {
     public ResponseEntity<Resource> download(
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) throws IOException {
-        Resource resource = documentService.download(id, role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        Resource resource = documentService.download(id, role, studentNumber, viewerDepartment);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
@@ -162,8 +187,10 @@ public class DocumentController {
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
             @RequestHeader(value = "X-User-Username", required = false) String username,
             @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
             @RequestParam(value = "validationOverride", defaultValue = "false") boolean validationOverride
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return documentService.upload(
                 metadata,
                 file,
@@ -171,7 +198,8 @@ public class DocumentController {
                 role,
                 studentNumber,
                 com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
-                validationOverride
+                validationOverride,
+                viewerDepartment
         );
     }
 
@@ -182,14 +210,17 @@ public class DocumentController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Name", required = false) String actorName,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
-            @RequestHeader(value = "X-User-Username", required = false) String username
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return documentService.replaceDocumentFile(
                 id,
                 file,
                 role,
                 actorName,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
     }
 

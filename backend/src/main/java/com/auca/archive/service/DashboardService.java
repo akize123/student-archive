@@ -65,8 +65,9 @@ public class DashboardService {
                 ? null
                 : rawViewerDepartment.trim();
         accessService.requireStudentAccount(role, studentNumber);
+        accessService.requireHodDepartment(role, viewerDepartment);
         List<DocumentEntity> visibleDocuments = documentRepository.findAll().stream()
-                .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber))
+                .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                 .sorted((left, right) -> {
                     LocalDateTime leftTime = left.getModifiedAt();
                     LocalDateTime rightTime = right.getModifiedAt();
@@ -85,7 +86,7 @@ public class DashboardService {
                         .filter(task -> task.getStatus() == ApprovalStatus.PENDING)
                         .filter(task -> task.getDocumentId() != null)
                         .filter(task -> documentRepository.findById(task.getDocumentId())
-                                .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
+                                .map(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                                 .orElse(false))
                         .count()
                 : 0L;
@@ -94,12 +95,16 @@ public class DashboardService {
                 .mapToLong(document -> document.getSizeBytes() == null ? 0L : document.getSizeBytes())
                 .sum();
         List<ActivityResponse> recentActivity = activityService.recent(rawRole, null, null, viewerDepartment, studentNumber);
-        List<DocumentListItemResponse> recentFiles = documentService.search(null, null, rawRole, rawStudentNumber).stream()
+        List<DocumentListItemResponse> recentFiles = documentService.search(null, null, rawRole, rawStudentNumber, viewerDepartment).stream()
                 .limit(8)
                 .toList();
         ActivityResponse latestActivity = recentActivity.isEmpty() ? null : recentActivity.get(0);
         DocumentListItemResponse latestDocument = recentFiles.isEmpty() ? null : recentFiles.get(0);
-        String workspaceDepartment = role == null ? (latestDocument == null ? "" : latestDocument.department()) : role.getDepartment();
+        String workspaceDepartment = role == UserRole.HOD && viewerDepartment != null
+                ? viewerDepartment
+                : (role == null
+                ? (latestDocument == null ? "" : latestDocument.department())
+                : role.getDepartment());
 
         long storageLimitBytes = role == UserRole.STUDENT
                 ? studentStorageService.getStorageLimitBytes()
@@ -116,14 +121,14 @@ public class DashboardService {
                 departmentFiles,
                 storageUsedBytes,
                 storageLimitBytes,
-                folderService.getTree(rawRole, rawStudentNumber),
+                folderService.getTree(rawRole, rawStudentNumber, viewerDepartment),
                 recentFiles,
                 includeApprovals
                         ? approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
                                 .stream()
                                 .filter(task -> task.getDocumentId() != null)
                                 .filter(task -> documentRepository.findById(task.getDocumentId())
-                                        .map(document -> folderService.isDocumentAccessible(document, role, studentNumber))
+                                        .map(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                                         .orElse(false))
                                 .map(task -> {
                                     DocumentEntity document = documentRepository.findById(task.getDocumentId()).orElse(null);

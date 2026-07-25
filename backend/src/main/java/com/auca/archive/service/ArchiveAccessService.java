@@ -9,8 +9,10 @@ import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -178,7 +180,7 @@ public class ArchiveAccessService {
         return activityStudentNumber.trim().equalsIgnoreCase(viewerStudentNumber.trim());
     }
 
-    private boolean matchesDepartment(String activityDepartment, String viewerDepartment) {
+    public boolean matchesDepartment(String activityDepartment, String viewerDepartment) {
         if (activityDepartment == null || activityDepartment.isBlank()) {
             return false;
         }
@@ -268,6 +270,103 @@ public class ArchiveAccessService {
                 || !requestedStudentNumber.trim().equalsIgnoreCase(sessionStudentNumber.trim())) {
             throw new IllegalArgumentException("You can only access your own student records");
         }
+    }
+
+    public void requireHodDepartment(UserRole role, String viewerDepartment) {
+        if (role != UserRole.HOD) {
+            return;
+        }
+        if (viewerDepartment == null || viewerDepartment.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Your account is not linked to an academic department. Contact the administrator.");
+        }
+    }
+
+    public String normalizeViewerDepartment(String viewerDepartment) {
+        if (viewerDepartment == null || viewerDepartment.isBlank()) {
+            return null;
+        }
+        return viewerDepartment.trim();
+    }
+
+    public boolean isDepartmentFolder(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        String code = folder.getCode().toUpperCase(Locale.ROOT);
+        return code.matches("^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$");
+    }
+
+    public boolean isFacultyFolder(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        String code = folder.getCode().toUpperCase(Locale.ROOT);
+        return code.matches("^FAC-[A-Z0-9]+$");
+    }
+
+    public String resolveAcademicDepartmentForFolder(FolderEntity folder, Map<Long, FolderEntity> folderById) {
+        if (folder == null || folderById == null || folderById.isEmpty()) {
+            return null;
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (isDepartmentFolder(current)) {
+                return current.getName();
+            }
+            Long parentId = current.getParentId();
+            current = parentId == null ? null : folderById.get(parentId);
+        }
+        return null;
+    }
+
+    public boolean isFolderInHodDepartment(
+            FolderEntity folder,
+            String viewerDepartment,
+            Map<Long, FolderEntity> folderById
+    ) {
+        if (folder == null) {
+            return false;
+        }
+        String normalizedViewer = normalizeViewerDepartment(viewerDepartment);
+        if (normalizedViewer == null) {
+            return false;
+        }
+        String academicDepartment = resolveAcademicDepartmentForFolder(folder, folderById);
+        return matchesDepartment(academicDepartment, normalizedViewer);
+    }
+
+    public boolean isDocumentInHodDepartment(
+            DocumentEntity document,
+            String viewerDepartment,
+            Map<Long, FolderEntity> folderById
+    ) {
+        if (document == null) {
+            return false;
+        }
+        String normalizedViewer = normalizeViewerDepartment(viewerDepartment);
+        if (normalizedViewer == null) {
+            return false;
+        }
+        if (document.getDepartment() != null && !document.getDepartment().isBlank()) {
+            return matchesDepartment(document.getDepartment(), normalizedViewer);
+        }
+        if (document.getFolderId() == null || folderById == null) {
+            return false;
+        }
+        FolderEntity folder = folderById.get(document.getFolderId());
+        if (folder == null) {
+            return false;
+        }
+        return isFolderInHodDepartment(folder, normalizedViewer, folderById);
+    }
+
+    public boolean hodShouldIncludeDepartmentChild(FolderEntity departmentFolder, String viewerDepartment) {
+        if (departmentFolder == null || !isDepartmentFolder(departmentFolder)) {
+            return true;
+        }
+        return matchesDepartment(departmentFolder.getName(), viewerDepartment);
     }
 
     private String sanitizeStudentCode(String value) {

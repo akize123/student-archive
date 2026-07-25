@@ -2,6 +2,7 @@ package com.auca.archive.service;
 
 import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.SystemPrivilege;
+import com.auca.archive.domain.AcademicDepartmentCatalog;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.AdminActivityPageResponse;
 import com.auca.archive.dto.AdminDashboardResponse;
@@ -131,6 +132,7 @@ public class AdminService {
         if (accountRepository.findByUsername(username).isPresent()) {
             throw new IllegalArgumentException("Username already exists");
         }
+        validateHodDepartment(request.role(), request.department());
 
         AccountEntity account = new AccountEntity();
         account.setUsername(username);
@@ -170,6 +172,8 @@ public class AdminService {
         requireAdmin(rawRole);
         AccountEntity account = accountRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + id));
+
+        validateHodDepartment(request.role(), request.department());
 
         account.setFullName(request.fullName().trim());
         account.setRole(request.role());
@@ -389,6 +393,13 @@ public class AdminService {
             throw new IllegalArgumentException("Username is required");
         }
         return username.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private void validateHodDepartment(UserRole role, String department) {
+        if (role != UserRole.HOD) {
+            return;
+        }
+        AcademicDepartmentCatalog.requireValidHodDepartment(department);
     }
 
     private record OfficeMeta(String label, String department, String summary, List<String> categories) {

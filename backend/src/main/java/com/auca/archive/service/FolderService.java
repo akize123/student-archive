@@ -100,9 +100,15 @@ public class FolderService {
     }
 
     public List<FolderNodeResponse> getTree(String rawRole, String rawStudentNumber) {
+        return getTree(rawRole, rawStudentNumber, null);
+    }
+
+    public List<FolderNodeResponse> getTree(String rawRole, String rawStudentNumber, String rawViewerDepartment) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
+        accessService.requireHodDepartment(role, viewerDepartment);
 
         if (role == UserRole.STUDENT) {
             return getStudentPersonalTree(studentNumber);
@@ -119,7 +125,15 @@ public class FolderService {
 
         List<FolderNodeResponse> tree = childrenByParent.getOrDefault(null, List.of()).stream()
                 .sorted(Comparator.comparing(FolderEntity::getName))
-                .flatMap(folder -> toVisibleNodes(folder, childrenByParent, folderById, role, null, false).stream())
+                .flatMap(folder -> toVisibleNodes(
+                        folder,
+                        childrenByParent,
+                        folderById,
+                        role,
+                        studentNumber,
+                        false,
+                        viewerDepartment
+                ).stream())
                 .sorted(Comparator.comparing(FolderNodeResponse::name))
                 .toList();
 
@@ -168,11 +182,17 @@ public class FolderService {
     }
 
     public FolderDetailResponse getFolderDetail(Long id, String rawRole, String rawStudentNumber) {
+        return getFolderDetail(id, rawRole, rawStudentNumber, null);
+    }
+
+    public FolderDetailResponse getFolderDetail(Long id, String rawRole, String rawStudentNumber, String rawViewerDepartment) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
+        accessService.requireHodDepartment(role, viewerDepartment);
         FolderEntity folder = getFolderOrThrow(id);
-        if (!isFolderAccessible(folder, role, studentNumber)) {
+        if (!isFolderAccessible(folder, role, studentNumber, viewerDepartment)) {
             throw new IllegalArgumentException("Folder not found: " + id);
         }
 
@@ -181,7 +201,7 @@ public class FolderService {
                 .collect(Collectors.toMap(FolderEntity::getId, Function.identity()));
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
 
-        List<FolderBreadcrumbResponse> breadcrumbs = buildBreadcrumbs(folder, folderById, role, studentNumber);
+        List<FolderBreadcrumbResponse> breadcrumbs = buildBreadcrumbs(folder, folderById, role, studentNumber, viewerDepartment);
         List<FolderNodeResponse> children;
         List<DocumentListItemResponse> documents;
 
@@ -192,12 +212,24 @@ public class FolderService {
                     .toList();
             documents = collectDocumentsUnderFolder(folder.getId(), childrenByParent).stream()
                     .filter(document -> !document.isArchivedForRemoval())
-                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                    .filter(document -> isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                     .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toListItem)
                     .toList();
         } else {
             List<FolderEntity> rawChildren = childrenByParent.getOrDefault(folder.getId(), List.of());
+            if (role == UserRole.HOD && viewerDepartment != null) {
+                if (folder.getParentId() == null) {
+                    rawChildren = rawChildren.stream()
+                            .filter(faculty -> childrenByParent.getOrDefault(faculty.getId(), List.of()).stream()
+                                    .anyMatch(dept -> accessService.hodShouldIncludeDepartmentChild(dept, viewerDepartment)))
+                            .toList();
+                } else if (accessService.isFacultyFolder(folder)) {
+                    rawChildren = rawChildren.stream()
+                            .filter(dept -> accessService.hodShouldIncludeDepartmentChild(dept, viewerDepartment))
+                            .toList();
+                }
+            }
             boolean flattenStudentRoot = role != null
                     && role != UserRole.STUDENT
                     && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode());
@@ -206,7 +238,15 @@ public class FolderService {
                     .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
                     .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isStudentDefaultFolderCode(child.getCode()))
                     .sorted(Comparator.comparing(FolderEntity::getName))
-                    .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, isFolderVisibleByParent(folder, role, studentNumber)).stream())
+                    .flatMap(child -> toVisibleNodes(
+                            child,
+                            childrenByParent,
+                            folderById,
+                            role,
+                            studentNumber,
+                            isFolderVisibleByParent(folder, role, studentNumber),
+                            viewerDepartment
+                    ).stream())
                     .toList();
 
             List<DocumentEntity> folderDocuments;
@@ -228,7 +268,7 @@ public class FolderService {
             }
 
             documents = folderDocuments.stream()
-                    .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                    .filter(document -> isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                     .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                     .map(this::toListItem)
                     .toList();
@@ -240,7 +280,7 @@ public class FolderService {
                 folder.getCode(),
                 folder.getParentId(),
                 breadcrumbs,
-                countDocuments(folder, childrenByParent, role, studentNumber),
+                countDocuments(folder, childrenByParent, role, studentNumber, viewerDepartment),
                 children,
                 documents
         );
@@ -367,6 +407,23 @@ public class FolderService {
                     return changed ? folderRepository.save(existing) : existing;
                 })
                 .orElseGet(() -> folderRepository.save(new FolderEntity(name, code, parentId)));
+    }
+
+    public String buildBreadcrumbPath(Long folderId) {
+        FolderEntity folder = getFolderOrThrow(folderId);
+        Map<Long, FolderEntity> folderById = folderRepository.findAll().stream()
+                .collect(Collectors.toMap(FolderEntity::getId, Function.identity(), (left, right) -> left));
+        List<String> segments = new ArrayList<>();
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            segments.add(0, current.getName());
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderById.get(current.getParentId());
+        }
+        return segments.isEmpty() ? folder.getName() : String.join(" / ", segments);
     }
 
     @Transactional
@@ -1211,10 +1268,19 @@ public class FolderService {
     }
 
     public boolean isFolderAccessible(FolderEntity folder, UserRole role, String studentNumber) {
+        return isFolderAccessible(folder, role, studentNumber, null);
+    }
+
+    public boolean isFolderAccessible(FolderEntity folder, UserRole role, String studentNumber, String viewerDepartment) {
         if (role == null) {
             return true;
         }
-        return isFolderAccessible(folder, role, studentNumber, new HashSet<>());
+        Map<Long, FolderEntity> folderById = null;
+        if (role == UserRole.HOD && viewerDepartment != null) {
+            folderById = folderRepository.findAll().stream()
+                    .collect(Collectors.toMap(FolderEntity::getId, Function.identity(), (left, right) -> left));
+        }
+        return isFolderAccessible(folder, role, studentNumber, viewerDepartment, folderById, new HashSet<>());
     }
 
     public boolean isDocumentAccessible(DocumentEntity document, UserRole role) {
@@ -1222,6 +1288,15 @@ public class FolderService {
     }
 
     public boolean isDocumentAccessible(DocumentEntity document, UserRole role, String studentNumber) {
+        return isDocumentAccessible(document, role, studentNumber, null);
+    }
+
+    public boolean isDocumentAccessible(
+            DocumentEntity document,
+            UserRole role,
+            String studentNumber,
+            String viewerDepartment
+    ) {
         if (document == null) {
             return false;
         }
@@ -1258,13 +1333,31 @@ public class FolderService {
             return false;
         }
 
+        if (role == UserRole.HOD && viewerDepartment != null) {
+            Map<Long, FolderEntity> folderById = folderRepository.findAll().stream()
+                    .collect(Collectors.toMap(FolderEntity::getId, Function.identity(), (left, right) -> left));
+            if (!accessService.isDocumentInHodDepartment(document, viewerDepartment, folderById)) {
+                return false;
+            }
+        }
+
         if (document.getFolderId() != null) {
             return folderRepository.findById(document.getFolderId())
-                    .map(folder -> isFolderAccessible(folder, role, studentNumber))
+                    .map(folder -> isFolderAccessible(folder, role, studentNumber, viewerDepartment))
                     .orElse(false);
         }
 
         return document.getCategory() != null && accessService.allowedUploadCategories(role).contains(document.getCategory());
+    }
+
+    public void requireHodFolderPlacement(FolderEntity folder, UserRole role, String viewerDepartment) {
+        accessService.requireHodDepartment(role, viewerDepartment);
+        if (role != UserRole.HOD) {
+            return;
+        }
+        if (!isFolderAccessible(folder, role, null, viewerDepartment)) {
+            throw new IllegalArgumentException("You can only manage folders in your department archive.");
+        }
     }
 
     private List<FolderNodeResponse> getStudentPersonalTree(String studentNumber) {
@@ -1330,7 +1423,8 @@ public class FolderService {
             Map<Long, FolderEntity> folderById,
             UserRole role,
             String studentNumber,
-            boolean parentVisible
+            boolean parentVisible,
+            String viewerDepartment
     ) {
         // Never expose Library FYP Reviews (or its children) to non-librarian staff,
         // even when the AUCA root parent is visible.
@@ -1346,22 +1440,55 @@ public class FolderService {
             return List.of();
         }
 
+        if (role == UserRole.HOD && viewerDepartment != null && accessService.isFacultyFolder(folder)) {
+            boolean includesDepartment = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+                    .anyMatch(dept -> accessService.hodShouldIncludeDepartmentChild(dept, viewerDepartment));
+            if (!includesDepartment) {
+                return List.of();
+            }
+        }
+
         boolean nodeVisible = role == null
                 || parentVisible
                 || (role == UserRole.STUDENT
                 ? accessService.isStudentFolder(folder, studentNumber)
                 : accessService.matchesRoleFolderCode(folder.getCode(), role));
 
-        List<FolderNodeResponse> children = childrenByParent.getOrDefault(folder.getId(), List.of()).stream()
+        List<FolderEntity> visibleChildren = childrenByParent.getOrDefault(folder.getId(), List.of());
+        if (role == UserRole.HOD && viewerDepartment != null) {
+            if (folder.getParentId() == null) {
+                visibleChildren = visibleChildren.stream()
+                        .filter(faculty -> childrenByParent.getOrDefault(faculty.getId(), List.of()).stream()
+                                .anyMatch(dept -> accessService.hodShouldIncludeDepartmentChild(dept, viewerDepartment)))
+                        .toList();
+            } else if (accessService.isFacultyFolder(folder)) {
+                visibleChildren = visibleChildren.stream()
+                        .filter(dept -> accessService.hodShouldIncludeDepartmentChild(dept, viewerDepartment))
+                        .toList();
+            } else if (accessService.isDepartmentFolder(folder)
+                    && !accessService.hodShouldIncludeDepartmentChild(folder, viewerDepartment)) {
+                return List.of();
+            }
+        }
+
+        List<FolderNodeResponse> children = visibleChildren.stream()
                 .sorted(Comparator.comparing(FolderEntity::getName))
-                .flatMap(child -> toVisibleNodes(child, childrenByParent, folderById, role, studentNumber, nodeVisible).stream())
+                .flatMap(child -> toVisibleNodes(
+                        child,
+                        childrenByParent,
+                        folderById,
+                        role,
+                        studentNumber,
+                        nodeVisible,
+                        viewerDepartment
+                ).stream())
                 .toList();
 
         if (!nodeVisible) {
             return children;
         }
 
-        long itemCount = countDocuments(folder, childrenByParent, role, studentNumber);
+        long itemCount = countDocuments(folder, childrenByParent, role, studentNumber, viewerDepartment);
         if (accessService.isOfficeStaffRole(role)
                 && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())
                 && itemCount == 0) {
@@ -1381,12 +1508,18 @@ public class FolderService {
         ));
     }
 
-    private long countDocuments(FolderEntity folder, Map<Long, List<FolderEntity>> childrenByParent, UserRole role, String studentNumber) {
+    private long countDocuments(
+            FolderEntity folder,
+            Map<Long, List<FolderEntity>> childrenByParent,
+            UserRole role,
+            String studentNumber,
+            String viewerDepartment
+    ) {
         long total = documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId()).stream()
-                .filter(document -> isDocumentAccessible(document, role, studentNumber))
+                .filter(document -> isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                 .count();
         for (FolderEntity child : childrenByParent.getOrDefault(folder.getId(), List.of())) {
-            total += countDocuments(child, childrenByParent, role, studentNumber);
+            total += countDocuments(child, childrenByParent, role, studentNumber, viewerDepartment);
         }
         return total;
     }
@@ -1395,13 +1528,14 @@ public class FolderService {
             FolderEntity folder,
             Map<Long, FolderEntity> folderById,
             UserRole role,
-            String studentNumber
+            String studentNumber,
+            String viewerDepartment
     ) {
         ArrayDeque<FolderBreadcrumbResponse> breadcrumbs = new ArrayDeque<>();
         FolderEntity current = folder;
         Set<Long> visited = new HashSet<>();
         while (current != null && visited.add(current.getId())) {
-            if (isFolderAccessible(current, role, studentNumber)) {
+            if (isFolderAccessible(current, role, studentNumber, viewerDepartment)) {
                 breadcrumbs.push(new FolderBreadcrumbResponse(current.getId(), current.getName(), current.getCode()));
             }
             if (current.getParentId() == null) {
@@ -1412,7 +1546,14 @@ public class FolderService {
         return new ArrayList<>(breadcrumbs);
     }
 
-    private boolean isFolderAccessible(FolderEntity folder, UserRole role, String studentNumber, Set<Long> visited) {
+    private boolean isFolderAccessible(
+            FolderEntity folder,
+            UserRole role,
+            String studentNumber,
+            String viewerDepartment,
+            Map<Long, FolderEntity> folderById,
+            Set<Long> visited
+    ) {
         if (role == UserRole.ADMIN) {
             return true;
         }
@@ -1440,17 +1581,45 @@ public class FolderService {
             return false;
         }
         if (isSharedWithRole(folder, role)) {
-            return true;
+            return hodFolderScopeAllows(folder, role, viewerDepartment, folderById);
         }
         if (accessService.matchesRoleFolderCode(folder.getCode(), role)) {
-            return true;
+            return hodFolderScopeAllows(folder, role, viewerDepartment, folderById);
         }
         if (folder.getParentId() == null) {
             return false;
         }
-        return folderRepository.findById(folder.getParentId())
-                .map(parent -> isFolderAccessible(parent, role, studentNumber, visited))
-                .orElse(false);
+        FolderEntity parent = folderById != null
+                ? folderById.get(folder.getParentId())
+                : folderRepository.findById(folder.getParentId()).orElse(null);
+        if (parent == null) {
+            return false;
+        }
+        return isFolderAccessible(parent, role, studentNumber, viewerDepartment, folderById, visited);
+    }
+
+    private boolean hodFolderScopeAllows(
+            FolderEntity folder,
+            UserRole role,
+            String viewerDepartment,
+            Map<Long, FolderEntity> folderById
+    ) {
+        if (role != UserRole.HOD || viewerDepartment == null || folderById == null) {
+            return true;
+        }
+        if (folder.getParentId() == null) {
+            return true;
+        }
+        if (accessService.isFacultyFolder(folder)) {
+            return folderById.values().stream()
+                    .filter(child -> folder.getId().equals(child.getParentId()))
+                    .anyMatch(child -> accessService.hodShouldIncludeDepartmentChild(child, viewerDepartment));
+        }
+        String academicDepartment = accessService.resolveAcademicDepartmentForFolder(folder, folderById);
+        if (academicDepartment == null) {
+            return true;
+        }
+        return accessService.matchesDepartment(academicDepartment, viewerDepartment);
     }
 
     public void requireShareAtLeast(FolderEntity folder, UserRole role, String studentNumber, SharePermission minimum) {
@@ -1751,7 +1920,7 @@ public class FolderService {
                 folder.getName(),
                 folder.getCode(),
                 folder.getParentId(),
-                countDocuments(folder, childrenByParent, role, studentNumber),
+                countDocuments(folder, childrenByParent, role, studentNumber, null),
                 ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
                         || isProtectedArchiveStructureFolder(folder)
                         || folder.getParentId() == null,

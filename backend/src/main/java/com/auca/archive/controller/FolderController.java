@@ -12,8 +12,11 @@ import com.auca.archive.dto.FolderTargetRequest;
 import com.auca.archive.dto.RenameFolderRequest;
 import com.auca.archive.dto.ShareFolderRequest;
 import com.auca.archive.dto.ShareFolderResponse;
+import com.auca.archive.service.AccountService;
+import com.auca.archive.service.ArchiveAccessService;
 import com.auca.archive.service.FolderImportService;
 import com.auca.archive.service.FolderService;
+import com.auca.archive.web.SessionRequestContext;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -41,10 +44,23 @@ import java.util.Map;
 public class FolderController {
     private final FolderService folderService;
     private final FolderImportService folderImportService;
+    private final AccountService accountService;
+    private final ArchiveAccessService accessService;
 
-    public FolderController(FolderService folderService, FolderImportService folderImportService) {
+    public FolderController(
+            FolderService folderService,
+            FolderImportService folderImportService,
+            AccountService accountService,
+            ArchiveAccessService accessService
+    ) {
         this.folderService = folderService;
         this.folderImportService = folderImportService;
+        this.accountService = accountService;
+        this.accessService = accessService;
+    }
+
+    private String resolveViewerDepartment(String role, String accountId, String departmentHeader) {
+        return SessionRequestContext.resolveViewerDepartment(accountService, accessService, role, accountId, departmentHeader);
     }
 
     @GetMapping("/published-archive/tree")
@@ -59,18 +75,24 @@ public class FolderController {
     @GetMapping("/tree")
     public List<FolderNodeResponse> tree(
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return folderService.getTree(role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.getTree(role, studentNumber, viewerDepartment);
     }
 
     @GetMapping("/{id}")
     public FolderDetailResponse getFolder(
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return folderService.getFolderDetail(id, role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.getFolderDetail(id, role, studentNumber, viewerDepartment);
     }
 
     @PostMapping("/{parentId}/subfolders")
@@ -147,10 +169,13 @@ public class FolderController {
             @RequestParam(required = false) List<Long> documentIds,
             @RequestParam(required = false) List<Long> folderIds,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         byte[] zipBytes = folderService.downloadAsZip(id, documentIds, folderIds, role, studentNumber);
-        FolderDetailResponse folder = folderService.getFolderDetail(id, role, studentNumber);
+        FolderDetailResponse folder = folderService.getFolderDetail(id, role, studentNumber, viewerDepartment);
         String safeName = folder.name().replaceAll("[^a-zA-Z0-9-_ ]", "_").trim().replaceAll("\\s+", "-");
         if (safeName.isBlank()) {
             safeName = "folder-" + id;
@@ -199,8 +224,10 @@ public class FolderController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Name", required = false) String actorName,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
-            @RequestHeader(value = "X-User-Username", required = false) String username
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return folderImportService.importIntoFolder(
                 id,
                 archive,
@@ -208,7 +235,8 @@ public class FolderController {
                 paths,
                 role,
                 actorName,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
     }
 
@@ -220,8 +248,11 @@ public class FolderController {
             @RequestParam(value = "paths", required = false) List<String> paths,
             @RequestParam(value = "defaultCategory", required = false) StudentDocumentCategory defaultCategory,
             @RequestParam(value = "defaultSubtypeId", required = false) Long defaultSubtypeId,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return folderImportService.previewImport(
                 id,
                 archive,
@@ -229,7 +260,8 @@ public class FolderController {
                 paths,
                 role,
                 defaultCategory,
-                defaultSubtypeId
+                defaultSubtypeId,
+                viewerDepartment
         );
     }
 
@@ -243,8 +275,10 @@ public class FolderController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Name", required = false) String actorName,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
-            @RequestHeader(value = "X-User-Username", required = false) String username
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         Map<String, byte[]> fileContents = folderImportService.buildFileContentMap(archive, files, paths);
         return folderImportService.commitImport(
                 id,
@@ -252,7 +286,8 @@ public class FolderController {
                 fileContents,
                 role,
                 actorName,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
     }
 }
