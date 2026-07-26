@@ -4,6 +4,7 @@ import com.auca.archive.domain.DocumentStatus;
 import com.auca.archive.domain.DocumentType;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -37,6 +38,7 @@ public class DocumentEntity {
     private String course;
     private Integer marks;
     private String examRoom;
+    @Column(columnDefinition = "TEXT")
     private String filePath;
     private String mimeType;
     private Long folderId;

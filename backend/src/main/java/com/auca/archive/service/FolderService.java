@@ -24,7 +24,6 @@ import com.auca.archive.repository.FolderShareRepository;
 import com.auca.archive.repository.StudentRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -63,6 +62,7 @@ public class FolderService {
     private final StudentIdFormatService studentIdFormatService;
     private final AcademicTermService academicTermService;
     private final ObjectProvider<ArchiveTreeService> archiveTreeService;
+    private final ArchiveStoragePaths archiveStoragePaths;
     private final Path storageRoot;
 
     public FolderService(
@@ -76,7 +76,7 @@ public class FolderService {
             StudentIdFormatService studentIdFormatService,
             AcademicTermService academicTermService,
             ObjectProvider<ArchiveTreeService> archiveTreeService,
-            @Value("${archive.storage-root:storage}") String storageRoot
+            ArchiveStoragePaths archiveStoragePaths
     ) {
         this.folderRepository = folderRepository;
         this.documentRepository = documentRepository;
@@ -88,7 +88,8 @@ public class FolderService {
         this.studentIdFormatService = studentIdFormatService;
         this.academicTermService = academicTermService;
         this.archiveTreeService = archiveTreeService;
-        this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
+        this.archiveStoragePaths = archiveStoragePaths;
+        this.storageRoot = archiveStoragePaths.storageRoot();
     }
 
     public List<FolderNodeResponse> getTree() {
@@ -237,6 +238,7 @@ public class FolderService {
             children = rawChildren.stream()
                     .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
                     .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isStudentDefaultFolderCode(child.getCode()))
+                    .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isDocumentChannelFolderCode(child.getCode()))
                     .sorted(Comparator.comparing(FolderEntity::getName))
                     .flatMap(child -> toVisibleNodes(
                             child,
@@ -251,16 +253,8 @@ public class FolderService {
 
             List<DocumentEntity> folderDocuments;
             if (flattenStudentRoot) {
-                folderDocuments = new ArrayList<>(
-                        documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folder.getId())
-                );
-                for (FolderEntity child : rawChildren) {
-                    if (ArchiveTreeService.isStudentDefaultFolderCode(child.getCode())) {
-                        folderDocuments.addAll(
-                                documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(child.getId())
-                        );
-                    }
-                }
+                // Show every document under this student ID folder, including older nested channel paths.
+                folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
             } else if (isArchiveProjectFolder(folder)) {
                 folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
             } else {
@@ -748,8 +742,8 @@ public class FolderService {
                 if (document.getFilePath() == null || document.getFilePath().isBlank()) {
                     continue;
                 }
-                Path path = Path.of(document.getFilePath());
-                if (!Files.exists(path)) {
+                Path path = archiveStoragePaths.resolveExisting(document.getFilePath());
+                if (path == null) {
                     continue;
                 }
                 byte[] storedBytes = Files.readAllBytes(path);
@@ -2036,8 +2030,8 @@ public class FolderService {
         if (source.getFilePath() == null || source.getFilePath().isBlank()) {
             return;
         }
-        Path sourcePath = Path.of(source.getFilePath());
-        if (!Files.exists(sourcePath)) {
+        Path sourcePath = archiveStoragePaths.resolveExisting(source.getFilePath());
+        if (sourcePath == null) {
             return;
         }
 
@@ -2072,7 +2066,7 @@ public class FolderService {
         copy.setCourse(source.getCourse());
         copy.setMarks(source.getMarks());
         copy.setExamRoom(source.getExamRoom());
-        copy.setFilePath(targetPath.toString());
+        copy.setFilePath(archiveStoragePaths.toStoredPath(targetPath));
         copy.setMimeType(source.getMimeType());
         copy.setFolderId(targetFolderId);
         copy.setSizeBytes(source.getSizeBytes());

@@ -165,6 +165,48 @@ export function importFolderArchive(folderId, { archive, files = [], paths = [] 
   })
 }
 
+export function previewFolderImport(folderId, { archive, files = [], paths = [], defaultCategory } = {}) {
+  const formData = new FormData()
+  if (archive) {
+    formData.append('archive', archive, archive.name || 'import.zip')
+  }
+  if (files.length) {
+    files.forEach((file) => {
+      formData.append('files', file, file.name)
+    })
+    paths.forEach((path) => {
+      formData.append('paths', path)
+    })
+  }
+  if (defaultCategory) {
+    formData.append('defaultCategory', defaultCategory)
+  }
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import/preview`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export function commitFolderImport(folderId, commitRequest, { archive, files = [], paths = [] } = {}) {
+  const formData = new FormData()
+  formData.append('request', new Blob([JSON.stringify(commitRequest)], { type: 'application/json' }))
+  if (archive) {
+    formData.append('archive', archive, archive.name || 'import.zip')
+  }
+  if (files.length) {
+    files.forEach((file) => {
+      formData.append('files', file, file.name)
+    })
+    paths.forEach((path) => {
+      formData.append('paths', path)
+    })
+  }
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import/commit`, {
+    method: 'POST',
+    body: formData
+  })
+}
+
 export function renameFolder(folderId, name) {
   return request(`/api/folders/${folderId}`, {
     method: 'PATCH',
@@ -280,12 +322,17 @@ export function getActivities(scope, topic) {
   return request(`/api/activity${query ? `?${query}` : ''}`)
 }
 
+export async function fetchDocumentPreview(documentId) {
+  return fetchDocumentFile(documentId)
+}
+
 async function fetchDocumentFile(documentId) {
   const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
     headers: {
       ...getSessionRoleHeader()
     }
   })
+
 
   if (!response.ok) {
     let message = ''

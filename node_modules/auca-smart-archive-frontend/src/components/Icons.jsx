@@ -162,6 +162,34 @@ export function XIcon(props) {
   )
 }
 
+export function MinimizeIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M5 19h14" />
+    </SvgIcon>
+  )
+}
+
+export function MaximizeIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M4 4h7v7H4z" />
+      <path d="M13 13h7v7h-7z" />
+      <path d="M13 4h7v7" />
+      <path d="M4 13h7v7" />
+    </SvgIcon>
+  )
+}
+
+export function RestoreIcon(props) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M8 8h10v10H8z" />
+      <path d="M6 16V6h10" />
+    </SvgIcon>
+  )
+}
+
 export function GridIcon(props) {
   return (
     <SvgIcon {...props}>

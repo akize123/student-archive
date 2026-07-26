@@ -26,6 +26,7 @@ public class DocumentSchemaMigration implements CommandLineRunner {
         jdbcTemplate.execute("ALTER TABLE documents ALTER COLUMN external_links TYPE TEXT");
         jdbcTemplate.execute("ALTER TABLE documents ALTER COLUMN review_note TYPE TEXT");
         jdbcTemplate.execute("ALTER TABLE documents ALTER COLUMN cover_photo_path TYPE TEXT");
+        jdbcTemplate.execute("ALTER TABLE documents ALTER COLUMN file_path TYPE TEXT");
         jdbcTemplate.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS github_url TEXT");
         jdbcTemplate.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS external_links TEXT");
         jdbcTemplate.execute("ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_note TEXT");

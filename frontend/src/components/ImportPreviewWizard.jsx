@@ -3,13 +3,16 @@ import { commitFolderImport } from '../api'
 import { validateStaffFolderName } from '../studentId'
 
 function emptyRow(item) {
+  const legacyFolderName = extractLegacyFolderName(item)
+  const suggested = String(item.suggestedFolderName || '').trim()
+  const useLegacy = !suggested && Boolean(legacyFolderName)
   return {
     originalPath: item.originalPath,
-    targetFolderName: item.suggestedFolderName || '',
+    targetFolderName: suggested || legacyFolderName || '',
     title: item.proposedTitle || '',
     category: '',
-    linkLegacy: false,
-    legacyFolderName: extractLegacyFolderName(item),
+    linkLegacy: useLegacy,
+    legacyFolderName,
     suggestedStudentNumber: item.suggestedStudentNumber || '',
     suggestedStudentName: item.suggestedStudentName || '',
     warnings: item.warnings || [],
@@ -285,7 +288,7 @@ export default function ImportPreviewWizard({
               type="button"
               className="primary-btn"
               onClick={() => setStep(step === 'audit' ? 'mappings' : 'confirm')}
-              disabled={!importableRows.length}
+              disabled={step === 'mappings' && !importableRows.length}
             >
               Continue
             </button>

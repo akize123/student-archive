@@ -67,6 +67,7 @@ public class DocumentService {
     private final DocumentCategoryDefinitionService documentCategoryDefinitionService;
     private final FileConversionService fileConversionService;
     private final PdfOptimizationService pdfOptimizationService;
+    private final ArchiveStoragePaths archiveStoragePaths;
     private final Path storageRoot;
     private final long minUploadSizeBytes;
     private final long maxUploadSizeBytes;
@@ -92,6 +93,7 @@ public class DocumentService {
             DocumentCategoryDefinitionService documentCategoryDefinitionService,
             FileConversionService fileConversionService,
             PdfOptimizationService pdfOptimizationService,
+            ArchiveStoragePaths archiveStoragePaths,
             @Value("${archive.min-upload-size-bytes:1024}") long minUploadSizeBytes,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes,
             @Value("${archive.student.max-upload-size-bytes:5242880}") long studentMaxUploadSizeBytes,
@@ -115,6 +117,7 @@ public class DocumentService {
         this.documentCategoryDefinitionService = documentCategoryDefinitionService;
         this.fileConversionService = fileConversionService;
         this.pdfOptimizationService = pdfOptimizationService;
+        this.archiveStoragePaths = archiveStoragePaths;
         this.storageRoot = Path.of(storageRoot).toAbsolutePath().normalize();
         this.minUploadSizeBytes = minUploadSizeBytes;
         this.maxUploadSizeBytes = maxUploadSizeBytes;
@@ -319,8 +322,8 @@ public class DocumentService {
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             throw new IllegalArgumentException("Document has no stored file");
         }
-        Path path = Path.of(document.getFilePath());
-        if (!Files.exists(path)) {
+        Path path = archiveStoragePaths.resolveExisting(document.getFilePath());
+        if (path == null) {
             throw new IllegalArgumentException("Stored file is unavailable");
         }
         byte[] storedBytes = Files.readAllBytes(path);
@@ -516,7 +519,7 @@ public class DocumentService {
                 ? (isStudentProjectZip(request, file, fileBytes) ? "project.zip" : "document.pdf")
                 : file.getOriginalFilename();
         String storedName = UUID.randomUUID() + "_" + sanitizeFileName(originalName);
-        Path target = studentRoot.resolve(storedName);
+        Path target = studentRoot.resolve(storedName).toAbsolutePath().normalize();
         FileEncryptionService.EncryptedPayload encrypted = fileEncryptionService.encrypt(fileBytes);
         Files.write(target, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
@@ -545,7 +548,7 @@ public class DocumentService {
         entity.setCourse(trimToNull(request.course()));
         entity.setMarks(request.marks());
         entity.setExamRoom(trimToNull(request.examRoom()));
-        entity.setFilePath(target.toString());
+        entity.setFilePath(archiveStoragePaths.toStoredPath(target));
         entity.setEncrypted(fileEncryptionService.isEnabled());
         entity.setEncryptionIv(encrypted.ivBase64());
         entity.setMimeType(file.getContentType() == null || file.getContentType().isBlank()
@@ -663,7 +666,11 @@ public class DocumentService {
         ArchiveTreeService.StudentWorkspace workspace = archiveTreeService.ensureStudentWorkspace(student);
         entity.setFolderId(workspace.myProjectsPending().getId());
 
-        Path studentRoot = Path.of(entity.getFilePath()).getParent();
+        Path studentRoot = null;
+        Path existingPath = archiveStoragePaths.resolveExisting(entity.getFilePath());
+        if (existingPath != null) {
+            studentRoot = existingPath.getParent();
+        }
         if (studentRoot == null) {
             studentRoot = storageRoot;
         }
@@ -717,7 +724,7 @@ public class DocumentService {
             Files.write(target, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             deleteQuietly(entity.getFilePath());
             entity.setFileName(originalName);
-            entity.setFilePath(target.toString());
+            entity.setFilePath(archiveStoragePaths.toStoredPath(target));
             entity.setEncrypted(fileEncryptionService.isEnabled());
             entity.setEncryptionIv(encrypted.ivBase64());
             entity.setMimeType(file.getContentType() == null || file.getContentType().isBlank()
@@ -761,7 +768,12 @@ public class DocumentService {
             return;
         }
         try {
-            Files.deleteIfExists(Path.of(pathValue));
+            Path stored = archiveStoragePaths.resolveExisting(pathValue);
+            if (stored != null) {
+                Files.deleteIfExists(stored);
+            } else {
+                Files.deleteIfExists(Path.of(pathValue));
+            }
         } catch (IOException ignored) {
             // Best-effort cleanup of replaced files.
         }
@@ -968,7 +980,7 @@ public class DocumentService {
         String originalName = file.getOriginalFilename() == null ? "document.pdf" : file.getOriginalFilename();
         Path previousPath = entity.getFilePath() == null || entity.getFilePath().isBlank()
                 ? null
-                : Path.of(entity.getFilePath());
+                : archiveStoragePaths.resolveExisting(entity.getFilePath());
         Path targetDirectory = previousPath != null && previousPath.getParent() != null
                 ? previousPath.getParent()
                 : storageRoot.resolve("replaced");
@@ -980,7 +992,7 @@ public class DocumentService {
         Files.write(targetPath, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
         entity.setFileName(sanitizeFileName(originalName));
-        entity.setFilePath(targetPath.toString());
+        entity.setFilePath(archiveStoragePaths.toStoredPath(targetPath));
         entity.setMimeType(replacementType == DocumentType.ZIP ? "application/zip" : "application/pdf");
         entity.setSizeBytes((long) fileBytes.length);
         entity.setEncrypted(fileEncryptionService.isEnabled());
@@ -1070,7 +1082,10 @@ public class DocumentService {
 
         if (entity.getFilePath() != null && !entity.getFilePath().isBlank()) {
             try {
-                Files.deleteIfExists(Path.of(entity.getFilePath()));
+                Path stored = archiveStoragePaths.resolveExisting(entity.getFilePath());
+                if (stored != null) {
+                    Files.deleteIfExists(stored);
+                }
             } catch (IOException ignored) {
                 // File removal should not block database cleanup.
             }
@@ -1432,7 +1447,10 @@ public class DocumentService {
     }
 
     private byte[] readDecryptedBytes(DocumentEntity document) throws IOException {
-        Path path = Path.of(document.getFilePath());
+        Path path = archiveStoragePaths.resolveExisting(document.getFilePath());
+        if (path == null) {
+            throw new IOException("Stored file is unavailable");
+        }
         byte[] stored = Files.readAllBytes(path);
         if (Boolean.TRUE.equals(document.getEncrypted())) {
             return fileEncryptionService.decrypt(stored, document.getEncryptionIv());

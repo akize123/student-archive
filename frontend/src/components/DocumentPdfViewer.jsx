@@ -208,6 +208,19 @@ export default function DocumentPdfViewer({
   }, [documentId, sharedAccess, allowDownload, sharePermission, sharePermissionLabel])
 
   useEffect(() => {
+    if (!documentId) {
+      return undefined
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        onClose?.()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [documentId, onClose])
+
+  useEffect(() => {
     if (!accessViaShare || canDownload) {
       return undefined
     }

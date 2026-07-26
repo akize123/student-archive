@@ -16,13 +16,16 @@ import java.time.LocalDateTime;
 public class PdfOptimizationService {
     private final DocumentRepository documentRepository;
     private final FileEncryptionService fileEncryptionService;
+    private final ArchiveStoragePaths archiveStoragePaths;
 
     public PdfOptimizationService(
             DocumentRepository documentRepository,
-            FileEncryptionService fileEncryptionService
+            FileEncryptionService fileEncryptionService,
+            ArchiveStoragePaths archiveStoragePaths
     ) {
         this.documentRepository = documentRepository;
         this.fileEncryptionService = fileEncryptionService;
+        this.archiveStoragePaths = archiveStoragePaths;
     }
 
     @Async
@@ -57,8 +60,8 @@ public class PdfOptimizationService {
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             return;
         }
-        Path path = Path.of(document.getFilePath());
-        if (!Files.exists(path)) {
+        Path path = archiveStoragePaths.resolveExisting(document.getFilePath());
+        if (path == null) {
             return;
         }
 

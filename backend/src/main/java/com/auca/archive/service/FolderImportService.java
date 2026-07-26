@@ -58,6 +58,7 @@ public class FolderImportService {
     private final ArchiveTreeService archiveTreeService;
     private final DocumentChecksumService checksumService;
     private final PdfOptimizationService pdfOptimizationService;
+    private final ArchiveStoragePaths archiveStoragePaths;
     private final Path storageRoot;
     private final long maxUploadSizeBytes;
 
@@ -75,7 +76,7 @@ public class FolderImportService {
             ArchiveTreeService archiveTreeService,
             DocumentChecksumService checksumService,
             PdfOptimizationService pdfOptimizationService,
-            @Value("${archive.storage-root:storage}") String storageRoot,
+            ArchiveStoragePaths archiveStoragePaths,
             @Value("${archive.max-upload-size-bytes:10485760}") long maxUploadSizeBytes
     ) {
         this.folderService = folderService;
@@ -91,7 +92,8 @@ public class FolderImportService {
         this.archiveTreeService = archiveTreeService;
         this.checksumService = checksumService;
         this.pdfOptimizationService = pdfOptimizationService;
-        this.storageRoot = Path.of(storageRoot);
+        this.archiveStoragePaths = archiveStoragePaths;
+        this.storageRoot = archiveStoragePaths.storageRoot();
         this.maxUploadSizeBytes = maxUploadSizeBytes;
     }
 
@@ -458,14 +460,9 @@ public class FolderImportService {
                         ? (request.defaultCategory() == null ? defaultCategoryForRole(role) : request.defaultCategory())
                         : mapping.category();
                 String documentTypeName = category.getDisplayName();
-                FolderEntity documentFolder = archiveTreeService.ensureStudentDocumentPath(
-                        studentRoot,
-                        context.academicYear(),
-                        context.semester(),
-                        documentTypeName
-                );
+                // Keep imported files directly in the student ID folder (no year/type channels).
                 importPdf(
-                        documentFolder,
+                        studentRoot,
                         fileName,
                         fileBytes,
                         targetFolderName,
@@ -631,7 +628,7 @@ public class FolderImportService {
 
         String safeOriginalName = sanitizeFileName(fileName);
         String storedName = UUID.randomUUID() + "_" + safeOriginalName;
-        Path target = importRoot.resolve(storedName);
+        Path target = importRoot.resolve(storedName).toAbsolutePath().normalize();
         FileEncryptionService.EncryptedPayload encrypted = fileEncryptionService.encrypt(fileBytes);
         Files.write(target, encrypted.bytes(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
@@ -647,7 +644,7 @@ public class FolderImportService {
         entity.setUploadedBy(uploadedBy);
         entity.setUploadedByRole(role);
         entity.setDescription("Imported from external archive");
-        entity.setFilePath(target.toString());
+        entity.setFilePath(archiveStoragePaths.toStoredPath(target));
         entity.setEncrypted(fileEncryptionService.isEnabled());
         entity.setEncryptionIv(encrypted.ivBase64());
         entity.setMimeType("application/pdf");

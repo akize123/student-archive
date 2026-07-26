@@ -302,6 +302,11 @@ public class ArchiveTreeService {
             return workspace.myProjectsPending();
         }
 
+        // Staff semester uploads land directly in the student ID folder — no category/type nesting.
+        if (staffPlacementUpload) {
+            return workspace.studentRoot();
+        }
+
         return ensureStudentDocumentPath(
                 workspace.studentRoot(),
                 request.academicYear(),
@@ -486,6 +491,10 @@ public class ArchiveTreeService {
             return studentBase.resolve(sanitizePath(FINAL_YEAR_PROJECT_SUFFIX));
         }
 
+        if (role != null && role != UserRole.STUDENT) {
+            return studentBase;
+        }
+
         return appendDocumentInnerPath(
                 studentBase,
                 request.academicYear(),
@@ -525,6 +534,10 @@ public class ArchiveTreeService {
 
         if (role == UserRole.STUDENT && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
             return studentBase.resolve(sanitizePath(FINAL_YEAR_PROJECT_SUFFIX));
+        }
+
+        if (role != null && role != UserRole.STUDENT) {
+            return studentBase;
         }
 
         return appendDocumentInnerPath(
@@ -587,14 +600,7 @@ public class ArchiveTreeService {
                 .resolve(sanitizePath(term.academicYear()))
                 .resolve(sanitizePath(term.semesterFolderName()))
                 .resolve(sanitizePath(studentNumber));
-        return appendDocumentInnerPath(
-                studentBase,
-                academicYear,
-                semester,
-                studentNumber,
-                categoryName,
-                documentTypeName
-        );
+        return studentBase;
     }
 
     /**
@@ -750,6 +756,19 @@ public class ArchiveTreeService {
                 || normalized.endsWith("-" + ARCHIVE_PROJECT_SUFFIX)
                 || normalized.endsWith("-" + MY_PROJECTS_PENDING_SUFFIX)
                 || normalized.endsWith("-" + MY_PROJECTS_REJECTED_SUFFIX);
+    }
+
+    /** Nested year/category folders previously created under a student ID during upload. */
+    public static boolean isDocumentChannelFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        String normalized = code.toUpperCase(Locale.ROOT);
+        return normalized.contains("-INAY-")
+                || normalized.contains("-INSEM-")
+                || normalized.contains("-CAT-")
+                || normalized.contains("-TYP-")
+                || normalized.endsWith("-SAPP");
     }
 
     public static boolean isMyProjectsPendingFolderCode(String code) {

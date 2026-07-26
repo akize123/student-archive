@@ -72,7 +72,7 @@ class FolderServiceTest {
                 studentIdFormatService,
                 academicTermService,
                 archiveTreeService,
-                "storage"
+                new ArchiveStoragePaths("storage")
         );
 
         List<FolderNodeResponse> tree = folderService.getTree();

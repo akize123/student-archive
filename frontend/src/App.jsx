@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useDeferredValue } from 'react'
-import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, importFolderArchive, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
+import { createSubfolder, decideApproval, deleteDocument, deleteFolder, downloadDocument, downloadFolderZip, formatLoginError, getActivities, getAdminDashboard, getAdminOffices, getArchivedDocuments, getDashboard, getFolder, getSharedWithMe, getSharedWithMeCount, getStudentArchive, previewFolderImport, login, lookupStudent, moveFolder, copyFolder, openDocument, permanentlyDeleteDocument, renameFolder, replaceDocumentFile, restoreDocument, scanDocument, searchDocuments, shareItems, submitUpload, addDepartmentAcademicYear } from './api'
 import AdminDashboard from './components/AdminDashboard'
 import AdminOfficeView from './components/AdminOfficeView'
 import { buildAdminOffices, filterArchiveTreeForOffice } from './adminOfficeUtils'
@@ -11,6 +11,8 @@ import StudentDashboard from './components/StudentDashboard'
 import StudentFypWizard from './components/StudentFypWizard'
 import ProjectCoverPhoto from './components/ProjectCoverPhoto'
 import BrandLogo from './components/BrandLogo'
+import ImportPreviewWizard from './components/ImportPreviewWizard'
+import DocumentPdfViewer from './components/DocumentPdfViewer'
 import {
   applyStudentIdDefaults,
   normalizeStudentId,
@@ -1355,6 +1357,7 @@ function buildDefaultUploadForm() {
   return {
     studentNumber: '',
     studentName: '',
+    title: '',
     faculty: '',
     department: '',
     uploadedBy: '',
@@ -2119,6 +2122,7 @@ function DocumentContextMenu({
   y,
   documentItem,
   busy,
+  onOpenInViewer,
   onOpenInNewWindow,
   onDownload,
   onClose
@@ -2135,6 +2139,14 @@ function DocumentContextMenu({
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
+      <button
+        type="button"
+        role="menuitem"
+        disabled={busy}
+        onClick={() => { onOpenInViewer?.(documentItem); onClose?.() }}
+      >
+        Open in viewer
+      </button>
       <button
         type="button"
         role="menuitem"
@@ -2291,6 +2303,10 @@ function FolderView({
   const replaceInputRef = useRef(null)
   const importInputRef = useRef(null)
   const [importBusy, setImportBusy] = useState(false)
+  const [importPreviewOpen, setImportPreviewOpen] = useState(false)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importPayload, setImportPayload] = useState(null)
+  const [viewerDocument, setViewerDocument] = useState(null)
 
   useEffect(() => {
     setSelectedFolderIds(new Set())
@@ -2380,6 +2396,13 @@ function FolderView({
     } finally {
       setOpeningDocumentId(null)
     }
+  }
+
+  function handleOpenDocumentInViewer(documentItem) {
+    if (!documentItem?.id) {
+      return
+    }
+    setViewerDocument(documentItem)
   }
 
   function handleDocumentClick(event, documentItem) {
@@ -2585,20 +2608,33 @@ function FolderView({
   async function runFolderImport(payload) {
     setImportBusy(true)
     try {
-      const result = await importFolderArchive(folder.id, payload)
-      const skippedNote = result.skippedCount
-        ? ` ${result.skippedCount} item${result.skippedCount === 1 ? '' : 's'} skipped.`
-        : ''
-      onNotify?.(
-        `Imported ${result.importedCount} document${result.importedCount === 1 ? '' : 's'} into "${folder.name}". `
-        + `ZIP archives are unzipped here — open folders below to browse the real content.${skippedNote}`
-      )
-      await onDataChange?.()
+      const preview = await previewFolderImport(folder.id, payload)
+      if (!preview?.importableCount && !(preview?.items || []).length) {
+        const detail = (preview?.messages || []).join(' ')
+        onNotify?.(detail || 'No importable PDF documents were found in the selected ZIP or folder.')
+        return
+      }
+      setImportPayload(payload)
+      setImportPreview(preview)
+      setImportPreviewOpen(true)
     } catch (err) {
-      onNotify?.(err.message || 'Import failed.')
+      onNotify?.(err.message || 'Import preview failed.')
     } finally {
       setImportBusy(false)
     }
+  }
+
+  async function handleImportCommitted(result) {
+    const skippedNote = result?.skippedCount
+      ? ` ${result.skippedCount} item${result.skippedCount === 1 ? '' : 's'} skipped.`
+      : ''
+    onNotify?.(
+      `Imported ${result?.importedCount || 0} document${result?.importedCount === 1 ? '' : 's'} into student folders under "${folder.name}".${skippedNote}`
+    )
+    setImportPreviewOpen(false)
+    setImportPreview(null)
+    setImportPayload(null)
+    await onDataChange?.()
   }
 
   async function collectDirectoryFiles(directoryHandle, parentPath = '') {
@@ -3110,7 +3146,7 @@ function FolderView({
                   onClick={handleImportDocumentsClick}
                 >
                   <FolderPlusIcon className="icon" />
-                  {importBusy ? 'Importing…' : 'Import documents'}
+                  {importBusy ? 'Preparing…' : 'Import documents'}
                 </button>
               ) : null}
               {canDownload ? (
@@ -3260,7 +3296,7 @@ function FolderView({
         </p>
       ) : visibleDocuments.length ? (
         <p className="explorer-hint">
-          Click to select a document. Right-click for open and download options. <kbd>Ctrl</kbd>+click to multi-select for bulk download or delete.
+          Click to select a document. Right-click to open in viewer, open in a new window, or download. <kbd>Ctrl</kbd>+click to multi-select for bulk download or delete.
         </p>
       ) : null}
 
@@ -3389,7 +3425,7 @@ function FolderView({
             onClick={(event) => handleDocumentClick(event, document)}
             onContextMenu={(event) => handleDocumentContextMenu(event, document)}
             onKeyDown={(event) => handleDocumentKeyDown(event, document)}
-            title="Click to select. Right-click for open and download."
+            title="Click to select. Right-click to open in viewer, new window, or download."
           >
             <ExplorerStatusBadge status={document.status} userRole={userRole} />
             <div className="explorer-item-icon file">
@@ -3431,10 +3467,35 @@ function FolderView({
         y={documentContextMenu?.y || 0}
         documentItem={documentContextMenu?.document}
         busy={Boolean(openingDocumentId)}
+        onOpenInViewer={handleOpenDocumentInViewer}
         onOpenInNewWindow={handleOpenDocument}
         onDownload={handleDownloadDocument}
         onClose={() => setDocumentContextMenu(null)}
       />
+
+      <ImportPreviewWizard
+        open={importPreviewOpen}
+        folderId={folder?.id}
+        preview={importPreview}
+        importPayload={importPayload}
+        categoryOptions={getVisibleDocumentCategories(userRole)}
+        onClose={() => {
+          setImportPreviewOpen(false)
+          setImportPreview(null)
+          setImportPayload(null)
+        }}
+        onCommitted={handleImportCommitted}
+        onNotify={onNotify}
+      />
+
+      {viewerDocument?.id ? (
+        <DocumentPdfViewer
+          documentId={viewerDocument.id}
+          title={viewerDocument.title || viewerDocument.fileName}
+          onClose={() => setViewerDocument(null)}
+          onNotify={onNotify}
+        />
+      ) : null}
     </section>
   )
 }
@@ -3447,9 +3508,10 @@ function looksLikeStudentId(query) {
   return /[\d]/.test(trimmed) && /^[\w./-]+$/.test(trimmed)
 }
 
-function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onDownloadDocument, onOpenFolder, onClear, mode = 'documents' }) {
+function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocument, onDownloadDocument, onOpenFolder, onClear, mode = 'documents', onNotify }) {
   const [documentContextMenu, setDocumentContextMenu] = useState(null)
   const [openingDocumentId, setOpeningDocumentId] = useState(null)
+  const [viewerDocument, setViewerDocument] = useState(null)
 
   useEffect(() => {
     if (!documentContextMenu) {
@@ -3574,7 +3636,7 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                         }
                       })
                     }}
-                    title={isDocument ? 'Right-click for open and download options' : 'Open archive location'}
+                    title={isDocument ? 'Right-click for viewer, new window, or download' : 'Open archive location'}
                   >
                     <td>
                       <div className="file-cell">
@@ -3639,10 +3701,25 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
                               disabled={openingDocumentId === fileRow.id}
                               onClick={(event) => {
                                 event.stopPropagation()
+                                setViewerDocument({
+                                  id: fileRow.id,
+                                  fileName: fileRow.fileName,
+                                  title: fileRow.title
+                                })
+                              }}
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              className="dash-text-btn"
+                              disabled={openingDocumentId === fileRow.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
                                 handleOpenSearchDocument(fileRow.id)
                               }}
                             >
-                              Open file
+                              New window
                             </button>
                             <button
                               type="button"
@@ -3694,10 +3771,19 @@ function GlobalSearchResults({ query, busy, results, studentProfile, onOpenDocum
         y={documentContextMenu?.y || 0}
         documentItem={documentContextMenu?.document}
         busy={Boolean(openingDocumentId)}
+        onOpenInViewer={(documentItem) => setViewerDocument(documentItem)}
         onOpenInNewWindow={(documentItem) => handleOpenSearchDocument(documentItem.id)}
         onDownload={(documentItem) => handleDownloadSearchDocument(documentItem.id)}
         onClose={() => setDocumentContextMenu(null)}
       />
+      {viewerDocument?.id ? (
+        <DocumentPdfViewer
+          documentId={viewerDocument.id}
+          title={viewerDocument.title || viewerDocument.fileName || viewerDocument.documentTitle}
+          onClose={() => setViewerDocument(null)}
+          onNotify={onNotify}
+        />
+      ) : null}
     </section>
   )
 }
@@ -4563,7 +4649,7 @@ function App() {
       })
     : uploadPlacementSummary
   const uploadTitlePreview = usesPlacementUpload
-    ? buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || form.studentNumber)
+    ? (String(form.title || '').trim() || 'Untitled document')
     : getCategoryMeta(form.category).label
 
   async function handleDecision(taskId, decision, reviewNote = '') {
@@ -5237,6 +5323,7 @@ function App() {
     setForm({
       ...buildDefaultUploadForm(),
       category: roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || buildDefaultUploadForm().category,
+      title: '',
       uploadedBy: session?.fullName || session?.username || '',
       faculty: placement?.faculty || '',
       department: placement?.department || '',
@@ -5313,6 +5400,10 @@ function App() {
       showNotice('Enter the student name to link this new student ID.')
       return
     }
+    if (usesPlacementUpload && !String(form.title || '').trim()) {
+      showNotice('Enter a document title.')
+      return
+    }
     if (usesPlacementUpload && (!form.faculty || !form.department || !form.academicYear || !form.semester)) {
       showNotice('Upload placement could not be determined. Open a semester folder under a department and try again.')
       return
@@ -5328,14 +5419,14 @@ function App() {
             faculty: form.faculty,
             department: form.department,
             uploadedBy: form.uploadedBy,
-            category: form.category,
+            category: form.category || roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || 'APPLICATION_DOCUMENTS',
             pageCount: resolvedPageCount,
-            academicYear: String(form.academicYear || '').trim() || null,
-            semester: String(form.semester || '').trim() || null,
+            academicYear: null,
+            semester: null,
             placementAcademicYear: String(form.academicYear || '').trim() || null,
             placementSemester: String(form.semester || '').trim() || null,
             issueDate: todayInputValue(),
-            title: buildPlacementUploadTitle(form, studentLookupResult?.studentNumber || studentNumber),
+            title: String(form.title || '').trim(),
             description: null,
             tags: null,
             examType: isExamOfficer ? '' : null,
@@ -5557,6 +5648,7 @@ function App() {
               onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
               onDownloadDocument={handleDownloadDocumentById}
               onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
+              onNotify={showNotice}
             />
           ) : null}
           {isFolderRoute ? (
@@ -5640,6 +5732,7 @@ function App() {
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
                   onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
+                  onNotify={showNotice}
                 />
               ) : null}
               {selectedAdminOffice ? (
@@ -5801,6 +5894,7 @@ function App() {
                   onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
                   onDownloadDocument={handleDownloadDocumentById}
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
+                  onNotify={showNotice}
                 />
               ) : null}
 
@@ -6332,27 +6426,15 @@ function App() {
                     </div>
                   </div>
 
-                  {!documentTypeLocked ? (
-                    <label className="upload-type-field">
-                      <span>Document type</span>
-                      <select
-                        value={form.category}
-                        onChange={(event) => setForm({ ...form, category: event.target.value })}
-                      >
-                        {visibleDocumentCategories.map((category) => (
-                          <option key={category.value} value={category.value}>
-                            {category.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-
-                  {form.academicYear && form.semester && (form.studentNumber?.trim() || studentLookupResult?.studentNumber) ? (
-                    <p className="upload-generated-title">
-                      Generated title: <strong>{uploadTitlePreview}</strong>
-                    </p>
-                  ) : null}
+                  <label className="upload-type-field">
+                    <span>Document title</span>
+                    <input
+                      value={form.title}
+                      onChange={(event) => setForm({ ...form, title: event.target.value })}
+                      placeholder="Type the document name"
+                      required
+                    />
+                  </label>
                 </section>
               ) : null}
 
