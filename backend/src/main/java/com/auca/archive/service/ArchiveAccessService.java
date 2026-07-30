@@ -220,7 +220,7 @@ public class ArchiveAccessService {
             case EXAMINATION_OFFICER -> Set.of(StudentDocumentCategory.EXAMINATION_DOCUMENTS);
             case HOD -> Set.of(StudentDocumentCategory.APPLICATION_DOCUMENTS);
             case LIBRARIAN -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT);
-            case STUDENT -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT);
+            case STUDENT -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT, StudentDocumentCategory.APPLICATION_DOCUMENTS);
         };
     }
 

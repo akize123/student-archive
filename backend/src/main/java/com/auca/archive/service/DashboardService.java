@@ -124,7 +124,7 @@ public class DashboardService {
                 folderService.getTree(rawRole, rawStudentNumber, viewerDepartment),
                 recentFiles,
                 includeApprovals
-                        ? approvalTaskRepository.findByStatusOrderByRequestedAtAsc(ApprovalStatus.PENDING)
+                        ? approvalTaskRepository.findByOrderByRequestedAtDesc()
                                 .stream()
                                 .filter(task -> task.getDocumentId() != null)
                                 .filter(task -> documentRepository.findById(task.getDocumentId())

@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import JSZip from 'jszip'
 import { getDocument, submitUpload, updatePendingFinalYearProject } from '../api'
+import { studentFacultyOptions } from '../academicDepartments'
 import { validateImageFile, validateZipFile } from '../fileSignatures'
+import { validateFacePhotoRequirements, validateFypDescription, validateFypStep1Selection, validateGithubRepositoryUrl } from '../fypValidation'
 import { CheckIcon, UploadIcon, XIcon } from './Icons'
 
 const STEPS = [
@@ -115,6 +118,8 @@ export default function StudentFypWizard({
     zipFile: null
   })
   const [coverPreview, setCoverPreview] = useState('')
+  const [photoValidationMessage, setPhotoValidationMessage] = useState('')
+  const [zipPreview, setZipPreview] = useState(null)
 
   const studentNumber = session.studentNumber || ''
   const studentName = session.fullName || ''
@@ -172,6 +177,7 @@ export default function StudentFypWizard({
     const file = event.target.files?.[0] || null
     updateField('coverPhoto', file)
     setFaceConfirmed(false)
+    setPhotoValidationMessage('')
     if (coverPreview) {
       URL.revokeObjectURL(coverPreview)
     }
@@ -187,12 +193,112 @@ export default function StudentFypWizard({
       event.target.value = ''
       return
     }
+
+    let imageInfo = null
+    try {
+      const objectUrl = URL.createObjectURL(file)
+      const image = await new Promise((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => resolve(img)
+        img.onerror = () => reject(new Error('Could not read selected image.'))
+        img.src = objectUrl
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      context.drawImage(image, 0, 0)
+      const pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data
+
+      let red = 0
+      let green = 0
+      let blue = 0
+      let brightnessRange = 0
+      let edgeDensity = 0
+      let sampleCount = 0
+
+      for (let index = 0; index < pixelData.length; index += 4) {
+        const r = pixelData[index] / 255
+        const g = pixelData[index + 1] / 255
+        const b = pixelData[index + 2] / 255
+        red += r
+        green += g
+        blue += b
+        brightnessRange = Math.max(brightnessRange, Math.max(r, g, b) - Math.min(r, g, b))
+        sampleCount += 1
+      }
+
+      const avgRed = red / sampleCount
+      const avgGreen = green / sampleCount
+      const avgBlue = blue / sampleCount
+      const colorVariance = Math.sqrt(((avgRed - 0.5) ** 2) + ((avgGreen - 0.5) ** 2) + ((avgBlue - 0.5) ** 2))
+
+      for (let index = 4; index < pixelData.length - 4; index += 4) {
+        const current = pixelData[index] + pixelData[index + 1] + pixelData[index + 2]
+        const previous = pixelData[index - 4] + pixelData[index - 3] + pixelData[index - 2]
+        if (Math.abs(current - previous) > 80) {
+          edgeDensity += 1
+        }
+      }
+
+      imageInfo = {
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        colorVariance,
+        edgeDensity: edgeDensity / sampleCount,
+        brightnessRange
+      }
+      URL.revokeObjectURL(objectUrl)
+    } catch {
+      imageInfo = null
+    }
+
+    const validationMessage = validateFacePhotoRequirements(imageInfo)
+    if (validationMessage) {
+      setPhotoValidationMessage(validationMessage)
+      onNotify?.(validationMessage)
+      updateField('coverPhoto', null)
+      setCoverPreview('')
+      event.target.value = ''
+      return
+    }
+
     const detection = await detectFaceInImage(file)
     if (!detection.ok) {
+      setPhotoValidationMessage(detection.message)
       onNotify?.(detection.message)
       updateField('coverPhoto', null)
       setCoverPreview('')
       event.target.value = ''
+    }
+  }
+
+  async function inspectZipFile(file) {
+    if (!file) {
+      setZipPreview(null)
+      return null
+    }
+
+    try {
+      const zip = await JSZip.loadAsync(file)
+      const pdfEntries = Object.entries(zip.files)
+        .filter(([entryName, entry]) => !entry.dir && /\.pdf$/i.test(entryName))
+        .map(([entryName, entry]) => ({
+          name: entryName,
+          size: entry._data?.uncompressedSize || 0
+        }))
+
+      if (!pdfEntries.length) {
+        setZipPreview({ kind: 'empty', message: 'The ZIP archive does not contain any PDF files.' })
+        return null
+      }
+
+      const firstPdf = pdfEntries[0]
+      setZipPreview({ kind: 'pdf', entryName: firstPdf.name, size: firstPdf.size })
+      return firstPdf
+    } catch {
+      setZipPreview({ kind: 'error', message: 'Unable to inspect the ZIP archive. Please choose a valid ZIP file.' })
+      return null
     }
   }
 
@@ -203,6 +309,14 @@ export default function StudentFypWizard({
       }
       if (!studentNumber || !studentName) {
         return 'Student account details are incomplete. Sign out and sign in again.'
+      }
+      const catalogError = validateFypStep1Selection(form.faculty, form.department)
+      if (catalogError) {
+        return catalogError
+      }
+      const descriptionError = validateFypDescription(form.description)
+      if (descriptionError) {
+        return descriptionError
       }
     }
     if (currentStep === 2) {
@@ -220,7 +334,7 @@ export default function StudentFypWizard({
       }
     }
     if (currentStep === 3) {
-      const github = isSafeHttpUrl(form.githubUrl, { requireGithub: true })
+      const github = validateGithubRepositoryUrl(form.githubUrl)
       if (!github.ok) {
         return github.message || 'GitHub link is invalid.'
       }
@@ -284,7 +398,7 @@ export default function StudentFypWizard({
 
     setBusy(true)
     try {
-      const github = isSafeHttpUrl(form.githubUrl, { requireGithub: Boolean(String(form.githubUrl || '').trim()) })
+      const github = validateGithubRepositoryUrl(form.githubUrl)
       const externalLinks = String(form.externalLinks || '')
         .split(/[\n,]+/)
         .map((item) => item.trim())
@@ -344,11 +458,7 @@ export default function StudentFypWizard({
       >
         <div className="modal-head">
           <div>
-            <p className="eyebrow">Final year project</p>
-            <h2 id="student-fyp-title">
-              {isEditMode ? 'Edit pending project submission' : 'Submit project for librarian review'}
-            </h2>
-            <p>{progressLabel}: {STEPS[step - 1].hint}</p>
+            <h2 id="student-fyp-title">{progressLabel}: {STEPS[step - 1].hint}</h2>
           </div>
           <button type="button" className="ghost-icon" onClick={onClose} disabled={busy} aria-label="Close">
             <XIcon className="icon" />
@@ -385,19 +495,34 @@ export default function StudentFypWizard({
               </label>
               <label>
                 <span>Faculty</span>
-                <input
+                <select
                   value={form.faculty}
-                  onChange={(event) => updateField('faculty', event.target.value)}
-                  placeholder="Faculty name"
-                />
+                  onChange={(event) => {
+                    const nextFaculty = event.target.value
+                    updateField('faculty', nextFaculty)
+                    updateField('department', '')
+                  }}
+                >
+                  <option value="">Select faculty…</option>
+                  {studentFacultyOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </label>
               <label>
                 <span>Department</span>
-                <input
+                <select
                   value={form.department}
                   onChange={(event) => updateField('department', event.target.value)}
-                  placeholder="Department name"
-                />
+                  disabled={!form.faculty}
+                >
+                  <option value="">Select department…</option>
+                  {studentFacultyOptions
+                    .find((option) => option.value === form.faculty)
+                    ?.departments.map((department) => (
+                      <option key={department} value={department}>{department}</option>
+                    ))}
+                </select>
               </label>
               <label className="fyp-span-2">
                 <span>Short description</span>
@@ -425,6 +550,9 @@ export default function StudentFypWizard({
                 </div>
               ) : existingCoverName ? (
                 <p className="fyp-file-selected">{existingCoverName}. Choose a new file only if you need to replace it.</p>
+              ) : null}
+              {photoValidationMessage ? (
+                <p className="fyp-help-copy" role="alert">{photoValidationMessage}</p>
               ) : null}
               <label className="fyp-confirm-face">
                 <input
@@ -457,7 +585,7 @@ export default function StudentFypWizard({
                 />
               </label>
               <p className="fyp-help-copy fyp-span-2">
-                Only safe http(s) links are accepted. Localhost, private IPs, and script/data URLs are blocked.
+                Only a valid GitHub repository URL is accepted here. Other links can be added below, but they must be safe http(s) URLs.
               </p>
             </div>
           ) : null}
@@ -482,16 +610,29 @@ export default function StudentFypWizard({
                       onNotify?.(signatureCheck.message)
                       event.target.value = ''
                       updateField('zipFile', null)
+                      setZipPreview(null)
                       return
                     }
                     updateField('zipFile', nextFile)
+                    await inspectZipFile(nextFile)
                   }}
                 />
               </label>
               {form.zipFile ? (
-                <p className="fyp-file-selected">
-                  Selected: <strong>{form.zipFile.name}</strong>
-                </p>
+                <div>
+                  <p className="fyp-file-selected">
+                    Selected: <strong>{form.zipFile.name}</strong>
+                  </p>
+                  {zipPreview?.kind === 'pdf' ? (
+                    <div className="fyp-help-copy">
+                      <strong>PDF found inside ZIP:</strong> {zipPreview.entryName} ({Math.round(zipPreview.size / 1024)} KB)
+                    </div>
+                  ) : zipPreview?.kind === 'empty' ? (
+                    <div className="fyp-help-copy" role="alert">{zipPreview.message}</div>
+                  ) : zipPreview?.kind === 'error' ? (
+                    <div className="fyp-help-copy" role="alert">{zipPreview.message}</div>
+                  ) : null}
+                </div>
               ) : existingZipName ? (
                 <p className="fyp-file-selected">
                   Current ZIP: <strong>{existingZipName}</strong>. Choose a new file only if you need to replace it.

@@ -32,6 +32,7 @@ public record UploadDocumentRequest(
         String githubUrl,
         String externalLinks,
         String projectTitle,
+        String documentTypeName,
         Long documentSubtypeId,
         Long documentTypeId,
         Long categoryDefinitionId

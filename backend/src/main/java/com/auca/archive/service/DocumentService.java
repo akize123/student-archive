@@ -704,6 +704,7 @@ public class DocumentService {
                     title,
                     null,
                     null,
+                    null,
                     null
             )
                     : request;
@@ -1515,6 +1516,9 @@ public class DocumentService {
     }
 
     private String resolveDocumentTypeName(UploadDocumentRequest request) {
+        if (request.documentTypeName() != null && !request.documentTypeName().isBlank()) {
+            return request.documentTypeName().trim();
+        }
         if (request.documentTypeId() != null) {
             return documentTypeDefinitionService.requireActive(request.documentTypeId()).getName();
         }

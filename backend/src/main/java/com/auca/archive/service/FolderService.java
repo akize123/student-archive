@@ -119,7 +119,9 @@ public class FolderService {
             archiveTreeService.getObject().ensureLibrarianReviewFolders();
         }
 
-        List<FolderEntity> folders = folderRepository.findAll();
+        List<FolderEntity> folders = folderRepository.findAll().stream()
+                .filter(folder -> folder.getArchivedAt() == null)
+                .toList();
         Map<Long, FolderEntity> folderById = folders.stream()
                 .collect(Collectors.toMap(FolderEntity::getId, Function.identity()));
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
@@ -160,6 +162,7 @@ public class FolderService {
 
     public FolderEntity getFolderOrThrow(Long id) {
         return folderRepository.findById(id)
+                .filter(folder -> folder.getArchivedAt() == null)
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found: " + id));
     }
 
@@ -440,7 +443,7 @@ public class FolderService {
             throw new IllegalArgumentException("Folder not found: " + parentId);
         }
         if (role == UserRole.STUDENT && !canStudentCreateSubfolder(parent, studentNumber)) {
-            throw new IllegalArgumentException("You can only create folders inside Official Documents or Final Year Project");
+            throw new IllegalArgumentException("Final Year Project folders are managed automatically. New folders can only be created in Official Documents.");
         }
         if (role == UserRole.STUDENT && isArchiveProjectFolder(parent)) {
             throw new IllegalArgumentException("Archive project is managed automatically when a project is accepted");
@@ -640,16 +643,15 @@ public class FolderService {
     }
 
     @Transactional
-    public void deleteFolder(Long id, String rawRole) {
+    public void deleteFolder(Long id, String rawRole, String rawStudentNumber) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
-        if (role == UserRole.STUDENT) {
-            throw new IllegalArgumentException("Students cannot delete archive folders");
-        }
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        accessService.requireStudentAccount(role, studentNumber);
         FolderEntity folder = getFolderOrThrow(id);
-        if (!isFolderAccessible(folder, role)) {
+        if (!isFolderAccessible(folder, role, studentNumber)) {
             throw new IllegalArgumentException("Folder not found: " + id);
         }
-        requireShareAtLeast(folder, role, null, SharePermission.EDIT);
+        requireShareAtLeast(folder, role, studentNumber, SharePermission.EDIT);
         if (folder.getParentId() == null) {
             throw new IllegalArgumentException("System folders cannot be deleted");
         }
@@ -660,20 +662,32 @@ public class FolderService {
                 || ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())) {
             throw new IllegalArgumentException("System review folders cannot be deleted");
         }
-
-        boolean hasChildren = folderRepository.findAll().stream()
-                .anyMatch(candidate -> Objects.equals(candidate.getParentId(), id));
-        if (hasChildren) {
-            throw new IllegalArgumentException("Remove all subfolders before deleting this folder");
+        if (role == UserRole.STUDENT && !canStudentModifyFolder(folder, studentNumber)) {
+            throw new IllegalArgumentException("You can only delete folders you created in your personal workspace.");
         }
 
-        if (!documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(id).isEmpty()) {
-            throw new IllegalArgumentException("Remove all documents before deleting this folder");
+        Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folderRepository.findAll().stream()
+                .filter(item -> item.getArchivedAt() == null)
+                .toList());
+        List<Long> folderIds = new ArrayList<>();
+        collectFolderIds(folder, childrenByParent, folderIds);
+        LocalDateTime archivedAt = LocalDateTime.now();
+        String archivedBy = role == null ? "UNKNOWN" : role.name();
+        for (Long folderId : folderIds) {
+            FolderEntity item = folderRepository.findById(folderId).orElse(null);
+            if (item != null) {
+                item.setArchivedAt(archivedAt);
+                item.setArchivedBy(archivedBy);
+                folderRepository.save(item);
+            }
+            for (DocumentEntity document : documentRepository.findByFolderIdAndArchivedAtIsNullOrderByModifiedAtDesc(folderId)) {
+                document.setArchivedAt(archivedAt);
+                document.setArchivedBy(archivedBy);
+                document.setModifiedAt(archivedAt);
+                documentRepository.save(document);
+            }
         }
-
-        folderRepository.delete(folder);
     }
-
     public byte[] downloadAsZip(Long folderId, List<Long> documentIds, String rawRole) throws IOException {
         return downloadAsZip(folderId, documentIds, null, rawRole, null);
     }
@@ -1930,7 +1944,7 @@ public class FolderService {
             throw new IllegalArgumentException("Destination folder not found: " + targetParent.getId());
         }
         if (role == UserRole.STUDENT && !canStudentCreateSubfolder(targetParent, studentNumber)) {
-            throw new IllegalArgumentException("You can only paste folders inside Official Documents or Final Year Project");
+            throw new IllegalArgumentException("Final Year Project folders are managed automatically. You can only paste folders inside Official Documents.");
         }
     }
 

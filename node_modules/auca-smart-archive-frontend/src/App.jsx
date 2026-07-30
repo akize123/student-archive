@@ -604,7 +604,7 @@ function canStudentCreateInFolder(folder) {
   if (code.includes('-SARC') || code.includes('LIB-FYP')) {
     return false
   }
-  return code.includes('-SOFF') || code.includes('-SMY')
+  return code.includes('-SOFF')
 }
 
 function isStudentFinalYearProjectFolder(folder) {
@@ -1362,6 +1362,8 @@ function buildDefaultUploadForm() {
     department: '',
     uploadedBy: '',
     category: 'REGISTRATION_FORM',
+    documentTypeName: '',
+    customDocumentTypeName: '',
     examType: 'MID_SEM',
     academicYear: '',
     semester: '',
@@ -2277,7 +2279,7 @@ function FolderView({
   const showDepartmentShareTools = usesStructureArchiveBrowse(userRole) && isDepartmentFolder(folder)
   const canAddAcademicYear = canAddAcademicYearRole(userRole) && isDepartmentFolder(folder)
   const canCreateFolder = isStudent
-    ? canStudentCreateInFolder(folder)
+    ? canStudentCreateInFolder(folder) && !isStudentOfficialDocumentsFolder(folder)
     : !isStructureBrowseOnly && !showDepartmentShareTools && canStaffCreateArchiveSubfolder(folder, userRole)
   const showFypSubmit = isStudent && isStudentFinalYearProjectFolder(folder)
   const canUpload = isStudent
@@ -4862,26 +4864,12 @@ function App() {
       showNotice('Faculty and department folders are part of the system structure and cannot be deleted.')
       return
     }
-    const itemCount = folderNode.itemCount ?? 0
-    if (itemCount > 0) {
-      setAppConfirmInput('')
-      setAppConfirm({
-        title: 'Folder contains items',
-        message: `"${folderNode.name}" has ${itemCount} item${itemCount === 1 ? '' : 's'}. Open the folder and review or remove files before deleting it from the archive tree.`,
-        confirmLabel: 'Open folder',
-        cancelLabel: 'Close',
-        onConfirm: async () => {
-          openFolder(folderNode.id)
-        }
-      })
-      return
-    }
 
     setAppConfirmInput('')
     setAppConfirm({
-      title: 'Delete folder',
-      message: `Delete "${folderNode.name}" from the archive tree? This cannot be undone.`,
-      confirmLabel: 'Delete folder',
+      title: 'Move folder to Trash',
+      message: `Move "${folderNode.name}" and everything inside it to Trash? Its files will be kept safely until permanently removed by an administrator.`,
+      confirmLabel: 'Move to Trash',
       tone: 'danger',
       onConfirm: async () => {
         await deleteFolder(folderNode.id)
@@ -4892,11 +4880,10 @@ function App() {
         }
         const fresh = await getDashboard()
         setDashboard(fresh)
-        showNotice(`Folder "${folderNode.name}" deleted.`)
+        showNotice(`Folder "${folderNode.name}" moved to Trash.`)
       }
     })
   }
-
   function handleTreeAddFolder() {
     let parentId = activeFolderId
     let parentName = folderDetail?.name || 'Archive'
@@ -5322,7 +5309,9 @@ function App() {
     setStudentEntryMode('idle')
     setForm({
       ...buildDefaultUploadForm(),
-      category: roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || buildDefaultUploadForm().category,
+      category: isStudent && isStudentOfficialDocumentsFolder(folderDetail)
+        ? 'APPLICATION_DOCUMENTS'
+        : roleConfig.defaultCategory || visibleDocumentCategories[0]?.value || buildDefaultUploadForm().category,
       title: '',
       uploadedBy: session?.fullName || session?.username || '',
       faculty: placement?.faculty || '',
@@ -5364,6 +5353,10 @@ function App() {
     }
     if (isStudent && Number(file.size || 0) > 5 * 1024 * 1024) {
       showNotice('Student uploads are limited to 5 MB per file.')
+      return
+    }
+    if (isStudent && isStudentOfficialDocumentsFolder(folderDetail) && !String(form.documentTypeName === 'CUSTOM' ? form.customDocumentTypeName : form.documentTypeName).trim()) {
+      showNotice('Select a document type or enter a custom document type.')
       return
     }
     if (!isStudent && !usesPlacementUpload) {
@@ -5437,7 +5430,10 @@ function App() {
         : {
             ...form,
             studentNumber,
-            title: getCategoryMeta(form.category).label,
+            documentTypeName: form.documentTypeName === 'CUSTOM' ? String(form.customDocumentTypeName || '').trim() : String(form.documentTypeName || '').trim(),
+            title: isStudent && String(form.documentTypeName === 'CUSTOM' ? form.customDocumentTypeName : form.documentTypeName || '').trim()
+              ? String(form.documentTypeName === 'CUSTOM' ? form.customDocumentTypeName : form.documentTypeName).trim()
+              : getCategoryMeta(form.category).label,
             pageCount: resolvedPageCount,
             marks: form.marks === '' ? null : Number(form.marks),
             academicYear: isStudent ? null : String(form.academicYear || '').trim() || null,
@@ -5794,6 +5790,24 @@ function App() {
                 <AdminDashboard onNotify={showNotice} />
               )}
             </div>
+          ) : isLibrarian && dashboardView === 'default' && !isFolderRoute ? (
+            <LibrarianDashboard
+              session={session}
+              dashboard={data}
+              onNotify={showNotice}
+              onOpenDocument={(documentId) => openDocument(documentId).catch((err) => showNotice(err.message || 'Unable to open document.'))}
+              onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId)}
+              onBrowse={() => {
+                const firstFolder = (data.archiveTree || [])[0]
+                if (firstFolder) {
+                  openFolder(firstFolder.id)
+                }
+              }}
+              onReviewTask={(task) => {
+                setApprovalReviewTask(task)
+                setApprovalReviewNote('')
+              }}
+            />
           ) : isStudent && dashboardView === 'default' && !isFolderRoute ? (
             <StudentDashboard
               session={session}
@@ -5834,7 +5848,7 @@ function App() {
                   <DashboardSessionMeta lastSignIn={data.lastSignIn} />
                 </div>
                 <div className="dash-header-actions">
-                  {!hideHeaderBrowse ? (
+                  {!hideHeaderBrowse && !isStudent ? (
                     <button
                       className="ghost-btn dash-action-btn"
                       type="button"
@@ -5849,7 +5863,7 @@ function App() {
                       Browse
                     </button>
                   ) : null}
-                  {!showOfficeDashboardFormat && !isHod ? (
+                  {!showOfficeDashboardFormat && !isHod && !isStudent ? (
                     <button className="primary-btn dash-action-btn" type="button" onClick={openUploadModal}>
                       <UploadIcon className="icon" />
                       Upload
@@ -5896,38 +5910,6 @@ function App() {
                   onOpenFolder={(folderId) => handleOpenArchiveFolder(folderId, studentSearchProfile?.studentNumber)}
                   onNotify={showNotice}
                 />
-              ) : null}
-
-              {visibleDocumentCategories.length && !showOfficeDashboardFormat ? (
-                <nav className="dash-filters" aria-label="Activity areas">
-                  <button
-                    type="button"
-                    className={`dash-filter ${!selectedCategory ? 'active' : ''}`}
-                    onClick={() => {
-                      setDashboardView('default')
-                      setSelectedCategory('')
-                    }}
-                  >
-                    All activity
-                  </button>
-                  {visibleDocumentCategories.map((category) => {
-                    const active = selectedCategory === category.value
-                    return (
-                      <button
-                        key={category.value}
-                        type="button"
-                        className={`dash-filter ${active ? 'active' : ''}`}
-                        onClick={() => {
-                          setDashboardView('default')
-                          setSelectedCategory(active ? '' : category.value)
-                        }}
-                        title={category.summary}
-                      >
-                        {category.label}
-                      </button>
-                    )
-                  })}
-                </nav>
               ) : null}
 
               <section className={`dash-metrics ${showOfficeDashboardFormat ? 'dash-metrics-registrar' : ''}`}>
@@ -6147,58 +6129,6 @@ function App() {
                     </table>
                   </div>
                 </div>
-
-                {!showOfficeDashboardFormat ? (
-                <aside className="dash-panel dash-panel-side">
-                  <div className="dash-panel-head dash-panel-head-inline">
-                    <h2>Approvals</h2>
-                    <span className="dash-count">{data.awaitingApproval?.length || 0}</span>
-                  </div>
-
-                  <div className="dash-approval-list">
-                    {(data.awaitingApproval || []).length ? (data.awaitingApproval || []).map((task) => (
-                      <div key={task.id} className="dash-approval-item">
-                        <div className="approval-copy">
-                          <div className="approval-title">
-                            <DocumentIcon className="icon doc" />
-                            <strong>{task.documentTitle}</strong>
-                          </div>
-                          <span>{task.requestedBy}{task.studentNumber ? ` · ${task.studentNumber}` : ''}</span>
-                          <p>{task.note || 'Awaiting review'}</p>
-                        </div>
-                        <div className="approval-meta">
-                          <span className={`priority ${String(task.priority || '').toLowerCase()}`}>{task.priority}</span>
-                          <div className="approval-actions">
-                            {isLibrarian ? (
-                              <button
-                                type="button"
-                                className="tiny-btn"
-                                onClick={() => {
-                                  setApprovalReviewTask(task)
-                                  setApprovalReviewNote('')
-                                }}
-                              >
-                                Review
-                              </button>
-                            ) : (
-                              <>
-                                <button type="button" className="tiny-btn approve" onClick={() => handleDecision(task.id, 'approve')}>
-                                  <CheckIcon className="icon" /> Approve
-                                </button>
-                                <button type="button" className="tiny-btn reject" onClick={() => handleDecision(task.id, 'reject')}>
-                                  <XIcon className="icon" /> Reject
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )) : (
-                      <p className="dash-side-empty">Nothing waiting for approval.</p>
-                    )}
-                  </div>
-                </aside>
-                ) : null}
               </section>
 
               {error ? <div className="banner warning">{error}</div> : null}
@@ -6587,17 +6517,6 @@ function App() {
                 ) : null}
                 {!usesPlacementUpload ? (
                   <label>
-                    <span>Page count</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={form.pageCount}
-                      onChange={(event) => setForm({ ...form, pageCount: event.target.value })}
-                    />
-                  </label>
-                ) : null}
-                {!usesPlacementUpload ? (
-                  <label>
                     <span>Issue date</span>
                     <input
                       type="date"
@@ -6615,7 +6534,26 @@ function App() {
                     readOnly={isStudent || usesPlacementUpload}
                   />
                 </label>
-                {!usesPlacementUpload ? (
+                {isStudent && isStudentOfficialDocumentsFolder(folderDetail) ? (
+                  <>
+                    <label>
+                      <span>Document type</span>
+                      <select value={form.documentTypeName} onChange={(event) => setForm({ ...form, documentTypeName: event.target.value })}>
+                        <option value="">Select document type</option>
+                        {['Mark sheets / Transcripts', 'Degree certificates', 'Registration forms', 'Entrance exam cards', 'Recommendation/reference letters', 'Internship completion certificates', 'Diploma certificates', 'Provisional certificates', 'Migration certificates', 'Character/conduct certificates', 'Semester/year result sheets', 'Thesis/dissertation/project reports'].map((type) => (
+                          <option key={type} value={type}>{type}</option>
+                        ))}
+                        <option value="CUSTOM">Other (enter your own)</option>
+                      </select>
+                    </label>
+                    {form.documentTypeName === 'CUSTOM' ? (
+                      <label>
+                        <span>Custom document type</span>
+                        <input value={form.customDocumentTypeName} onChange={(event) => setForm({ ...form, customDocumentTypeName: event.target.value })} placeholder="e.g. Medical certificate" required />
+                      </label>
+                    ) : null}
+                  </>
+                ) : !usesPlacementUpload ? (
                   <label>
                     <span>Tags</span>
                     <input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="Optional" />
@@ -6755,10 +6693,7 @@ function App() {
                   <div className="upload-file-card">
                     <div className="upload-file-card-copy">
                       <strong>{file.name}</strong>
-                      <span>
-                        {formatBytes(file.size)}
-                        {form.pageCount ? ` · ${form.pageCount} page${Number(form.pageCount) === 1 ? '' : 's'}` : ''}
-                      </span>
+                      <span>{formatBytes(file.size)}</span>
                     </div>
                     <div className="upload-file-card-actions">
                       <button
@@ -6824,10 +6759,7 @@ function App() {
                       {scanResult.preview ? (
                         <p className="upload-scan-preview">“{scanResult.preview}”</p>
                       ) : null}
-                      <span className="upload-scan-meta">
-                        {scanResult.pageCount} page{scanResult.pageCount === 1 ? '' : 's'}
-                        {scanResult.scanMethod ? ` · ${scanResult.scanMethod}` : ''}
-                      </span>
+
                     </>
                   ) : null}
                 </div>

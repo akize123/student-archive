@@ -173,10 +173,13 @@ public class DocumentController {
     public DocumentScanResponse scan(
             @RequestPart("file") MultipartFile file,
             @RequestPart(value = "context", required = false) DocumentScanContext context
-    ) throws IOException {
-        return documentScanService.scan(file, context);
+    ) {
+        try {
+            return documentScanService.scan(file, context);
+        } catch (IOException | RuntimeException exception) {
+            throw new IllegalArgumentException("The PDF could not be scanned. Make sure it is a readable PDF, then try again.");
+        }
     }
-
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public DocumentDetailResponse upload(
             @Valid @RequestPart("metadata") UploadDocumentRequest metadata,

@@ -308,7 +308,7 @@ public class ArchiveTreeService {
         }
 
         return ensureStudentDocumentPath(
-                workspace.studentRoot(),
+                role == UserRole.STUDENT ? workspace.officialDocuments() : workspace.studentRoot(),
                 request.academicYear(),
                 request.semester(),
                 categoryName,

@@ -11,6 +11,8 @@ public interface ApprovalTaskRepository extends JpaRepository<ApprovalTaskEntity
 
     List<ApprovalTaskEntity> findByStatusOrderByRequestedAtAsc(ApprovalStatus status);
 
+    List<ApprovalTaskEntity> findByOrderByRequestedAtDesc();
+
     List<ApprovalTaskEntity> findByDocumentIdAndStatus(Long documentId, ApprovalStatus status);
 
     long countByStatus(ApprovalStatus status);

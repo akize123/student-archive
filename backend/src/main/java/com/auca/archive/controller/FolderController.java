@@ -158,11 +158,12 @@ public class FolderController {
     @DeleteMapping("/{id}")
     public Map<String, String> deleteFolder(
             @PathVariable Long id,
-            @RequestHeader(value = "X-User-Role", required = false) String role
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
-        folderService.deleteFolder(id, role);
+        folderService.deleteFolder(id, role, studentNumber);
         Map<String, String> response = new LinkedHashMap<>();
-        response.put("message", "Folder deleted");
+        response.put("message", "Folder moved to Trash");
         return response;
     }
 

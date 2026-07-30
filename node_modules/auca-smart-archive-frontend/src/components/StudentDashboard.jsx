@@ -93,47 +93,18 @@ export default function StudentDashboard({
   return (
     <div className="dashboard-workspace student-dashboard">
       <header className="dash-header student-dash-header">
-        <div className="dash-header-copy">
-          <nav className="dash-crumbs" aria-label="Breadcrumb">
-            <span>Student workspace</span>
-            <strong>{session.fullName}</strong>
-          </nav>
-          <h1>My archive</h1>
-          <p>
-            Use the sidebar folders for Official Documents, Final Year Project, and Archive project.
-            Open Final Year Project to submit through the guided steps.
-          </p>
-          <span className="dash-meta">Student ID: {session.studentNumber}</span>
+        <div className="dash-header-copy student-header-copy">
+          <div className="student-header-identity">
+            <span className="student-header-label">Student</span>
+            <strong className="student-header-name">
+              {session.studentNumber ? `${session.studentNumber}-${session.fullName}` : session.fullName}
+            </strong>
+          </div>
         </div>
         <div className="dash-header-actions">
-          <button className="ghost-btn dash-action-btn" type="button" onClick={onCreateFolder}>
-            <FolderPlusIcon className="icon" />
-            New subfolder
-          </button>
-          <button className="ghost-btn dash-action-btn" type="button" onClick={onBrowse}>
-            Browse
-          </button>
           {profileMenu}
         </div>
       </header>
-
-      <section className={`student-storage-card storage-${storageState}`}>
-        <div>
-          <p className="eyebrow">Personal storage</p>
-          <strong>{formatBytes(dashboard.storageUsedBytes)} used</strong>
-          <span>{formatBytes(dashboard.storageLimitBytes)} available</span>
-        </div>
-        <div className="student-storage-meter" aria-hidden="true">
-          <div className="student-storage-fill" style={{ width: `${storagePercent}%` }} />
-        </div>
-        <p className="student-storage-note">
-          {storageState === 'critical'
-            ? 'Storage is almost full. Delete older project files before uploading again.'
-            : storageState === 'warning'
-              ? 'You are nearing your personal storage limit.'
-              : 'Upload project ZIPs (max 1 MB) into Final Year Project. Pending submissions stay private until librarian approval.'}
-        </p>
-      </section>
 
       <div className="student-summary-grid">
         <article className="student-summary-card">
@@ -161,7 +132,6 @@ export default function StudentDashboard({
       <section className="student-documents-panel">
         <div className="student-panel-head">
           <div>
-            <p className="eyebrow">Official Documents</p>
             <h2>Received from registrar</h2>
           </div>
         </div>
@@ -173,7 +143,7 @@ export default function StudentDashboard({
                   <DocumentIcon className="icon" />
                   <div>
                     <strong>{document.title}</strong>
-                    <span>{categoryLabel(document.category)} · {formatDate(document.issueDate)}</span>
+                    <span>{categoryLabel(document.category)} Â· {formatDate(document.issueDate)}</span>
                   </div>
                 </div>
                 <button type="button" className="ghost-btn" onClick={() => onOpenDocument(document.id)}>
@@ -230,7 +200,7 @@ export default function StudentDashboard({
                   <div>
                     <strong>{document.title}</strong>
                     <span>
-                      {statusLabel(document.status)} · {formatBytes(document.sizeBytes)} · {formatDate(document.modifiedAt)}
+                      {statusLabel(document.status)} Â· {formatBytes(document.sizeBytes)} Â· {formatDate(document.modifiedAt)}
                     </span>
                     {document.githubUrl ? <span className="student-link-line">GitHub: {document.githubUrl}</span> : null}
                     {projectTab === 'rejected' && document.reviewNote ? (
