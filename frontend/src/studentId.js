@@ -1,7 +1,7 @@
 export const STUDENT_ID_FORMAT_HINT = 'YYYY + semester(1-3) + DEPT + SEQ (example: 20251SENG041)'
-export const LEGACY_STUDENT_ID_FORMAT_HINT = '5-10 digit number (example: 25876 or 25678965)'
+export const LEGACY_STUDENT_ID_FORMAT_HINT = '5-10 digit number (example: 25883 or 25678965)'
 export const STUDENT_ID_FORMATS_HINT = `${STUDENT_ID_FORMAT_HINT} or ${LEGACY_STUDENT_ID_FORMAT_HINT}`
-export const STAFF_FOLDER_NAME_HINT = STUDENT_ID_FORMAT_HINT
+export const STAFF_FOLDER_NAME_HINT = STUDENT_ID_FORMATS_HINT
 
 export const ACADEMIC_YEARS = [
   '2024-2025',
@@ -123,17 +123,18 @@ export function listDepartmentCodeHints() {
 }
 
 /**
- * Staff archive folders must be named like a modern student ID:
- * year + semester(1|2|3) + department code + 3-digit student sequence.
- * Example: 20251SENG041
+ * Staff semester student folders accept modern IDs (20251SENG041) or legacy numeric IDs (25883).
  */
 export function validateStaffFolderName(value) {
   const normalized = normalizeStudentId(value)
   if (!normalized) {
     return 'Folder name is required.'
   }
+  if (isLegacyStudentId(normalized)) {
+    return ''
+  }
   if (!isModernStudentId(normalized)) {
-    return `Folder name must be ${STAFF_FOLDER_NAME_HINT}. Semester must be 1, 2, or 3.`
+    return `Folder name must be ${STAFF_FOLDER_NAME_HINT}.`
   }
   const parsed = parseStudentId(normalized)
   if (!parsed?.departmentName) {

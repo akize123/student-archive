@@ -35,6 +35,8 @@ public record UploadDocumentRequest(
         String documentTypeName,
         Long documentSubtypeId,
         Long documentTypeId,
-        Long categoryDefinitionId
+        Long categoryDefinitionId,
+        /** When set, staff uploads land in this folder (must be inside a semester student tree). */
+        Long targetFolderId
 ) {
 }

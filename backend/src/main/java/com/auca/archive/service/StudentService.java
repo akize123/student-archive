@@ -77,11 +77,21 @@ public class StudentService {
 
         StudentEntity existing = studentRepository.findByStudentNumber(normalizedNumber).orElse(null);
         if (existing != null) {
-            if (normalizedName != null && !existing.getFullName().equalsIgnoreCase(normalizedName)) {
-                throw new IllegalArgumentException("Student ID " + normalizedNumber + " already belongs to " + existing.getFullName());
-            }
             rejectCrossDepartmentPlacement(existing, normalizedFaculty, normalizedDepartment);
             boolean changed = false;
+            if (normalizedName != null && !normalizedName.isBlank()) {
+                if (placementFromArchiveContext
+                        && !normalizedName.equalsIgnoreCase(normalizedNumber)
+                        && !normalizedName.equals(existing.getFullName())) {
+                    existing.setFullName(normalizedName);
+                    changed = true;
+                } else if (!existing.getFullName().equalsIgnoreCase(normalizedName)) {
+                    throw new IllegalArgumentException("Student ID " + normalizedNumber + " already belongs to " + existing.getFullName());
+                } else if (!existing.getFullName().equals(normalizedName)) {
+                    existing.setFullName(normalizedName);
+                    changed = true;
+                }
+            }
             if ((existing.getFaculty() == null || existing.getFaculty().isBlank()) && normalizedFaculty != null) {
                 existing.setFaculty(normalizedFaculty);
                 changed = true;
@@ -142,7 +152,7 @@ public class StudentService {
                 .stream()
                 .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role, rawSessionStudentNumber))
-                .map(this::toListItem)
+                .map(document -> toListItem(document, role, rawSessionStudentNumber))
                 .toList();
 
         ArchiveTreeService.StudentUploadPlacement placement = archiveTreeService.resolveStudentUploadPlacement(student);
@@ -254,7 +264,7 @@ public class StudentService {
         return value.trim();
     }
 
-    private DocumentListItemResponse toListItem(DocumentEntity document) {
+    private DocumentListItemResponse toListItem(DocumentEntity document, UserRole role, String studentNumber) {
         return new DocumentListItemResponse(
                 document.getId(),
                 document.getTitle(),
@@ -286,7 +296,8 @@ public class StudentService {
                 document.getExternalLinks(),
                 document.getReviewNote(),
                 document.getDescription(),
-                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank(),
+                folderService.canDownloadDocument(document, role, studentNumber)
         );
     }
 }

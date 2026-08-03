@@ -132,10 +132,14 @@ export function getFolder(folderId) {
   return request(`/api/folders/${folderId}`)
 }
 
-export function createSubfolder(parentId, name) {
+export function createSubfolder(parentId, name, options = {}) {
+  const body = { name }
+  if (options.studentName) {
+    body.studentName = options.studentName
+  }
   return request(`/api/folders/${parentId}/subfolders`, {
     method: 'POST',
-    body: JSON.stringify({ name })
+    body: JSON.stringify(body)
   })
 }
 
@@ -165,7 +169,7 @@ export function importFolderArchive(folderId, { archive, files = [], paths = [] 
   })
 }
 
-export function previewFolderImport(folderId, { archive, files = [], paths = [], defaultCategory } = {}) {
+export function previewFolderImport(folderId, { archive, files = [], paths = [], defaultCategory, linkedStudentNumber } = {}) {
   const formData = new FormData()
   if (archive) {
     formData.append('archive', archive, archive.name || 'import.zip')
@@ -181,23 +185,44 @@ export function previewFolderImport(folderId, { archive, files = [], paths = [],
   if (defaultCategory) {
     formData.append('defaultCategory', defaultCategory)
   }
-  return request(`/api/folders/${encodeURIComponent(folderId)}/import/preview`, {
+  const params = new URLSearchParams()
+  if (linkedStudentNumber) {
+    params.set('linkedStudentNumber', linkedStudentNumber)
+  }
+  const query = params.toString()
+  return request(`/api/folders/${encodeURIComponent(folderId)}/import/preview${query ? `?${query}` : ''}`, {
     method: 'POST',
     body: formData
   })
 }
 
-export function commitFolderImport(folderId, commitRequest, { archive, files = [], paths = [] } = {}) {
+export function commitFolderImport(folderId, commitRequest, { archive, files = [], paths = [], overrideFiles = [] } = {}) {
   const formData = new FormData()
   formData.append('request', new Blob([JSON.stringify(commitRequest)], { type: 'application/json' }))
   if (archive) {
     formData.append('archive', archive, archive.name || 'import.zip')
-  }
-  if (files.length) {
-    files.forEach((file) => {
+    overrideFiles.forEach(({ path, file }) => {
+      if (!file || !path) {
+        return
+      }
       formData.append('files', file, file.name)
+      formData.append('paths', path)
     })
-    paths.forEach((path) => {
+  } else {
+    const fileMap = new Map()
+    files.forEach((file, index) => {
+      const path = paths[index]
+      if (file && path) {
+        fileMap.set(path, file)
+      }
+    })
+    overrideFiles.forEach(({ path, file }) => {
+      if (file && path) {
+        fileMap.set(path, file)
+      }
+    })
+    fileMap.forEach((file, path) => {
+      formData.append('files', file, file.name)
       formData.append('paths', path)
     })
   }
@@ -323,11 +348,12 @@ export function getActivities(scope, topic) {
 }
 
 export async function fetchDocumentPreview(documentId) {
-  return fetchDocumentFile(documentId)
+  return fetchDocumentFile(documentId, 'preview')
 }
 
-async function fetchDocumentFile(documentId) {
-  const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
+async function fetchDocumentFile(documentId, mode = 'download') {
+  const endpoint = mode === 'preview' ? 'preview' : 'download'
+  const response = await fetch(`${API_BASE}/api/documents/${documentId}/${endpoint}`, {
     headers: {
       ...getSessionRoleHeader()
     }
@@ -439,14 +465,15 @@ export function permanentlyDeleteDocument(documentId) {
   })
 }
 
-export function submitUpload(metadata, file, coverPhoto) {
+export function submitUpload(metadata, file, coverPhoto, options = {}) {
   const formData = new FormData()
   formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
   formData.append('file', file)
   if (coverPhoto) {
     formData.append('coverPhoto', coverPhoto)
   }
-  return request('/api/documents/upload', {
+  const query = options.validationOverride ? '?validationOverride=true' : ''
+  return request(`/api/documents/upload${query}`, {
     method: 'POST',
     body: formData
   })

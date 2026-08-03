@@ -1,9 +1,12 @@
 backend/target/
+backend/data/
+backend/tools/
 frontend/node_modules/
 frontend/dist/
 node_modules/
 storage/
 backend/storage/
+.tools/
 .DS_Store
 *.log
 tools/*.zip

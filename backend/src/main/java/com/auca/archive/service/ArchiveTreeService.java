@@ -302,7 +302,7 @@ public class ArchiveTreeService {
             return workspace.myProjectsPending();
         }
 
-        // Staff semester uploads land directly in the student ID folder — no category/type nesting.
+        // Staff semester uploads are placed into document-type subfolders by DocumentService.
         if (staffPlacementUpload) {
             return workspace.studentRoot();
         }
@@ -699,6 +699,10 @@ public class ArchiveTreeService {
         );
     }
 
+    public StudentUploadPlacement resolveUploadPlacementFromFolder(FolderEntity folder) {
+        return parseUploadPlacementFromFolder(folder);
+    }
+
     private StudentUploadPlacement parseUploadPlacementFromFolder(FolderEntity studentFolder) {
         String faculty = "";
         String department = "";
@@ -743,7 +747,26 @@ public class ArchiveTreeService {
             return false;
         }
         String normalized = code.toUpperCase(Locale.ROOT);
-        return normalized.contains("-STU-") && !isStudentDefaultFolderCode(normalized);
+        return normalized.contains("-STU-")
+                && !normalized.contains("-FLD-")
+                && !isStudentDefaultFolderCode(normalized);
+    }
+
+    /**
+     * Registrar uploads use document-type subfolders (FLD) under the semester student root
+     * so files appear in the archive tree instead of being hidden at the student ID level.
+     */
+    @Transactional
+    public FolderEntity ensureRegistrarDocumentSubfolder(FolderEntity folder, String subfolderName) {
+        if (folder == null || subfolderName == null || subfolderName.isBlank()) {
+            return folder;
+        }
+        if (!isSemesterStudentRootFolder(folder.getCode())) {
+            return folder;
+        }
+        String trimmedName = subfolderName.trim();
+        String code = folder.getCode() + "-FLD-" + sanitizeCode(trimmedName);
+        return folderService.resolveOrCreateFolder(trimmedName, code, folder.getId());
     }
 
     public static boolean isStudentDefaultFolderCode(String code) {

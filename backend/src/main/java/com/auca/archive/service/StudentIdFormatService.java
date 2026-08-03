@@ -13,8 +13,8 @@ import java.util.regex.Pattern;
 @Service
 public class StudentIdFormatService {
     public static final String FORMAT_HINT = "YYYY + semester(1-3) + DEPT + SEQ (example: 20251SENG041)";
-    public static final String LEGACY_FORMAT_HINT = "5-10 digit number (example: 25876 or 25678965)";
-    public static final String FOLDER_NAME_HINT = FORMAT_HINT;
+    public static final String LEGACY_FORMAT_HINT = "5-10 digit number (example: 25883 or 25678965)";
+    public static final String FOLDER_NAME_HINT = FORMAT_HINT + " or " + LEGACY_FORMAT_HINT;
 
     private static final Pattern MODERN_ID_PATTERN = Pattern.compile(
             "^(\\d{4})([123])([A-Z]{3,4})(\\d{3})$",
@@ -70,11 +70,14 @@ public class StudentIdFormatService {
         if (folderName == null || folderName.isBlank()) {
             throw new IllegalArgumentException("Folder name is required");
         }
-        String normalized = folderName.trim().toUpperCase(Locale.ROOT);
+        String trimmed = folderName.trim();
+        if (isLegacyFormat(trimmed)) {
+            return;
+        }
+        String normalized = trimmed.toUpperCase(Locale.ROOT);
         Optional<ParsedStudentId> parsed = parse(normalized);
         if (parsed.isEmpty()) {
-            throw new IllegalArgumentException("Folder name must be " + FOLDER_NAME_HINT
-                    + ". Semester must be 1, 2, or 3.");
+            throw new IllegalArgumentException("Folder name must be " + FOLDER_NAME_HINT + ".");
         }
         ParsedStudentId value = parsed.get();
         if (value.departmentName() == null) {
@@ -84,6 +87,14 @@ public class StudentIdFormatService {
         if (!"1".equals(value.intake()) && !"2".equals(value.intake()) && !"3".equals(value.intake())) {
             throw new IllegalArgumentException("Semester in the folder name must be 1, 2, or 3.");
         }
+    }
+
+    public String normalizeStaffFolderName(String folderName) {
+        if (folderName == null || folderName.isBlank()) {
+            return "";
+        }
+        String trimmed = folderName.trim();
+        return isLegacyFormat(trimmed) ? trimmed : trimmed.toUpperCase(Locale.ROOT);
     }
 
     public Optional<ParsedStudentId> parse(String studentNumber) {

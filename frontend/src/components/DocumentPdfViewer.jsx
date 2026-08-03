@@ -109,7 +109,7 @@ export default function DocumentPdfViewer({
   const [pdfBlob, setPdfBlob] = useState(null)
   const [filename, setFilename] = useState('')
   const [isPdf, setIsPdf] = useState(true)
-  const [canDownload, setCanDownload] = useState(sharedAccess ? allowDownload !== false : true)
+  const [canDownload, setCanDownload] = useState(allowDownload !== false)
   const [accessViaShare, setAccessViaShare] = useState(sharedAccess)
   const [activeSharePermissionLabel, setActiveSharePermissionLabel] = useState(sharePermissionLabel || '')
   const [shareExpiresAt, setShareExpiresAt] = useState(null)
@@ -119,15 +119,16 @@ export default function DocumentPdfViewer({
     if (!detail) {
       return
     }
+    const downloadAllowed = detail.allowDownload !== false
     if (detail.accessViaShare) {
       setAccessViaShare(true)
-      setCanDownload(detail.allowDownload !== false)
+      setCanDownload(downloadAllowed)
       setActiveSharePermissionLabel(detail.sharePermissionLabel || detail.sharePermission || sharePermissionLabel || 'Shared access')
       setShareExpiresAt(detail.shareExpiresAt || null)
       return
     }
     setAccessViaShare(false)
-    setCanDownload(true)
+    setCanDownload(downloadAllowed)
     setActiveSharePermissionLabel('')
     setShareExpiresAt(null)
   }
@@ -151,7 +152,7 @@ export default function DocumentPdfViewer({
       setActiveSharePermissionLabel(sharePermissionLabel || sharePermission || 'Shared access')
     } else {
       setAccessViaShare(false)
-      setCanDownload(true)
+      setCanDownload(allowDownload !== false)
       setActiveSharePermissionLabel('')
     }
 
@@ -164,9 +165,7 @@ export default function DocumentPdfViewer({
           return
         }
         applyAccessFromDetail(detail)
-        const downloadAllowed = detail?.accessViaShare
-          ? detail.allowDownload !== false
-          : true
+        const downloadAllowed = detail?.allowDownload !== false
         const extension = String(resolvedName || '').split('.').pop()?.toLowerCase() || ''
         const pdf = extension === 'pdf' || String(contentType || blob.type || '').includes('pdf')
         setFilename(resolvedName || 'document.pdf')
@@ -221,7 +220,7 @@ export default function DocumentPdfViewer({
   }, [documentId, onClose])
 
   useEffect(() => {
-    if (!accessViaShare || canDownload) {
+    if (canDownload) {
       return undefined
     }
 
@@ -264,7 +263,7 @@ export default function DocumentPdfViewer({
       window.removeEventListener('beforeprint', handleBeforePrint)
       window.removeEventListener('contextmenu', handleContextMenu, true)
     }
-  }, [accessViaShare, canDownload, onNotify])
+  }, [canDownload, onNotify])
 
   async function handleDownload() {
     if (!documentId || !canDownload) {
@@ -283,7 +282,7 @@ export default function DocumentPdfViewer({
   const modalClassName = [
     'modal',
     'document-viewer-modal',
-    accessViaShare && !canDownload ? 'document-viewer-view-only' : '',
+    !canDownload ? 'document-viewer-view-only' : '',
     isMaximized ? 'document-viewer-modal-maximized' : '',
     isMinimized ? 'document-viewer-modal-minimized' : ''
   ].filter(Boolean).join(' ')
@@ -333,7 +332,7 @@ export default function DocumentPdfViewer({
                 Shared access: {activeSharePermissionLabel || 'Restricted'}
               </p>
             ) : null}
-            {accessViaShare && !canDownload ? (
+            {!canDownload ? (
               <p className="document-viewer-security-note">View-only access — download, print, and copy are restricted.</p>
             ) : null}
             {accessViaShare && canDownload ? (
@@ -381,7 +380,7 @@ export default function DocumentPdfViewer({
               title={title || filename || 'Document preview'}
             />
           ) : null}
-          {!loading && !error && accessViaShare && !canDownload && pdfBlob ? (
+          {!loading && !error && !canDownload && pdfBlob ? (
             <SecurePdfCanvas pdfBlob={pdfBlob} title={title || filename} />
           ) : null}
           {!loading && !previewUrl && !pdfBlob && !error && !isPdf ? (

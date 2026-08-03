@@ -1,39 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { getDocument, verifyDocumentIntegrity } from '../api'
-
-const API_PORT = import.meta.env.VITE_API_PORT || '8081'
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (
-  import.meta.env.DEV
-    ? ''
-    : (
-      typeof window !== 'undefined'
-        ? `http://${window.location.hostname}:${API_PORT}`
-        : `http://localhost:${API_PORT}`
-    )
-)
-
-function getSessionRoleHeader() {
-  if (typeof window === 'undefined') {
-    return {}
-  }
-  try {
-    const raw = window.sessionStorage.getItem('auca-archive-session')
-    if (!raw) {
-      return {}
-    }
-    const session = JSON.parse(raw)
-    const headers = {}
-    if (session?.role) headers['X-User-Role'] = session.role
-    if (session?.fullName) headers['X-User-Name'] = session.fullName
-    if (session?.studentNumber) headers['X-Student-Number'] = session.studentNumber
-    if (session?.department) headers['X-User-Department'] = session.department
-    if (session?.id) headers['X-Account-Id'] = String(session.id)
-    if (session?.username) headers['X-User-Username'] = session.username
-    return headers
-  } catch {
-    return {}
-  }
-}
+import { fetchDocumentPreview, getDocument, verifyDocumentIntegrity } from '../api'
 
 function formatIntegrity(status) {
   const normalized = String(status || '').toLowerCase()
@@ -81,15 +47,7 @@ export default function ExplorerDetailsPane({
         if (!active) return
         setDetail(documentDetail)
         setIntegrity(integrityResult)
-        const response = await fetch(`${API_BASE}/api/documents/${documentItem.id}/download`, {
-          headers: {
-            ...getSessionRoleHeader()
-          }
-        })
-        if (!response.ok) {
-          return
-        }
-        const blob = await response.blob()
+        const { blob } = await fetchDocumentPreview(documentItem.id)
         objectUrl = URL.createObjectURL(blob)
         if (active) setPreviewUrl(objectUrl)
       })
@@ -132,7 +90,9 @@ export default function ExplorerDetailsPane({
         </div>
         <div className="explorer-details-actions">
           <button type="button" className="ghost-btn tiny-btn" onClick={() => onOpenDocument?.(documentItem)}>Open</button>
-          <button type="button" className="ghost-btn tiny-btn" onClick={() => onDownloadDocument?.(documentItem)}>Download</button>
+          {detail?.allowDownload !== false ? (
+            <button type="button" className="ghost-btn tiny-btn" onClick={() => onDownloadDocument?.(documentItem)}>Download</button>
+          ) : null}
         </div>
       </div>
 

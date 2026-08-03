@@ -11,5 +11,7 @@ class ArchiveAccessServiceIsolationTest {
     void semesterStudentRootFolderRequiredForStaffUploadPlacement() {
         assertTrue(ArchiveTreeService.isSemesterStudentRootFolder("FAC-IT-DEPT-SEN-AY-20242025-SEM-1-STU-20251SEN001"));
         assertFalse(ArchiveTreeService.isSemesterStudentRootFolder("FAC-IT-DEPT-SEN-AY-20242025-SEM-1"));
+        assertFalse(ArchiveTreeService.isSemesterStudentRootFolder(
+                "FAC-IT-DEPT-SEN-AY-20242025-SEM-1-STU-20251SEN001-FLD-REGISTRATIONFORM"));
     }
 }

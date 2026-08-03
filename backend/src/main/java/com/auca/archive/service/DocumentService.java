@@ -252,7 +252,7 @@ public class DocumentService {
         return documents.stream()
                 .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
-                .map(this::toListItem)
+                .map(document -> toListItem(document, role, studentNumber))
                 .toList();
     }
 
@@ -293,7 +293,7 @@ public class DocumentService {
         return toDetail(documentRepository.findById(id)
                 .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
-                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)));
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id)), role, studentNumber);
     }
 
     public Resource download(Long id) throws IOException {
@@ -308,6 +308,19 @@ public class DocumentService {
         return download(id, rawRole, rawStudentNumber, null);
     }
 
+    public Resource preview(Long id, String rawRole, String rawStudentNumber, String rawViewerDepartment) throws IOException {
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String studentNumber = normalizeStudentNumber(rawStudentNumber);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireStudentAccount(role, studentNumber);
+        accessService.requireHodDepartment(role, viewerDepartment);
+        DocumentEntity document = documentRepository.findById(id)
+                .filter(entity -> !entity.isArchivedForRemoval())
+                .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber, viewerDepartment))
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        return loadDocumentResource(document);
+    }
+
     public Resource download(Long id, String rawRole, String rawStudentNumber, String rawViewerDepartment) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
@@ -318,7 +331,14 @@ public class DocumentService {
                 .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber, viewerDepartment))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        if (!folderService.canDownloadDocument(document, role, studentNumber)) {
+            throw new IllegalArgumentException("Download is not permitted for this document");
+        }
         requireReservationForPeerDownload(document, role, studentNumber);
+        return loadDocumentResource(document);
+    }
+
+    private Resource loadDocumentResource(DocumentEntity document) throws IOException {
         if (document.getFilePath() == null || document.getFilePath().isBlank()) {
             throw new IllegalArgumentException("Document has no stored file");
         }
@@ -493,14 +513,36 @@ public class DocumentService {
         );
         String categoryFolderName = resolveCategoryFolderName(request);
         String documentTypeName = resolveDocumentTypeName(request);
-        FolderEntity folder = archiveTreeService.resolveUploadFolder(
-                request,
-                student,
-                examPaperType,
-                role,
-                categoryFolderName,
-                documentTypeName
-        );
+        FolderEntity folder;
+        if (role != UserRole.STUDENT && request.targetFolderId() != null) {
+            folder = folderService.getFolderOrThrow(request.targetFolderId());
+            if (!folderService.isWithinSemesterStudentTree(folder)) {
+                throw new IllegalArgumentException("Upload target must be inside a student folder under the semester");
+            }
+            String folderStudentNumber = folderService.resolveSemesterStudentNumber(folder)
+                    .map(value -> value.toUpperCase(Locale.ROOT))
+                    .orElse("");
+            if (!folderStudentNumber.isBlank()
+                    && !folderStudentNumber.equalsIgnoreCase(student.getStudentNumber())) {
+                throw new IllegalArgumentException("Student ID does not match the open folder");
+            }
+        } else {
+            folder = archiveTreeService.resolveUploadFolder(
+                    request,
+                    student,
+                    examPaperType,
+                    role,
+                    categoryFolderName,
+                    documentTypeName
+            );
+        }
+        String registrarSubfolderName = trimToNull(request.title());
+        if (registrarSubfolderName == null) {
+            registrarSubfolderName = documentTypeName;
+        }
+        if (role != UserRole.STUDENT && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+            folder = archiveTreeService.ensureRegistrarDocumentSubfolder(folder, registrarSubfolderName);
+        }
         requireDocumentInsideStudentFolder(folder, role);
         folderService.requireHodFolderPlacement(folder, role, viewerDepartment);
 
@@ -702,6 +744,7 @@ public class DocumentService {
                     entity.getGithubUrl(),
                     entity.getExternalLinks(),
                     title,
+                    null,
                     null,
                     null,
                     null,
@@ -1050,7 +1093,7 @@ public class DocumentService {
         DocumentEntity saved = documentRepository.save(entity);
         syncSearchIndex(saved);
         activityService.recordAction(
-                "Moved \"" + entity.getTitle() + "\" to archive pending admin confirmation",
+                "Removed \"" + entity.getTitle() + "\" to Trash",
                 entity.getArchivedBy(),
                 ActivityCategory.ARCHIVE,
                 activityService.enrichScope(scopeForDocument(saved, role, null), requestActor),
@@ -1148,9 +1191,10 @@ public class DocumentService {
                 throw new IllegalArgumentException("PDF has no pages");
             }
 
-            if (!validationOverride) {
+            boolean skipScanForLinkedFolderUpload = role != UserRole.STUDENT && request.targetFolderId() != null;
+            if (!validationOverride && !skipScanForLinkedFolderUpload) {
                 documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename(), role.getDepartment());
-            } else if (role != UserRole.ADMIN && role != UserRole.REGISTRAR) {
+            } else if (validationOverride && role != UserRole.ADMIN && role != UserRole.REGISTRAR) {
                 throw new IllegalArgumentException("Only administrators or registrars can override document validation.");
             }
         }
@@ -1323,6 +1367,10 @@ public class DocumentService {
     }
 
     private DocumentListItemResponse toListItem(DocumentEntity document) {
+        return toListItem(document, null, null);
+    }
+
+    private DocumentListItemResponse toListItem(DocumentEntity document, UserRole role, String studentNumber) {
         return new DocumentListItemResponse(
                 document.getId(),
                 document.getTitle(),
@@ -1352,11 +1400,16 @@ public class DocumentService {
                 document.getExternalLinks(),
                 document.getReviewNote(),
                 document.getDescription(),
-                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank(),
+                folderService.canDownloadDocument(document, role, studentNumber)
         );
     }
 
     private DocumentDetailResponse toDetail(DocumentEntity document) {
+        return toDetail(document, null, null);
+    }
+
+    private DocumentDetailResponse toDetail(DocumentEntity document, UserRole role, String studentNumber) {
         String documentTypeName = null;
         if (document.getDocumentTypeId() != null) {
             try {
@@ -1409,7 +1462,8 @@ public class DocumentService {
                 document.getOriginalSizeBytes(),
                 document.getConvertedFromMime(),
                 resolveIntegrityStatus(document),
-                buildFolderPath(document.getFolderId())
+                buildFolderPath(document.getFolderId()),
+                folderService.canDownloadDocument(document, role, studentNumber)
         );
     }
 
@@ -1568,17 +1622,18 @@ public class DocumentService {
         if (role == null || role == UserRole.STUDENT || folder == null) {
             return;
         }
+        if (folderService.isWithinSemesterStudentTree(folder)) {
+            return;
+        }
         String code = folder.getCode() == null ? "" : folder.getCode().toUpperCase(Locale.ROOT);
         if (code.contains("-SEM-") && !code.contains("-STU-")) {
             throw new IllegalArgumentException(
-                    "Documents cannot be stored directly under a semester. Enter a Student ID so the file is saved inside that student's folder."
+                    "Documents cannot be stored directly under a semester. Create a student folder first, then upload inside it or one of its subfolders."
             );
         }
-        if (!code.contains("-STU-")) {
-            throw new IllegalArgumentException(
-                    "Documents must be uploaded inside a student ID folder under the semester."
-            );
-        }
+        throw new IllegalArgumentException(
+                "Documents must be uploaded inside a student folder or one of its subfolders under the semester."
+        );
     }
 
     private boolean isExamUpload(UploadDocumentRequest request) {

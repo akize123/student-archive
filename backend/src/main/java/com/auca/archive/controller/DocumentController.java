@@ -139,6 +139,22 @@ public class DocumentController {
         return documentService.verifyIntegrity(id, role);
     }
 
+    @GetMapping("/{id}/preview")
+    public ResponseEntity<Resource> preview(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
+    ) throws IOException {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        Resource resource = documentService.preview(id, role, studentNumber, viewerDepartment);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource);
+    }
+
     @GetMapping("/{id}/download")
     public ResponseEntity<Resource> download(
             @PathVariable Long id,

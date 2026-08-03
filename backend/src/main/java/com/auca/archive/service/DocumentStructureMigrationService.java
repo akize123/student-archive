@@ -6,8 +6,11 @@ import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.DocumentCategoryDefinitionRepository;
 import com.auca.archive.repository.DocumentRepository;
 import com.auca.archive.repository.DocumentTypeDefinitionRepository;
+import com.auca.archive.repository.FolderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +22,7 @@ public class DocumentStructureMigrationService {
     private static final Logger log = LoggerFactory.getLogger(DocumentStructureMigrationService.class);
 
     private final DocumentRepository documentRepository;
+    private final FolderRepository folderRepository;
     private final ArchiveTreeService archiveTreeService;
     private final DocumentTypeDefinitionRepository documentTypeDefinitionRepository;
     private final DocumentCategoryDefinitionRepository documentCategoryDefinitionRepository;
@@ -26,12 +30,14 @@ public class DocumentStructureMigrationService {
 
     public DocumentStructureMigrationService(
             DocumentRepository documentRepository,
+            FolderRepository folderRepository,
             ArchiveTreeService archiveTreeService,
             DocumentTypeDefinitionRepository documentTypeDefinitionRepository,
             DocumentCategoryDefinitionRepository documentCategoryDefinitionRepository,
             StudentService studentService
     ) {
         this.documentRepository = documentRepository;
+        this.folderRepository = folderRepository;
         this.archiveTreeService = archiveTreeService;
         this.documentTypeDefinitionRepository = documentTypeDefinitionRepository;
         this.documentCategoryDefinitionRepository = documentCategoryDefinitionRepository;
@@ -61,6 +67,38 @@ public class DocumentStructureMigrationService {
         }
         log.info("Document structure migration complete. migrated={} skipped={}", migrated, skipped);
         return new MigrationResult(migrated, skipped, messages);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void repairRegistrarDocumentsAtStudentRoot() {
+        int repaired = repairRegistrarRootDocuments();
+        if (repaired > 0) {
+            log.info("Relocated {} registrar document(s) from student root into document subfolders", repaired);
+        }
+    }
+
+    @Transactional
+    public int repairRegistrarRootDocuments() {
+        int repaired = 0;
+        for (DocumentEntity document : documentRepository.findAll()) {
+            if (document.isArchivedForRemoval() || document.getFolderId() == null) {
+                continue;
+            }
+            FolderEntity folder = folderRepository.findById(document.getFolderId()).orElse(null);
+            if (folder == null || !ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+                continue;
+            }
+            String subfolderName = document.getTitle() != null && !document.getTitle().isBlank()
+                    ? document.getTitle().trim()
+                    : resolveTypeName(document);
+            FolderEntity target = archiveTreeService.ensureRegistrarDocumentSubfolder(folder, subfolderName);
+            if (!target.getId().equals(document.getFolderId())) {
+                document.setFolderId(target.getId());
+                documentRepository.save(document);
+                repaired += 1;
+            }
+        }
+        return repaired;
     }
 
     private boolean migrateDocument(DocumentEntity document) {

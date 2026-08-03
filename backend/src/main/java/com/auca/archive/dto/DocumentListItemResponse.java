@@ -32,6 +32,7 @@ public record DocumentListItemResponse(
         String externalLinks,
         String reviewNote,
         String description,
-        Boolean hasCoverPhoto
+        Boolean hasCoverPhoto,
+        Boolean allowDownload
 ) {
 }

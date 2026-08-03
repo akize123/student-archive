@@ -10,6 +10,8 @@ public record ImportCommitRequest(
         StudentDocumentCategory defaultCategory,
         Long defaultSubtypeId,
         boolean validateTemplates,
-        boolean linkLegacy
+        boolean linkLegacy,
+        String linkedStudentNumber,
+        String linkedStudentName
 ) {
 }

@@ -45,6 +45,7 @@ public record DocumentDetailResponse(
         Long originalSizeBytes,
         String convertedFromMime,
         String integrityStatus,
-        String folderPath
+        String folderPath,
+        Boolean allowDownload
 ) {
 }

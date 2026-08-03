@@ -8,6 +8,7 @@ public record FolderImportResponse(
         int folderCount,
         List<String> importedFiles,
         List<String> skippedFiles,
-        List<String> messages
+        List<String> messages,
+        List<Long> targetFolderIds
 ) {
 }

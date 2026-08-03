@@ -10,6 +10,10 @@ public record FolderDetailResponse(
         List<FolderBreadcrumbResponse> breadcrumbs,
         long itemCount,
         List<FolderNodeResponse> children,
-        List<DocumentListItemResponse> documents
+        List<DocumentListItemResponse> documents,
+        /** Student ID folder name when this folder is inside a semester student tree. */
+        String semesterStudentNumber,
+        /** Full name from the student record linked to the semester student folder. */
+        String semesterStudentName
 ) {
 }

@@ -93,7 +93,7 @@ export default function StaffStudentFolderBuilder({
         <input
           value={studentId}
           onChange={(event) => setStudentId(event.target.value)}
-          placeholder={prefix ? `${prefix}041` : 'e.g. 20241ACC041'}
+          placeholder={prefix ? `${prefix}041` : 'e.g. 20251SENG041 or 25883'}
           disabled={disabled}
           autoFocus
         />

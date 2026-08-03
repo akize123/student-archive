@@ -12,6 +12,13 @@ public record ImportPreviewItemResponse(
         List<String> warnings,
         List<String> conflicts,
         Integer validationSimilarityScore,
-        Boolean validationVerified
+        Boolean validationVerified,
+        String scanSummary,
+        List<String> scanSignals,
+        String scanPreview,
+        Boolean studentExists,
+        String existingStudentName,
+        Long existingFolderId,
+        Boolean folderExistsHere
 ) {
 }

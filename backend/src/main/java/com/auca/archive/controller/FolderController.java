@@ -102,7 +102,7 @@ public class FolderController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
     ) {
-        return folderService.createSubfolder(parentId, request.name(), role, studentNumber);
+        return folderService.createSubfolder(parentId, request.name(), request.studentName(), role, studentNumber);
     }
 
     @PostMapping("/{departmentId}/academic-years")
@@ -252,6 +252,7 @@ public class FolderController {
             @RequestParam(value = "paths", required = false) List<String> paths,
             @RequestParam(value = "defaultCategory", required = false) StudentDocumentCategory defaultCategory,
             @RequestParam(value = "defaultSubtypeId", required = false) Long defaultSubtypeId,
+            @RequestParam(value = "linkedStudentNumber", required = false) String linkedStudentNumber,
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Department", required = false) String department,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId
@@ -265,7 +266,8 @@ public class FolderController {
                 role,
                 defaultCategory,
                 defaultSubtypeId,
-                viewerDepartment
+                viewerDepartment,
+                linkedStudentNumber
         );
     }
 

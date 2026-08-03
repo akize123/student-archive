@@ -18,6 +18,7 @@ import com.auca.archive.dto.SharedItemResponse;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.model.FolderShareEntity;
+import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.DocumentRepository;
 import com.auca.archive.repository.FolderRepository;
 import com.auca.archive.repository.FolderShareRepository;
@@ -47,6 +48,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -62,6 +64,7 @@ public class FolderService {
     private final StudentIdFormatService studentIdFormatService;
     private final AcademicTermService academicTermService;
     private final ObjectProvider<ArchiveTreeService> archiveTreeService;
+    private final ObjectProvider<StudentService> studentService;
     private final ArchiveStoragePaths archiveStoragePaths;
     private final Path storageRoot;
 
@@ -76,6 +79,7 @@ public class FolderService {
             StudentIdFormatService studentIdFormatService,
             AcademicTermService academicTermService,
             ObjectProvider<ArchiveTreeService> archiveTreeService,
+            ObjectProvider<StudentService> studentService,
             ArchiveStoragePaths archiveStoragePaths
     ) {
         this.folderRepository = folderRepository;
@@ -88,6 +92,7 @@ public class FolderService {
         this.studentIdFormatService = studentIdFormatService;
         this.academicTermService = academicTermService;
         this.archiveTreeService = archiveTreeService;
+        this.studentService = studentService;
         this.archiveStoragePaths = archiveStoragePaths;
         this.storageRoot = archiveStoragePaths.storageRoot();
     }
@@ -200,7 +205,7 @@ public class FolderService {
             throw new IllegalArgumentException("Folder not found: " + id);
         }
 
-        List<FolderEntity> folders = folderRepository.findAll();
+        List<FolderEntity> folders = folderRepository.findByArchivedAtIsNull();
         Map<Long, FolderEntity> folderById = folders.stream()
                 .collect(Collectors.toMap(FolderEntity::getId, Function.identity()));
         Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folders);
@@ -218,7 +223,7 @@ public class FolderService {
                     .filter(document -> !document.isArchivedForRemoval())
                     .filter(document -> isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                     .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                    .map(this::toListItem)
+                    .map(document -> toListItem(document, role, studentNumber))
                     .toList();
         } else {
             List<FolderEntity> rawChildren = childrenByParent.getOrDefault(folder.getId(), List.of());
@@ -238,26 +243,30 @@ public class FolderService {
                     && role != UserRole.STUDENT
                     && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode());
 
+            boolean semesterFolderView = role != UserRole.STUDENT && isSemesterFolderOnly(folder);
+
             children = rawChildren.stream()
                     .filter(child -> role != UserRole.STUDENT || isVisibleStudentChild(child))
                     .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isStudentDefaultFolderCode(child.getCode()))
                     .filter(child -> !flattenStudentRoot || !ArchiveTreeService.isDocumentChannelFolderCode(child.getCode()))
                     .sorted(Comparator.comparing(FolderEntity::getName))
-                    .flatMap(child -> toVisibleNodes(
-                            child,
-                            childrenByParent,
-                            folderById,
-                            role,
-                            studentNumber,
-                            isFolderVisibleByParent(folder, role, studentNumber),
-                            viewerDepartment
-                    ).stream())
+                    .flatMap(child -> semesterFolderView
+                            ? Stream.of(toNode(child, role, studentNumber))
+                            : toVisibleNodes(
+                                    child,
+                                    childrenByParent,
+                                    folderById,
+                                    role,
+                                    studentNumber,
+                                    isFolderVisibleByParent(folder, role, studentNumber),
+                                    viewerDepartment
+                            ).stream())
                     .toList();
 
             List<DocumentEntity> folderDocuments;
             if (flattenStudentRoot) {
-                // Show every document under this student ID folder, including older nested channel paths.
-                folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
+                // Student ID folders only list document-type subfolders (-FLD-); files stay inside those subfolders.
+                folderDocuments = List.of();
             } else if (isArchiveProjectFolder(folder)) {
                 folderDocuments = collectDocumentsUnderFolder(folder.getId(), childrenByParent);
             } else {
@@ -267,7 +276,7 @@ public class FolderService {
             documents = folderDocuments.stream()
                     .filter(document -> isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                     .sorted(Comparator.comparing(DocumentEntity::getModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
-                    .map(this::toListItem)
+                    .map(document -> toListItem(document, role, studentNumber))
                     .toList();
 
             // Semester folders only hold student ID subfolders — never list files directly here.
@@ -276,6 +285,8 @@ public class FolderService {
             }
         }
 
+        String semesterStudentNumber = resolveSemesterStudentNumber(folder).orElse(null);
+        String semesterStudentName = resolveSemesterStudentName(semesterStudentNumber).orElse(null);
         return new FolderDetailResponse(
                 folder.getId(),
                 folder.getName(),
@@ -284,7 +295,9 @@ public class FolderService {
                 breadcrumbs,
                 countDocuments(folder, childrenByParent, role, studentNumber, viewerDepartment),
                 children,
-                documents
+                documents,
+                semesterStudentNumber,
+                semesterStudentName
         );
     }
 
@@ -430,11 +443,22 @@ public class FolderService {
 
     @Transactional
     public FolderNodeResponse createSubfolder(Long parentId, String name, String rawRole) {
-        return createSubfolder(parentId, name, rawRole, null);
+        return createSubfolder(parentId, name, null, rawRole, null);
     }
 
     @Transactional
     public FolderNodeResponse createSubfolder(Long parentId, String name, String rawRole, String rawStudentNumber) {
+        return createSubfolder(parentId, name, null, rawRole, rawStudentNumber);
+    }
+
+    @Transactional
+    public FolderNodeResponse createSubfolder(
+            Long parentId,
+            String name,
+            String studentName,
+            String rawRole,
+            String rawStudentNumber
+    ) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         accessService.requireStudentAccount(role, studentNumber);
@@ -457,16 +481,31 @@ public class FolderService {
         if (trimmedName.isBlank()) {
             throw new IllegalArgumentException("Folder name is required");
         }
-        if (role != UserRole.STUDENT) {
-            // Staff archive folders must follow year + semester + department + student sequence.
-            studentIdFormatService.requireStaffFolderName(trimmedName);
-            trimmedName = trimmedName.toUpperCase(Locale.ROOT);
-        }
-
-        // Under a semester, student ID folders use the canonical -STU- code (not generic FLD-*).
+        // Under a semester, only student-ID folders are allowed — they provision the student record.
         if (role != UserRole.STUDENT && isSemesterFolderOnly(parent)) {
-            String studentCode = parent.getCode() + "-STU-" + sanitizeStudentFolderCode(trimmedName);
-            FolderEntity studentFolder = resolveOrCreateFolder(trimmedName, studentCode, parentId);
+            studentIdFormatService.requireStaffFolderName(trimmedName);
+            String normalizedStudentId = studentIdFormatService.normalizeStaffFolderName(trimmedName);
+            ArchiveTreeService archiveTree = archiveTreeService.getObject();
+            ArchiveTreeService.StudentUploadPlacement placement = archiveTree.resolveUploadPlacementFromFolder(parent);
+            if (!placement.hasArchiveLocation()) {
+                throw new IllegalArgumentException("Could not resolve faculty, department, and semester from the archive path");
+            }
+            if (!studentIdFormatService.isLegacyFormat(normalizedStudentId)) {
+                studentIdFormatService.validateDepartmentMatch(normalizedStudentId, placement.department());
+            }
+            String linkedStudentName = studentName == null ? "" : studentName.trim();
+            if (linkedStudentName.isBlank()) {
+                throw new IllegalArgumentException("Student name is required when creating a student folder");
+            }
+            studentService.getObject().resolveOrCreate(
+                    normalizedStudentId,
+                    linkedStudentName,
+                    placement.faculty(),
+                    placement.department(),
+                    true
+            );
+            String studentCode = parent.getCode() + "-STU-" + sanitizeStudentFolderCode(normalizedStudentId);
+            FolderEntity studentFolder = resolveOrCreateFolder(normalizedStudentId, studentCode, parent.getId());
             return new FolderNodeResponse(
                     studentFolder.getId(),
                     studentFolder.getName(),
@@ -474,6 +513,21 @@ public class FolderService {
                     studentFolder.getParentId(),
                     0,
                     ArchiveTreeService.isStudentDefaultFolderCode(studentFolder.getCode()),
+                    List.of()
+            );
+        }
+
+        // Inside a semester student folder, allow free-form labels such as "Reintegration form".
+        if (role != UserRole.STUDENT && isWithinSemesterStudentTree(parent)) {
+            String code = parent.getCode() + "-FLD-" + sanitizeStudentFolderCode(trimmedName);
+            FolderEntity childFolder = resolveOrCreateFolder(trimmedName, code, parentId);
+            return new FolderNodeResponse(
+                    childFolder.getId(),
+                    childFolder.getName(),
+                    childFolder.getCode(),
+                    childFolder.getParentId(),
+                    0,
+                    ArchiveTreeService.isStudentDefaultFolderCode(childFolder.getCode()),
                     List.of()
             );
         }
@@ -658,6 +712,9 @@ public class FolderService {
         if (isProtectedArchiveStructureFolder(folder)) {
             throw new IllegalArgumentException("Faculty and department folders are part of the system archive structure and cannot be deleted");
         }
+        if (ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+            throw new IllegalArgumentException("Student ID folders cannot be deleted. Rename the folder if the student ID needs to change.");
+        }
         if (ArchiveTreeService.isStudentDefaultFolderCode(folder.getCode())
                 || ArchiveTreeService.isLibrarianReviewFolderCode(folder.getCode())) {
             throw new IllegalArgumentException("System review folders cannot be deleted");
@@ -745,7 +802,9 @@ public class FolderService {
         }
 
         if (entries.isEmpty()) {
-            throw new IllegalArgumentException("No documents to download in this folder");
+            throw new IllegalArgumentException(hasSelection
+                    ? "No documents to download in the selected folder(s). Empty folders cannot be downloaded."
+                    : "No documents to download in this folder");
         }
 
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -1051,6 +1110,9 @@ public class FolderService {
             return;
         }
         if (hasNativeDocumentAccess(document, role, studentNumber)) {
+            if (!canDownloadDocument(document, role, studentNumber)) {
+                throw new IllegalArgumentException("Download is not permitted for this document");
+            }
             return;
         }
         SharePermission effective = resolveEffectiveSharePermission(document, role)
@@ -1066,7 +1128,7 @@ public class FolderService {
             return true;
         }
         if (hasNativeDocumentAccess(document, role, studentNumber)) {
-            return true;
+            return canDownloadDocument(document, role, studentNumber);
         }
         return resolveEffectiveSharePermission(document, role)
                 .map(permission -> permission != SharePermission.VIEW_ONLY)
@@ -1537,12 +1599,6 @@ public class FolderService {
         }
 
         long itemCount = countDocuments(folder, childrenByParent, role, studentNumber, viewerDepartment);
-        if (accessService.isOfficeStaffRole(role)
-                && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())
-                && itemCount == 0) {
-            return List.of();
-        }
-
         return List.of(new FolderNodeResponse(
                 folder.getId(),
                 folder.getName(),
@@ -1924,6 +1980,93 @@ public class FolderService {
         return sanitized.isBlank() ? "UNKNOWN" : sanitized;
     }
 
+    public boolean isWithinSemesterStudentTree(FolderEntity folder) {
+        if (folder == null) {
+            return false;
+        }
+        Map<Long, FolderEntity> folderById = folderRepository.findAll().stream()
+                .collect(Collectors.toMap(FolderEntity::getId, Function.identity(), (left, right) -> left));
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (ArchiveTreeService.isSemesterStudentRootFolder(current.getCode())) {
+                return true;
+            }
+            if (isSemesterFolderOnly(current)) {
+                return false;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderById.get(current.getParentId());
+        }
+        return false;
+    }
+
+    public boolean isSemesterStudentDocumentFolder(FolderEntity folder) {
+        if (folder == null || folder.getCode() == null) {
+            return false;
+        }
+        if (!isWithinSemesterStudentTree(folder)) {
+            return false;
+        }
+        return folder.getCode().toUpperCase(Locale.ROOT).contains("-FLD-");
+    }
+
+    public boolean isRegistrarStudentArchiveDocument(DocumentEntity document) {
+        if (document == null || document.getFolderId() == null) {
+            return false;
+        }
+        return folderRepository.findById(document.getFolderId())
+                .map(this::isSemesterStudentDocumentFolder)
+                .orElse(false);
+    }
+
+    public boolean canDownloadDocument(DocumentEntity document, UserRole role, String studentNumber) {
+        if (document == null) {
+            return false;
+        }
+        if (role == UserRole.ADMIN) {
+            return true;
+        }
+        if (isRegistrarStudentArchiveDocument(document)) {
+            return role != UserRole.STUDENT;
+        }
+        return true;
+    }
+
+    public Optional<String> resolveSemesterStudentNumber(FolderEntity folder) {
+        if (folder == null) {
+            return Optional.empty();
+        }
+        Map<Long, FolderEntity> folderById = folderRepository.findAll().stream()
+                .collect(Collectors.toMap(FolderEntity::getId, Function.identity(), (left, right) -> left));
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (ArchiveTreeService.isSemesterStudentRootFolder(current.getCode())) {
+                String studentNumber = current.getName() == null ? "" : current.getName().trim();
+                if (!studentNumber.isBlank() && studentIdFormatService.isRecognizedFormat(studentNumber)) {
+                    return Optional.of(studentNumber);
+                }
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderById.get(current.getParentId());
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> resolveSemesterStudentName(String semesterStudentNumber) {
+        if (semesterStudentNumber == null || semesterStudentNumber.isBlank()) {
+            return Optional.empty();
+        }
+        return studentRepository.findByStudentNumber(semesterStudentNumber.trim())
+                .map(student -> student.getFullName() == null ? "" : student.getFullName().trim())
+                .filter(name -> !name.isBlank());
+    }
+
     private void requireModifiableFolder(FolderEntity folder, UserRole role, String studentNumber) {
         if (folder.getParentId() == null) {
             throw new IllegalArgumentException("System folders cannot be changed");
@@ -1978,7 +2121,7 @@ public class FolderService {
     }
 
     private FolderNodeResponse toNode(FolderEntity folder, UserRole role, String studentNumber) {
-        Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folderRepository.findAll());
+        Map<Long, List<FolderEntity>> childrenByParent = groupFoldersByParent(folderRepository.findByArchivedAtIsNull());
         return new FolderNodeResponse(
                 folder.getId(),
                 folder.getName(),
@@ -2127,7 +2270,7 @@ public class FolderService {
         return grouped;
     }
 
-    private DocumentListItemResponse toListItem(DocumentEntity document) {
+    private DocumentListItemResponse toListItem(DocumentEntity document, UserRole role, String studentNumber) {
         return new DocumentListItemResponse(
                 document.getId(),
                 document.getTitle(),
@@ -2161,7 +2304,8 @@ public class FolderService {
                 document.getExternalLinks(),
                 document.getReviewNote(),
                 document.getDescription(),
-                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank()
+                document.getCoverPhotoPath() != null && !document.getCoverPhotoPath().isBlank(),
+                canDownloadDocument(document, role, studentNumber)
         );
     }
 

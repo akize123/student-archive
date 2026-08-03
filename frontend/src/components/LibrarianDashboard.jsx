@@ -1,7 +1,17 @@
 import React, { useState, useMemo } from 'react'
-import { CheckIcon, DocumentIcon, DownloadIcon, FolderIcon } from './Icons'
+import { CheckIcon, DocumentIcon, DownloadIcon, FolderIcon, SearchIcon, XIcon } from './Icons'
 
-
+function formatBytes(bytes) {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  return `${size.toFixed(size >= 100 || index === 0 ? 0 : 1)} ${units[index]}`
+}
 
 function formatDateTime(value) {
   if (!value) return '-'
@@ -76,6 +86,7 @@ export default function LibrarianDashboard({
 }) {
   const [submissionTab, setSubmissionTab] = useState('pending')
   const [activityCategoryFilter, setActivityCategoryFilter] = useState('ALL')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const approvalList = dashboard.awaitingApproval || []
   const pendingApprovals = useMemo(
@@ -91,12 +102,30 @@ export default function LibrarianDashboard({
     [approvalList]
   )
 
+  const storagePercent = dashboard.storageLimitBytes
+    ? Math.min(100, Math.round((dashboard.storageUsedBytes / dashboard.storageLimitBytes) * 100))
+    : 0
+
   const visibleSubmissions = useMemo(() => {
-    if (submissionTab === 'pending') return pendingApprovals
-    if (submissionTab === 'accepted') return acceptedApprovals
-    if (submissionTab === 'rejected') return rejectedApprovals
-    return approvalList
-  }, [submissionTab, pendingApprovals, acceptedApprovals, rejectedApprovals, approvalList])
+    let list = submissionTab === 'pending'
+      ? pendingApprovals
+      : submissionTab === 'accepted'
+        ? acceptedApprovals
+        : submissionTab === 'rejected'
+          ? rejectedApprovals
+          : approvalList
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      list = list.filter((task) =>
+        String(task.documentTitle || '').toLowerCase().includes(q) ||
+        String(task.requestedBy || '').toLowerCase().includes(q) ||
+        String(task.studentNumber || '').toLowerCase().includes(q)
+      )
+    }
+
+    return list
+  }, [submissionTab, pendingApprovals, acceptedApprovals, rejectedApprovals, approvalList, searchQuery])
 
   const rawActivities = dashboard.recentActivity || dashboard.departmentActivity || []
   
@@ -133,40 +162,119 @@ export default function LibrarianDashboard({
         </div>
       </header>
 
+      {/* Metrics Grid */}
+      <div className="librarian-metrics">
+        <article className="librarian-metric metric-pending">
+          <div className="librarian-metric-icon-wrap" aria-hidden="true">
+            <DocumentIcon className="icon" />
+          </div>
+          <div className="librarian-metric-body">
+            <span className="librarian-metric-label">Pending Reviews</span>
+            <div className="librarian-metric-val-row">
+              <strong>{pendingApprovals.length}</strong>
+              {pendingApprovals.length > 0 ? (
+                <span className="librarian-badge-chip pending-chip">Needs attention</span>
+              ) : (
+                <span className="librarian-badge-chip clear-chip">All caught up</span>
+              )}
+            </div>
+            <span className="librarian-metric-caption">FYP submissions awaiting review</span>
+          </div>
+        </article>
+
+        <article className="librarian-metric metric-files">
+          <div className="librarian-metric-icon-wrap" aria-hidden="true">
+            <FolderIcon className="icon" />
+          </div>
+          <div className="librarian-metric-body">
+            <span className="librarian-metric-label">Department Files</span>
+            <div className="librarian-metric-val-row">
+              <strong>{dashboard.departmentFiles ?? 0}</strong>
+              <span className="librarian-badge-chip info-chip">Total Documents</span>
+            </div>
+            <span className="librarian-metric-caption">Across all academic departments</span>
+          </div>
+        </article>
+
+        <article className="librarian-metric metric-storage">
+          <div className="librarian-metric-icon-wrap" aria-hidden="true">
+            <DownloadIcon className="icon" />
+          </div>
+          <div className="librarian-metric-body">
+            <span className="librarian-metric-label">Storage Capacity</span>
+            <div className="librarian-metric-val-row">
+              <strong>{formatBytes(dashboard.storageUsedBytes)}</strong>
+              <span className="librarian-metric-caption-right">
+                {storagePercent.toFixed(0)}% used
+              </span>
+            </div>
+            <div className="librarian-storage-bar-track">
+              <div
+                className="librarian-storage-bar-fill"
+                style={{ width: `${Math.max(4, storagePercent)}%` }}
+              />
+            </div>
+            <span className="librarian-metric-caption">
+              of {formatBytes(dashboard.storageLimitBytes)} total allocated storage
+            </span>
+          </div>
+        </article>
+      </div>
 
       {/* FYP Submissions Table Card */}
       <div className="librarian-card">
         <div className="librarian-card-head">
-          <h2>Final Year Project Submissions</h2>
-          <div className="librarian-tabs" role="tablist">
-            <button
-              type="button"
-              className={`librarian-tab ${submissionTab === 'pending' ? 'active' : ''}`}
-              onClick={() => setSubmissionTab('pending')}
-            >
-              Pending ({pendingApprovals.length})
-            </button>
-            <button
-              type="button"
-              className={`librarian-tab ${submissionTab === 'accepted' ? 'active' : ''}`}
-              onClick={() => setSubmissionTab('accepted')}
-            >
-              Accepted ({acceptedApprovals.length})
-            </button>
-            <button
-              type="button"
-              className={`librarian-tab ${submissionTab === 'rejected' ? 'active' : ''}`}
-              onClick={() => setSubmissionTab('rejected')}
-            >
-              Rejected ({rejectedApprovals.length})
-            </button>
-            <button
-              type="button"
-              className={`librarian-tab ${submissionTab === 'all' ? 'active' : ''}`}
-              onClick={() => setSubmissionTab('all')}
-            >
-              All ({approvalList.length})
-            </button>
+          <div>
+            <h2>Final Year Project Submissions</h2>
+            <p>Review student FYP documents, accept into Archive project, or reject with feedback reasons.</p>
+          </div>
+          <div className="librarian-tabs-and-search">
+            <div className="librarian-search-inline">
+              <SearchIcon className="icon search" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search project title or student..."
+                aria-label="Filter submissions"
+              />
+              {searchQuery ? (
+                <button type="button" className="clear-btn" onClick={() => setSearchQuery('')}>
+                  <XIcon className="icon tiny" />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="librarian-tabs" role="tablist">
+              <button
+                type="button"
+                className={`librarian-tab ${submissionTab === 'pending' ? 'active' : ''}`}
+                onClick={() => setSubmissionTab('pending')}
+              >
+                Pending ({pendingApprovals.length})
+              </button>
+              <button
+                type="button"
+                className={`librarian-tab ${submissionTab === 'accepted' ? 'active' : ''}`}
+                onClick={() => setSubmissionTab('accepted')}
+              >
+                Accepted ({acceptedApprovals.length})
+              </button>
+              <button
+                type="button"
+                className={`librarian-tab ${submissionTab === 'rejected' ? 'active' : ''}`}
+                onClick={() => setSubmissionTab('rejected')}
+              >
+                Rejected ({rejectedApprovals.length})
+              </button>
+              <button
+                type="button"
+                className={`librarian-tab ${submissionTab === 'all' ? 'active' : ''}`}
+                onClick={() => setSubmissionTab('all')}
+              >
+                All ({approvalList.length})
+              </button>
+            </div>
           </div>
         </div>
 

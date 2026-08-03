@@ -12,6 +12,10 @@ public record ImportPreviewResponse(
         Long defaultSubtypeId,
         List<ImportPreviewItemResponse> items,
         List<String> messages,
-        List<ZipAuditEntryResponse> zipAudit
+        List<ZipAuditEntryResponse> zipAudit,
+        boolean insideStudentTree,
+        String linkedStudentNumber,
+        String linkedStudentName,
+        Long importTargetFolderId
 ) {
 }

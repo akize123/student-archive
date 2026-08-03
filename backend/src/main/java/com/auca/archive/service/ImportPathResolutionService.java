@@ -2,6 +2,7 @@ package com.auca.archive.service;
 
 import com.auca.archive.dto.ImportPreviewItemResponse;
 import com.auca.archive.model.FolderEntity;
+import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.FolderRepository;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -23,17 +25,23 @@ public class ImportPathResolutionService {
     private final StudentService studentService;
     private final FolderRepository folderRepository;
     private final DocumentTextExtractionService textExtractionService;
+    private final ArchiveAccessService archiveAccessService;
+    private final ArchiveTreeService archiveTreeService;
 
     public ImportPathResolutionService(
             StudentIdFormatService studentIdFormatService,
             StudentService studentService,
             FolderRepository folderRepository,
-            DocumentTextExtractionService textExtractionService
+            DocumentTextExtractionService textExtractionService,
+            ArchiveAccessService archiveAccessService,
+            ArchiveTreeService archiveTreeService
     ) {
         this.studentIdFormatService = studentIdFormatService;
         this.studentService = studentService;
         this.folderRepository = folderRepository;
         this.textExtractionService = textExtractionService;
+        this.archiveAccessService = archiveAccessService;
+        this.archiveTreeService = archiveTreeService;
     }
 
     public ImportPreviewItemResponse resolveItem(
@@ -105,9 +113,6 @@ public class ImportPathResolutionService {
                     }
                 }
                 suggestedStudentName = inferStudentNameFromText(extraction.text());
-                if (suggestedStudentName != null) {
-                    warnings.add("Student name inferred from PDF text");
-                }
             } catch (IOException ignored) {
                 warnings.add("Could not extract PDF text for student matching");
             }
@@ -127,7 +132,6 @@ public class ImportPathResolutionService {
             suggestedFolderName = candidateId.toUpperCase(Locale.ROOT);
         } else if (candidateId == null) {
             suggestedFolderName = "";
-            warnings.add("Could not determine student folder automatically");
         }
 
         if (suggestedFolderName != null && !suggestedFolderName.isBlank()) {
@@ -151,6 +155,19 @@ public class ImportPathResolutionService {
         }
 
         String proposedTitle = stripExtension(sanitizeFileName(fileName));
+        StudentFolderMatch folderMatch = resolveStudentFolderMatch(targetFolder, suggestedFolderName);
+        boolean studentExists = false;
+        String existingStudentName = null;
+        Long archiveFolderId = null;
+        if (suggestedFolderName != null && !suggestedFolderName.isBlank()) {
+            Optional<StudentEntity> student = studentService.findByStudentNumber(suggestedFolderName);
+            if (student.isPresent()) {
+                studentExists = true;
+                existingStudentName = student.get().getFullName();
+                archiveFolderId = archiveTreeService.findStudentFolderId(student.get()).orElse(null);
+            }
+        }
+        Long existingFolderId = folderMatch.folderId() != null ? folderMatch.folderId() : archiveFolderId;
         return new ImportPreviewItemResponse(
                 relativePath,
                 suggestedFolderName == null ? "" : suggestedFolderName,
@@ -161,8 +178,57 @@ public class ImportPathResolutionService {
                 warnings,
                 conflicts,
                 null,
-                null
+                null,
+                null,
+                null,
+                null,
+                studentExists,
+                existingStudentName,
+                existingFolderId,
+                folderMatch.folderExistsHere()
         );
+    }
+
+    private StudentFolderMatch resolveStudentFolderMatch(FolderEntity targetFolder, String studentFolderName) {
+        if (targetFolder == null || studentFolderName == null || studentFolderName.isBlank()) {
+            return new StudentFolderMatch(null, false);
+        }
+        String normalized = studentFolderName.trim();
+        if (archiveAccessService.isStudentFolder(targetFolder, normalized)
+                || normalized.equalsIgnoreCase(targetFolder.getName())) {
+            return new StudentFolderMatch(targetFolder.getId(), true);
+        }
+        FolderEntity semesterFolder = resolveSemesterFolder(targetFolder);
+        if (semesterFolder == null) {
+            return new StudentFolderMatch(null, false);
+        }
+        Optional<Long> localFolderId = folderRepository.findAll().stream()
+                .filter(folder -> Objects.equals(folder.getParentId(), semesterFolder.getId()))
+                .filter(folder -> normalized.equalsIgnoreCase(folder.getName()))
+                .map(FolderEntity::getId)
+                .findFirst();
+        return new StudentFolderMatch(localFolderId.orElse(null), localFolderId.isPresent());
+    }
+
+    private FolderEntity resolveSemesterFolder(FolderEntity folder) {
+        FolderEntity current = folder;
+        Map<Long, FolderEntity> visited = new LinkedHashMap<>();
+        while (current != null && !visited.containsKey(current.getId())) {
+            visited.put(current.getId(), current);
+            String code = current.getCode() == null ? "" : current.getCode().toUpperCase(Locale.ROOT);
+            String name = current.getName() == null ? "" : current.getName().trim();
+            if ((code.contains("-SEM-") && !code.contains("-STU-")) || name.matches("^\\d{4}/\\d$")) {
+                return current;
+            }
+            if (current.getParentId() == null) {
+                break;
+            }
+            current = folderRepository.findById(current.getParentId()).orElse(null);
+        }
+        return null;
+    }
+
+    private record StudentFolderMatch(Long folderId, boolean folderExistsHere) {
     }
 
     public Map<String, List<ImportPreviewItemResponse>> groupByStudent(List<ImportPreviewItemResponse> items) {
