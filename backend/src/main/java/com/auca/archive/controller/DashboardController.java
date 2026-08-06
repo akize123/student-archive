@@ -41,6 +41,6 @@ public class DashboardController {
                 accountId,
                 department
         );
-        return dashboardService.getDashboard(role, studentNumber, viewerDepartment);
+        return dashboardService.getDashboard(role, studentNumber, viewerDepartment, accountId);
     }
 }

@@ -1,9 +1,11 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.FacultyCatalog;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.AccountEntity;
 import com.auca.archive.model.StudentEntity;
 import com.auca.archive.repository.AccountRepository;
+import com.auca.archive.repository.StudentRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
@@ -15,17 +17,23 @@ public class StudentAccountProvisioningService {
     private final ArchiveTreeService archiveTreeService;
     private final StudentIdFormatService studentIdFormatService;
     private final AccountRepository accountRepository;
+    private final StudentRepository studentRepository;
+    private final StudentEnrollmentService studentEnrollmentService;
 
     public StudentAccountProvisioningService(
             StudentService studentService,
             ArchiveTreeService archiveTreeService,
             StudentIdFormatService studentIdFormatService,
-            AccountRepository accountRepository
+            AccountRepository accountRepository,
+            StudentRepository studentRepository,
+            StudentEnrollmentService studentEnrollmentService
     ) {
         this.studentService = studentService;
         this.archiveTreeService = archiveTreeService;
         this.studentIdFormatService = studentIdFormatService;
         this.accountRepository = accountRepository;
+        this.studentRepository = studentRepository;
+        this.studentEnrollmentService = studentEnrollmentService;
     }
 
     @Transactional
@@ -44,15 +52,48 @@ public class StudentAccountProvisioningService {
 
         String resolvedNumber = resolveStudentNumber(studentNumber, account);
         ensureStudentNumberAvailable(resolvedNumber, excludeAccountId);
-        StudentEntity student = studentService.resolveOrCreate(
-                resolvedNumber,
-                fullName,
-                faculty,
-                academicDepartment,
-                true
+        studentEnrollmentService.requireRegistrarEnrollment(resolvedNumber);
+        StudentEntity student = studentService.findByStudentNumber(resolvedNumber)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        StudentEnrollmentService.formatNotRegisteredMessage(resolvedNumber)));
+
+        String resolvedFaculty = trimToNull(faculty);
+        String resolvedDepartment = trimToNull(academicDepartment);
+        if (resolvedFaculty != null || resolvedDepartment != null) {
+            if (resolvedFaculty != null) {
+                FacultyCatalog.requireValidDeanFaculty(resolvedFaculty);
+                student.setFaculty(resolvedFaculty);
+            }
+            if (resolvedDepartment != null) {
+                student.setDepartment(resolvedDepartment);
+            }
+            if (resolvedFaculty != null
+                    && resolvedDepartment != null
+                    && !FacultyCatalog.isDepartmentInFaculty(resolvedDepartment, resolvedFaculty)) {
+                throw new IllegalArgumentException(
+                        "Department \"" + resolvedDepartment + "\" does not belong to " + resolvedFaculty + ".");
+            }
+            student = studentRepository.save(student);
+        }
+
+        // Store under Registrar archive path for faculty/department; login tree stays student workspace.
+        archiveTreeService.ensureStudentWorkspace(
+                student,
+                student.getFaculty(),
+                student.getDepartment(),
+                null,
+                null,
+                true,
+                UserRole.REGISTRAR
         );
-        archiveTreeService.ensureStudentWorkspace(student);
         account.setStudentNumber(student.getStudentNumber());
+    }
+
+    private String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     @Transactional

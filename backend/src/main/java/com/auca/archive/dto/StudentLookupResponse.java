@@ -12,7 +12,8 @@ public record StudentLookupResponse(
         String semester,
         Long folderId,
         long documentCount,
-        List<DocumentListItemResponse> documents
+        List<DocumentListItemResponse> documents,
+        boolean registeredByRegistrar
 ) {
     public static StudentLookupResponse notFound(String studentNumber) {
         return new StudentLookupResponse(
@@ -25,11 +26,16 @@ public record StudentLookupResponse(
                 null,
                 null,
                 0L,
-                List.of()
+                List.of(),
+                false
         );
     }
 
     public static StudentLookupResponse fromArchive(StudentArchiveResponse archive) {
+        return fromArchive(archive, true);
+    }
+
+    public static StudentLookupResponse fromArchive(StudentArchiveResponse archive, boolean registeredByRegistrar) {
         return new StudentLookupResponse(
                 true,
                 archive.studentNumber(),
@@ -40,7 +46,8 @@ public record StudentLookupResponse(
                 archive.semester(),
                 archive.folderId(),
                 archive.documentCount(),
-                archive.documents()
+                archive.documents(),
+                registeredByRegistrar
         );
     }
 }

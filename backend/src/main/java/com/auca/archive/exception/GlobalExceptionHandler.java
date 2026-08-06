@@ -25,6 +25,12 @@ public class GlobalExceptionHandler {
         if (detail != null && detail.contains("folder_shares_permission_check")) {
             return build(HttpStatus.BAD_REQUEST, "This share permission is not supported yet. Try again after the system update completes.");
         }
+        if (detail != null && detail.toLowerCase().contains("uk_students_student_number")) {
+            return build(HttpStatus.BAD_REQUEST, "This student ID is already registered in the archive.");
+        }
+        if (detail != null && detail.toLowerCase().contains("uk_accounts_username")) {
+            return build(HttpStatus.BAD_REQUEST, "That username is already in use. Choose a different username.");
+        }
         return build(HttpStatus.BAD_REQUEST, "Unable to save this change because it conflicts with archive rules.");
     }
 

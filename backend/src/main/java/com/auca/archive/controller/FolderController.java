@@ -1,6 +1,7 @@
 package com.auca.archive.controller;
 
 import com.auca.archive.domain.StudentDocumentCategory;
+import com.auca.archive.dto.LinkStudentRequest;
 import com.auca.archive.dto.AddAcademicYearRequest;
 import com.auca.archive.dto.CreateFolderRequest;
 import com.auca.archive.dto.FolderDetailResponse;
@@ -100,9 +101,38 @@ public class FolderController {
             @PathVariable Long parentId,
             @Valid @RequestBody CreateFolderRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return folderService.createSubfolder(parentId, request.name(), request.studentName(), role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.createSubfolder(
+                parentId,
+                request.name(),
+                request.studentName(),
+                role,
+                studentNumber,
+                viewerDepartment
+        );
+    }
+
+    @PostMapping("/{semesterId}/link-student")
+    public FolderNodeResponse linkStudent(
+            @PathVariable Long semesterId,
+            @Valid @RequestBody LinkStudentRequest request,
+            @RequestHeader(value = "X-User-Role", required = false) String role,
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
+    ) {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.linkStudentToSemester(
+                semesterId,
+                request.studentNumber(),
+                role,
+                studentNumber,
+                viewerDepartment
+        );
     }
 
     @PostMapping("/{departmentId}/academic-years")
@@ -130,9 +160,12 @@ public class FolderController {
             @PathVariable Long id,
             @Valid @RequestBody RenameFolderRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return folderService.renameFolder(id, request.name(), role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.renameFolder(id, request.name(), role, studentNumber, viewerDepartment);
     }
 
     @PostMapping("/{id}/move")
@@ -140,9 +173,12 @@ public class FolderController {
             @PathVariable Long id,
             @Valid @RequestBody FolderTargetRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        return folderService.moveFolder(id, request.targetParentId(), role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.moveFolder(id, request.targetParentId(), role, studentNumber, viewerDepartment);
     }
 
     @PostMapping("/{id}/copy")
@@ -150,18 +186,24 @@ public class FolderController {
             @PathVariable Long id,
             @Valid @RequestBody FolderTargetRequest request,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) throws IOException {
-        return folderService.copyFolder(id, request.targetParentId(), role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        return folderService.copyFolder(id, request.targetParentId(), role, studentNumber, viewerDepartment);
     }
 
     @DeleteMapping("/{id}")
     public Map<String, String> deleteFolder(
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Role", required = false) String role,
-            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber
+            @RequestHeader(value = "X-Student-Number", required = false) String studentNumber,
+            @RequestHeader(value = "X-User-Department", required = false) String department,
+            @RequestHeader(value = "X-Account-Id", required = false) String accountId
     ) {
-        folderService.deleteFolder(id, role, studentNumber);
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
+        folderService.deleteFolder(id, role, studentNumber, viewerDepartment);
         Map<String, String> response = new LinkedHashMap<>();
         response.put("message", "Folder moved to Trash");
         return response;

@@ -32,6 +32,16 @@ async function loadZipArchive(archiveFile) {
   return cached
 }
 
+function mimeFromFileName(fileName) {
+  const lower = String(fileName || '').toLowerCase()
+  if (lower.endsWith('.pdf')) return 'application/pdf'
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  return 'application/octet-stream'
+}
+
 export async function resolveImportFile(importPayload, originalPath, fileOverrides = {}) {
   const normalizedPath = normalizeImportPath(originalPath)
   const override = fileOverrides[normalizedPath] || fileOverrides[originalPath]
@@ -59,7 +69,7 @@ export async function resolveImportFile(importPayload, originalPath, fileOverrid
     }
     const blob = await entry.async('blob')
     const fileName = normalizedPath.split('/').pop() || 'document.pdf'
-    return new File([blob], fileName, { type: 'application/pdf' })
+    return new File([blob], fileName, { type: mimeFromFileName(fileName) })
   }
 
   return null

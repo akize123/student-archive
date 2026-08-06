@@ -1,15 +1,25 @@
 package com.auca.archive.service;
 
 import com.auca.archive.config.AucaFacultyCatalog;
+import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.FolderEntity;
 import com.auca.archive.repository.FolderRepository;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
 @Service
 public class ArchiveStructureSeedService {
+    private static final List<UserRole> DEFAULT_STRUCTURE_ROLES = List.of(
+            UserRole.REGISTRAR,
+            UserRole.FINANCE,
+            UserRole.LIBRARIAN,
+            UserRole.EXAMINATION_OFFICER,
+            UserRole.HOD
+    );
+
     private final FolderRepository folderRepository;
     private final AcademicTermService academicTermService;
 
@@ -36,21 +46,40 @@ public class ArchiveStructureSeedService {
                 String departmentCode = facultyFolder.getCode() + "-DEPT-" + sanitizeCode(department);
                 FolderEntity departmentFolder = ensureFolder(department, departmentCode, facultyFolder.getId());
 
-                for (String academicYear : AcademicTermService.ACADEMIC_YEARS) {
-                    String academicYearCode = academicTermService.buildAcademicYearFolderCode(departmentCode, academicYear);
-                    FolderEntity academicYearFolder = ensureFolder(academicYear, academicYearCode, departmentFolder.getId());
-
-                    int startYear = academicTermService.parseStartYear(academicYear);
-                    for (int semester = 1; semester <= AcademicTermService.SEMESTERS_PER_YEAR; semester++) {
-                        String semesterName = academicTermService.formatSemesterFolderName(startYear, semester);
-                        String semesterCode = academicTermService.buildSemesterFolderCode(
-                                academicYearCode,
-                                startYear,
-                                semester
-                        );
-                        ensureFolder(semesterName, semesterCode, academicYearFolder.getId());
-                    }
+                for (UserRole structureRole : DEFAULT_STRUCTURE_ROLES) {
+                    seedDepartmentAcademicStructure(departmentFolder, departmentCode, structureRole);
                 }
+            }
+        }
+    }
+
+    private void seedDepartmentAcademicStructure(
+            FolderEntity departmentFolder,
+            String departmentCode,
+            UserRole structureRole
+    ) {
+        for (String academicYear : AcademicTermService.ACADEMIC_YEARS) {
+            String academicYearCode = academicTermService.buildAcademicYearFolderCode(
+                    departmentCode,
+                    academicYear,
+                    structureRole
+            );
+            FolderEntity academicYearFolder = ensureFolder(
+                    academicYear,
+                    academicYearCode,
+                    departmentFolder.getId(),
+                    structureRole
+            );
+
+            int startYear = academicTermService.parseStartYear(academicYear);
+            for (int semester = 1; semester <= AcademicTermService.SEMESTERS_PER_YEAR; semester++) {
+                String semesterName = academicTermService.formatSemesterFolderName(startYear, semester);
+                String semesterCode = academicTermService.buildSemesterFolderCode(
+                        academicYearCode,
+                        startYear,
+                        semester
+                );
+                ensureFolder(semesterName, semesterCode, academicYearFolder.getId(), structureRole);
             }
         }
     }
@@ -91,6 +120,10 @@ public class ArchiveStructureSeedService {
     }
 
     private FolderEntity ensureFolder(String name, String code, Long parentId) {
+        return ensureFolder(name, code, parentId, null);
+    }
+
+    private FolderEntity ensureFolder(String name, String code, Long parentId, UserRole ownerRole) {
         return folderRepository.findByCode(code)
                 .map(existing -> {
                     boolean changed = false;
@@ -102,9 +135,17 @@ public class ArchiveStructureSeedService {
                         existing.setParentId(parentId);
                         changed = true;
                     }
+                    if (ownerRole != null && existing.getOwnerRole() != ownerRole) {
+                        existing.setOwnerRole(ownerRole);
+                        changed = true;
+                    }
                     return changed ? folderRepository.save(existing) : existing;
                 })
-                .orElseGet(() -> folderRepository.save(new FolderEntity(name, code, parentId)));
+                .orElseGet(() -> {
+                    FolderEntity created = new FolderEntity(name, code, parentId);
+                    created.setOwnerRole(ownerRole);
+                    return folderRepository.save(created);
+                });
     }
 
     private String sanitizeCode(String value) {

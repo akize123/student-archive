@@ -1,45 +1,100 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { addAcademicYear, getAcademicYearOptions } from '../academicYears'
+import { addAcademicYear, getAcademicYearInputFeedback, getAcademicYearOptions } from '../academicYears'
 
-export default function AcademicYearField({ value, onChange, disabled = false }) {
+export default function AcademicYearField({
+  value,
+  onChange,
+  disabled = false,
+  allowedYears = null,
+  allowAdd = true,
+  helperText = '',
+  label = 'Academic year'
+}) {
   const [options, setOptions] = useState(() => getAcademicYearOptions())
   const [adding, setAdding] = useState(false)
   const [draftYear, setDraftYear] = useState('')
-  const [error, setError] = useState('')
+  const [hint, setHint] = useState('')
+  const [hintTone, setHintTone] = useState('info')
+  const [existingYear, setExistingYear] = useState('')
 
   useEffect(() => {
     setOptions(getAcademicYearOptions())
   }, [value, adding])
 
-  const sortedOptions = useMemo(
-    () => [...options].sort((left, right) => left.localeCompare(right)),
-    [options]
-  )
+  const sortedOptions = useMemo(() => {
+    const base = Array.isArray(allowedYears) && allowedYears.length
+      ? [...allowedYears]
+      : [...options]
+    return base.sort((left, right) => left.localeCompare(right))
+  }, [options, allowedYears])
+
+  const canAdd = allowAdd && !(Array.isArray(allowedYears) && allowedYears.length)
+
+  function applyFeedback(feedback) {
+    setHint(feedback.message)
+    setHintTone(feedback.tone)
+    setExistingYear(feedback.existingFolderName || '')
+  }
+
+  function updateDraftYear(nextValue) {
+    setDraftYear(nextValue)
+    applyFeedback(getAcademicYearInputFeedback(nextValue, options))
+  }
+
+  function startAdding() {
+    applyFeedback(getAcademicYearInputFeedback('', options))
+    setDraftYear('')
+    setAdding(true)
+  }
+
+  function cancelAdding() {
+    setAdding(false)
+    setDraftYear('')
+    setHint('')
+    setHintTone('info')
+    setExistingYear('')
+  }
+
+  function useExistingYear() {
+    if (!existingYear) {
+      return
+    }
+    onChange(existingYear)
+    cancelAdding()
+  }
 
   function handleAddYear(event) {
     event.preventDefault()
+    const feedback = getAcademicYearInputFeedback(draftYear, options)
+    if (feedback.tone === 'existing') {
+      useExistingYear()
+      return
+    }
+    if (feedback.tone === 'error') {
+      applyFeedback(feedback)
+      return
+    }
     try {
       const created = addAcademicYear(draftYear)
       setOptions(getAcademicYearOptions())
       onChange(created)
-      setDraftYear('')
-      setAdding(false)
-      setError('')
+      cancelAdding()
     } catch (err) {
-      setError(err.message || 'Unable to add academic year.')
+      setHint(err.message || 'Unable to add academic year.')
+      setHintTone('error')
     }
   }
 
   return (
     <div className="academic-year-field">
       <label>
-        <span>Academic year</span>
+        <span>{label}</span>
         <select
           value={value}
           onChange={(event) => onChange(event.target.value)}
           disabled={disabled || adding}
         >
-          <option value="">Select academic year</option>
+          <option value="">Select {String(label || 'academic year').toLowerCase()}</option>
           {sortedOptions.map((year) => (
             <option key={year} value={year}>
               {year}
@@ -47,41 +102,50 @@ export default function AcademicYearField({ value, onChange, disabled = false })
           ))}
         </select>
       </label>
-      {adding ? (
+      {canAdd && adding ? (
         <form className="academic-year-add" onSubmit={handleAddYear}>
           <input
             value={draftYear}
-            onChange={(event) => {
-              setDraftYear(event.target.value)
-              setError('')
-            }}
+            onChange={(event) => updateDraftYear(event.target.value)}
             placeholder="2029-2030"
             aria-label="New academic year"
           />
-          <button type="submit" className="ghost-btn">Save</button>
-          <button
-            type="button"
-            className="ghost-btn"
-            onClick={() => {
-              setAdding(false)
-              setDraftYear('')
-              setError('')
-            }}
-          >
+          {hintTone === 'existing' ? (
+            <button type="button" className="ghost-btn" onClick={useExistingYear}>
+              Use {existingYear}
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="ghost-btn"
+              disabled={hintTone === 'error'}
+            >
+              Save
+            </button>
+          )}
+          <button type="button" className="ghost-btn" onClick={cancelAdding}>
             Cancel
           </button>
         </form>
-      ) : (
+      ) : null}
+      {canAdd && !adding ? (
         <button
           type="button"
           className="ghost-btn academic-year-add-btn"
-          onClick={() => setAdding(true)}
+          onClick={startAdding}
           disabled={disabled}
         >
-          Add academic year
+          Add year
         </button>
-      )}
-      {error ? <small className="lookup-hint error">{error}</small> : null}
+      ) : null}
+      {helperText ? (
+        <small className="lookup-hint info">{helperText}</small>
+      ) : null}
+      {hint ? (
+        <small className={`lookup-hint ${hintTone === 'error' ? 'error' : ''}`}>
+          {hint}
+        </small>
+      ) : null}
     </div>
   )
 }

@@ -76,16 +76,176 @@ export const OFFICIAL_STUDENT_DOCUMENT_TYPES = [
   'Clearance certificate'
 ]
 
+/** Document-type categories available during Import for each role that can import. */
 const ROLE_SUBFOLDER_CATEGORIES = {
   REGISTRAR: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS'],
+  FINANCE: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS'],
   EXAMINATION_OFFICER: ['EXAMINATION_DOCUMENTS'],
   HOD: ['APPLICATION_DOCUMENTS'],
-  ADMIN: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS', 'EXAMINATION_DOCUMENTS'],
+  DEAN_OF_FACULTY: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS', 'EXAMINATION_DOCUMENTS', 'FINAL_YEAR_PROJECT'],
+  ADMIN: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS', 'EXAMINATION_DOCUMENTS', 'FINAL_YEAR_PROJECT'],
   LIBRARIAN: ['FINAL_YEAR_PROJECT'],
   STUDENT: ['REGISTRATION_FORM', 'REINTEGRATION_FORM', 'APPLICATION_DOCUMENTS', 'FINAL_YEAR_PROJECT']
 }
 
 export const CUSTOM_SUBFOLDER_TYPE = '__CUSTOM__'
+
+/** Primary document types with optional sub-categories for archive subfolders. */
+export const DOCUMENT_TYPE_CATALOG = [
+  {
+    label: 'Application Form',
+    category: 'APPLICATION_DOCUMENTS',
+    subcategories: [
+      { value: 'High School Certificate', label: 'High School Certificate' },
+      { value: 'Date of Birth (DOB)', label: 'Date of Birth (DOB)' },
+      { value: 'National ID', label: 'National ID' },
+      { value: 'Passport Copy', label: 'Passport Copy' },
+      { value: 'Recommendation Letter', label: 'Recommendation Letter' },
+      { value: CUSTOM_SUBFOLDER_TYPE, label: 'Other (enter your own)', custom: true }
+    ]
+  },
+  {
+    label: 'Registration Form',
+    category: 'REGISTRATION_FORM',
+    subcategories: [
+      { value: 'Birth Certificate', label: 'Birth Certificate' },
+      { value: 'National ID Copy', label: 'National ID Copy' },
+      { value: 'Proof of Payment', label: 'Proof of Payment' },
+      { value: CUSTOM_SUBFOLDER_TYPE, label: 'Other (enter your own)', custom: true }
+    ]
+  },
+  {
+    label: 'Reintegration Form',
+    category: 'REINTEGRATION_FORM',
+    subcategories: null
+  },
+  {
+    label: 'CV / Resume',
+    category: 'APPLICATION_DOCUMENTS',
+    subcategories: null
+  },
+  {
+    label: 'Transcript Request',
+    category: 'APPLICATION_DOCUMENTS',
+    subcategories: null
+  },
+  {
+    label: 'Application Letter',
+    category: 'APPLICATION_DOCUMENTS',
+    subcategories: null
+  },
+  {
+    label: 'Medical Certificate',
+    category: 'REGISTRATION_FORM',
+    subcategories: null
+  },
+  {
+    label: 'Exam Paper',
+    category: 'EXAMINATION_DOCUMENTS',
+    subcategories: null
+  },
+  {
+    label: 'Marks Sheet',
+    category: 'EXAMINATION_DOCUMENTS',
+    subcategories: null
+  }
+]
+
+const catalogByLabel = new Map(DOCUMENT_TYPE_CATALOG.map((entry) => [entry.label, entry]))
+
+export function getDocumentTypeDefinition(label) {
+  return catalogByLabel.get(String(label || '').trim()) || null
+}
+
+export function hasSubcategories(documentType) {
+  const definition = getDocumentTypeDefinition(documentType)
+  return Array.isArray(definition?.subcategories) && definition.subcategories.length > 0
+}
+
+export function buildPrimaryDocumentTypeOptions(userRole) {
+  const allowed = new Set(ROLE_SUBFOLDER_CATEGORIES[userRole] || ROLE_SUBFOLDER_CATEGORIES.REGISTRAR)
+  return DOCUMENT_TYPE_CATALOG
+    .filter((entry) => allowed.has(entry.category))
+    .map((entry) => ({ value: entry.label, label: entry.label }))
+}
+
+export function resolveDocumentTypeSelection({ documentType, documentSubType, customSubType }) {
+  const primary = String(documentType || '').trim()
+  const definition = getDocumentTypeDefinition(primary)
+  if (!primary || !definition) {
+    return { title: '', category: null, documentTypeLabel: null }
+  }
+
+  if (!hasSubcategories(primary)) {
+    return {
+      title: primary,
+      category: definition.category,
+      documentTypeLabel: primary
+    }
+  }
+
+  const sub = String(documentSubType || '').trim()
+  if (!sub) {
+    return { title: '', category: definition.category, documentTypeLabel: primary }
+  }
+
+  if (sub === CUSTOM_SUBFOLDER_TYPE) {
+    const custom = String(customSubType || '').trim()
+    return {
+      title: custom,
+      category: definition.category,
+      documentTypeLabel: primary
+    }
+  }
+
+  return {
+    title: sub,
+    category: definition.category,
+    documentTypeLabel: primary
+  }
+}
+
+export function isDocumentTypeSelectionComplete({ documentType, documentSubType, customSubType }) {
+  const resolved = resolveDocumentTypeSelection({ documentType, documentSubType, customSubType })
+  if (!resolved.title) {
+    return false
+  }
+  if (hasSubcategories(documentType) && !String(documentSubType || '').trim()) {
+    return false
+  }
+  if (documentSubType === CUSTOM_SUBFOLDER_TYPE && !String(customSubType || '').trim()) {
+    return false
+  }
+  return true
+}
+
+export function inferDocumentTypeFromTitle(title, userRole) {
+  const trimmed = String(title || '').trim()
+  if (!trimmed) {
+    return { documentType: '', documentSubType: '', customSubType: '' }
+  }
+
+  for (const entry of DOCUMENT_TYPE_CATALOG) {
+    if (entry.label.toLowerCase() === trimmed.toLowerCase()) {
+      return { documentType: entry.label, documentSubType: '', customSubType: '' }
+    }
+    if (entry.subcategories) {
+      const match = entry.subcategories.find(
+        (sub) => sub.value !== CUSTOM_SUBFOLDER_TYPE && sub.label.toLowerCase() === trimmed.toLowerCase()
+      )
+      if (match) {
+        return { documentType: entry.label, documentSubType: match.value, customSubType: '' }
+      }
+    }
+  }
+
+  const presets = collectDocumentTypeNames(userRole)
+  if (presets.some((name) => name.toLowerCase() === trimmed.toLowerCase())) {
+    return { documentType: trimmed, documentSubType: '', customSubType: '' }
+  }
+
+  return { documentType: '', documentSubType: '', customSubType: '', title: trimmed }
+}
 
 export function buildStudentSubfolderTypeOptions(userRole) {
   const categories = ROLE_SUBFOLDER_CATEGORIES[userRole] || ROLE_SUBFOLDER_CATEGORIES.REGISTRAR
@@ -112,7 +272,9 @@ function collectDocumentTypeNames(userRole) {
 }
 
 export function buildDocumentTypePresetList(userRole) {
-  return collectDocumentTypeNames(userRole)
+  const fromCatalog = buildPrimaryDocumentTypeOptions(userRole).map((option) => option.label)
+  const legacy = collectDocumentTypeNames(userRole)
+  return [...new Set([...fromCatalog, ...legacy])].sort((left, right) => left.localeCompare(right))
 }
 
 export function buildDocumentTitleOptions(userRole) {
@@ -145,7 +307,10 @@ export function inferCategoryFromDocumentType(typeName, userRole) {
   if (/reintegr|reinstat|leave|suspension/.test(normalized)) {
     return 'REINTEGRATION_FORM'
   }
-  if (/application|transcript|recommendation|admission|scholarship|portfolio|transfer|course change/.test(normalized)) {
+  if (/application form|high school|national id|date of birth|\bdob\b/.test(normalized)) {
+    return 'APPLICATION_DOCUMENTS'
+  }
+  if (/application|transcript|recommendation|admission|scholarship|portfolio|transfer|course change|cv|resume/.test(normalized)) {
     return 'APPLICATION_DOCUMENTS'
   }
 
@@ -208,6 +373,12 @@ export function resolveImportDocumentType({ originalPath, proposedTitle, userRol
 
   const proposed = String(proposedTitle || '').trim()
   if (proposed && !isLikelyRawFileName(proposed)) {
+    const inferred = inferDocumentTypeFromTitle(proposed, userRole)
+    if (inferred.documentType) {
+      return inferred.documentSubType && inferred.documentSubType !== CUSTOM_SUBFOLDER_TYPE
+        ? inferred.documentSubType
+        : inferred.documentType
+    }
     const presets = collectDocumentTypeNames(userRole)
     const match = presets.find((name) => name.toLowerCase() === proposed.toLowerCase())
     if (match) {
@@ -216,6 +387,34 @@ export function resolveImportDocumentType({ originalPath, proposedTitle, userRol
   }
 
   return String(fallback || '').trim()
+}
+
+export function buildImportRowDocumentTypeState(title, userRole) {
+  const trimmed = String(title || '').trim()
+  const inferred = inferDocumentTypeFromTitle(trimmed, userRole)
+  if (inferred.documentType) {
+    const resolved = resolveDocumentTypeSelection(inferred)
+    return {
+      documentType: inferred.documentType,
+      documentSubType: inferred.documentSubType || '',
+      customSubType: inferred.customSubType || '',
+      title: resolved.title || trimmed
+    }
+  }
+  if (trimmed && !isLikelyRawFileName(trimmed)) {
+    return {
+      documentType: trimmed,
+      documentSubType: '',
+      customSubType: '',
+      title: trimmed
+    }
+  }
+  return {
+    documentType: '',
+    documentSubType: '',
+    customSubType: '',
+    title: ''
+  }
 }
 
 export function rowNeedsDocumentTypeAssignment(title) {

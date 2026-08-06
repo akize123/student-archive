@@ -37,9 +37,10 @@ public class MobileScanController {
 
     @GetMapping("/network-url")
     public MobileScanNetworkResponse networkUrl(
-            @org.springframework.web.bind.annotation.RequestParam(name = "frontendPort", defaultValue = "5173") int frontendPort
+            @org.springframework.web.bind.annotation.RequestParam(name = "frontendPort", defaultValue = "5173") int frontendPort,
+            @org.springframework.web.bind.annotation.RequestParam(name = "scheme", defaultValue = "https") String scheme
     ) {
-        return mobileScanSessionService.getNetworkResponse(frontendPort);
+        return mobileScanSessionService.getNetworkResponse(frontendPort, scheme);
     }
 
     @GetMapping("/sessions/{token}")
@@ -73,16 +74,30 @@ public class MobileScanController {
     }
 
     @PostMapping("/sessions/{token}/finalize")
-    public MobileScanSessionResponse finalizeSession(@PathVariable String token) throws IOException {
-        return mobileScanSessionService.finalizeSession(token);
+    public MobileScanSessionResponse finalizeSession(
+            @PathVariable String token,
+            @org.springframework.web.bind.annotation.RequestParam(name = "mode", defaultValue = "combined") String mode
+    ) throws IOException {
+        return mobileScanSessionService.finalizeSession(token, mode);
+    }
+
+    @PostMapping("/sessions/{token}/next-batch")
+    public MobileScanSessionResponse nextBatch(@PathVariable String token) {
+        return mobileScanSessionService.startNextBatch(token);
     }
 
     @GetMapping("/sessions/{token}/pdf")
     public ResponseEntity<byte[]> downloadPdf(@PathVariable String token) {
-        byte[] pdf = mobileScanSessionService.getPdf(token);
+        byte[] payload = mobileScanSessionService.getPdf(token);
+        boolean zip = mobileScanSessionService.isZipDelivery(payload);
         return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"phone-scan.pdf\"")
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(pdf);
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        zip
+                                ? "attachment; filename=\"phone-scan-pages.zip\""
+                                : "attachment; filename=\"phone-scan.pdf\""
+                )
+                .contentType(zip ? MediaType.parseMediaType("application/zip") : MediaType.APPLICATION_PDF)
+                .body(payload);
     }
 }

@@ -27,6 +27,7 @@ public class StudentService {
     private final ArchiveAccessService accessService;
     private final StudentIdFormatService studentIdFormatService;
     private final ArchiveTreeService archiveTreeService;
+    private final StudentEnrollmentService studentEnrollmentService;
 
     public StudentService(
             StudentRepository studentRepository,
@@ -34,7 +35,8 @@ public class StudentService {
             FolderService folderService,
             ArchiveAccessService accessService,
             StudentIdFormatService studentIdFormatService,
-            ArchiveTreeService archiveTreeService
+            ArchiveTreeService archiveTreeService,
+            StudentEnrollmentService studentEnrollmentService
     ) {
         this.studentRepository = studentRepository;
         this.documentRepository = documentRepository;
@@ -42,12 +44,17 @@ public class StudentService {
         this.accessService = accessService;
         this.studentIdFormatService = studentIdFormatService;
         this.archiveTreeService = archiveTreeService;
+        this.studentEnrollmentService = studentEnrollmentService;
     }
 
     public StudentEntity getStudentOrThrow(String studentNumber) {
         String normalized = normalize(studentNumber);
         return studentRepository.findByStudentNumber(normalized)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found: " + normalized));
+    }
+
+    public StudentEntity requireExistingStudent(String studentNumber) {
+        return getStudentOrThrow(studentNumber);
     }
 
     public Optional<StudentEntity> findByStudentNumber(String studentNumber) {
@@ -59,7 +66,7 @@ public class StudentService {
 
     @Transactional
     public StudentEntity resolveOrCreate(String studentNumber, String studentName, String faculty, String department) {
-        return resolveOrCreate(studentNumber, studentName, faculty, department, false);
+        return resolveOrCreate(studentNumber, studentName, faculty, department, false, UserRole.REGISTRAR);
     }
 
     @Transactional
@@ -70,6 +77,18 @@ public class StudentService {
             String department,
             boolean placementFromArchiveContext
     ) {
+        return resolveOrCreate(studentNumber, studentName, faculty, department, placementFromArchiveContext, UserRole.REGISTRAR);
+    }
+
+    @Transactional
+    public StudentEntity resolveOrCreate(
+            String studentNumber,
+            String studentName,
+            String faculty,
+            String department,
+            boolean placementFromArchiveContext,
+            UserRole creatorRole
+    ) {
         String normalizedNumber = normalize(studentNumber);
         String normalizedName = normalizeName(studentName);
         String normalizedFaculty = normalizeOptional(faculty);
@@ -77,7 +96,11 @@ public class StudentService {
 
         StudentEntity existing = studentRepository.findByStudentNumber(normalizedNumber).orElse(null);
         if (existing != null) {
-            rejectCrossDepartmentPlacement(existing, normalizedFaculty, normalizedDepartment);
+            if (creatorRole == UserRole.DEAN_OF_FACULTY && normalizedFaculty != null) {
+                accessService.requireStudentInDeanFaculty(existing, normalizedFaculty);
+            } else {
+                rejectCrossDepartmentPlacement(existing, normalizedFaculty, normalizedDepartment);
+            }
             boolean changed = false;
             if (normalizedName != null && !normalizedName.isBlank()) {
                 if (placementFromArchiveContext
@@ -100,10 +123,18 @@ public class StudentService {
                 existing.setDepartment(normalizedDepartment);
                 changed = true;
             }
+            if (existing.getRegisteredByRole() == null) {
+                existing.setRegisteredByRole(UserRole.REGISTRAR);
+                changed = true;
+            }
             if (changed) {
                 existing = studentRepository.save(existing);
             }
             return existing;
+        }
+
+        if (!canCreateStudent(creatorRole)) {
+            throw new IllegalArgumentException(StudentEnrollmentService.ONLY_REGISTRAR_REGISTER_MESSAGE);
         }
 
         if (normalizedName == null) {
@@ -131,6 +162,7 @@ public class StudentService {
         created.setFullName(normalizedName);
         created.setFaculty(normalizedFaculty);
         created.setDepartment(normalizedDepartment);
+        created.setRegisteredByRole(resolveRegisteredByRole(creatorRole));
         created.setCreatedAt(LocalDateTime.now());
         return studentRepository.save(created);
     }
@@ -157,6 +189,8 @@ public class StudentService {
 
         ArchiveTreeService.StudentUploadPlacement placement = archiveTreeService.resolveStudentUploadPlacement(student);
 
+        Long folderId = resolveLookupFolderId(student, role);
+
         return new StudentArchiveResponse(
                 student.getStudentNumber(),
                 student.getFullName(),
@@ -164,18 +198,53 @@ public class StudentService {
                 placement.department(),
                 placement.academicYear(),
                 placement.semester(),
-                archiveTreeService.findStudentFolderId(student).orElse(null),
+                folderId,
                 documents.size(),
                 documents
         );
     }
 
+    private Long resolveLookupFolderId(StudentEntity student, UserRole role) {
+        if (role != null && role != UserRole.STUDENT) {
+            Optional<Long> roleFolder = studentEnrollmentService.findRoleBranchStudentFolderId(
+                    student.getStudentNumber(),
+                    role
+            );
+            if (roleFolder.isPresent()) {
+                return roleFolder.get();
+            }
+        }
+        return archiveTreeService.findStudentFolderId(student).orElse(null);
+    }
+
     public StudentLookupResponse lookupStudent(String studentNumber, String rawRole, String rawSessionStudentNumber) {
+        return lookupStudent(studentNumber, rawRole, rawSessionStudentNumber, null);
+    }
+
+    public StudentLookupResponse lookupStudent(
+            String studentNumber,
+            String rawRole,
+            String rawSessionStudentNumber,
+            String rawViewerFaculty
+    ) {
         String normalized = normalize(studentNumber);
-        if (studentRepository.findByStudentNumber(normalized).isEmpty()) {
+        Optional<StudentEntity> studentOptional = studentRepository.findByStudentNumber(normalized);
+        if (studentOptional.isEmpty()) {
             return StudentLookupResponse.notFound(normalized);
         }
-        return StudentLookupResponse.fromArchive(getStudentArchive(studentNumber, rawRole, rawSessionStudentNumber));
+        UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String viewerFaculty = accessService.normalizeViewerDepartment(rawViewerFaculty);
+        StudentEntity student = studentOptional.get();
+        if (role == UserRole.DEAN_OF_FACULTY) {
+            accessService.requireDeanFaculty(role, viewerFaculty);
+            if (!accessService.isStudentInDeanFaculty(student, viewerFaculty)) {
+                throw new IllegalArgumentException(
+                        accessService.formatDeanFacultyMismatchMessage(student.getFaculty(), viewerFaculty));
+            }
+        }
+        StudentArchiveResponse archive = getStudentArchive(studentNumber, rawRole, rawSessionStudentNumber);
+        boolean registeredByRegistrar = studentEnrollmentService.isRegisteredByRegistrar(normalized);
+        return StudentLookupResponse.fromArchive(archive, registeredByRegistrar);
     }
 
     public List<String> detectConflicts(
@@ -218,6 +287,17 @@ public class StudentService {
                     + ", not " + faculty.trim());
         }
         return conflicts;
+    }
+
+    private boolean canCreateStudent(UserRole creatorRole) {
+        return creatorRole == UserRole.REGISTRAR || creatorRole == UserRole.ADMIN;
+    }
+
+    private UserRole resolveRegisteredByRole(UserRole creatorRole) {
+        if (creatorRole == UserRole.ADMIN || creatorRole == UserRole.REGISTRAR) {
+            return UserRole.REGISTRAR;
+        }
+        return creatorRole;
     }
 
     private void rejectCrossDepartmentPlacement(

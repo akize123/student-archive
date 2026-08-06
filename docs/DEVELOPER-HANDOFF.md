@@ -186,7 +186,7 @@ Then start backend again.
 | Librarian | `librarian` | `Library@123` |
 | Student | `20251SEN001` | `Student@123` |
 
-HOD: one seeded account per academic department with short usernames (`hod.acc`, `hod.sof`, `hod.psy`, …) and shared password `Hod@123`. See `README.md` and `HodLoginPasswords.java`.
+HOD: one seeded account — username `hod`, password `Head@123`, department Software Engineering. Other demo HOD accounts are deactivated on startup. See `README.md` and `HodLoginPasswords.java`.
 
 Seeded in `AccountSeedData.java`.
 

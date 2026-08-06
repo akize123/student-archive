@@ -6,32 +6,48 @@ import {
   getAdminDashboard,
   getAdminOffices,
   getAdminPrivileges,
+  getStudentEnrollment,
   updateAdminUser
 } from '../api'
 import {
   CATEGORY_LABELS,
   OFFICE_META,
   activityScopeTabs,
+  filterArchiveTreeForOffice,
   officeMembersForRole,
   roleLabel
 } from '../adminOfficeUtils'
-import { academicDepartmentOptions } from '../academicDepartments'
+import { academicDepartmentOptions, facultyForAcademicDepartment, facultyOptions, studentFacultyOptions } from '../academicDepartments'
 import { CheckIcon, XIcon } from './Icons'
 
 const roleOptions = [
   { value: 'ADMIN', label: 'System Administrator' },
   { value: 'REGISTRAR', label: 'Registrar' },
+  { value: 'FINANCE', label: 'Finance Office' },
   { value: 'EXAMINATION_OFFICER', label: 'Examination Officer' },
   { value: 'HOD', label: 'Head of Department' },
+  { value: 'DEAN_OF_FACULTY', label: 'Dean of Faculty' },
   { value: 'LIBRARIAN', label: 'Librarian' },
   { value: 'STUDENT', label: 'Student' }
 ]
 
+const roleChoiceHints = {
+  REGISTRAR: 'Student intake and registration archive',
+  FINANCE: 'Finance years and payment records',
+  EXAMINATION_OFFICER: 'Exam papers and marks archive',
+  HOD: 'One faculty and one academic department',
+  DEAN_OF_FACULTY: 'All departments in one faculty',
+  LIBRARIAN: 'Final year project review',
+  STUDENT: 'Personal archive for a student ID'
+}
+
 const roleDepartments = {
   ADMIN: 'ICT Office',
   REGISTRAR: 'Registrar Office',
+  FINANCE: 'Finance Office',
   EXAMINATION_OFFICER: 'Examination Office',
   HOD: 'Department Office',
+  DEAN_OF_FACULTY: 'Faculty Office',
   LIBRARIAN: 'University Library',
   STUDENT: 'Student Workspace'
 }
@@ -47,8 +63,10 @@ const defaultPrivilegesByRole = {
     'SYSTEM_MAINTENANCE'
   ],
   REGISTRAR: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
+  FINANCE: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   EXAMINATION_OFFICER: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   HOD: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL'],
+  DEAN_OF_FACULTY: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD'],
   LIBRARIAN: ['ARCHIVE_ACCESS', 'DOCUMENT_APPROVAL'],
   STUDENT: ['ARCHIVE_ACCESS', 'DOCUMENT_UPLOAD']
 }
@@ -63,6 +81,22 @@ function activityCategoryLabel(category) {
   return normalized || 'Action'
 }
 
+function usesScopedDepartmentPicker(role) {
+  return role === 'HOD' || role === 'DEAN_OF_FACULTY'
+}
+
+function departmentFieldLabel(role) {
+  if (role === 'HOD') return 'Academic department'
+  if (role === 'DEAN_OF_FACULTY') return 'Faculty'
+  return 'Department'
+}
+
+const STUDENT_WORKSPACE_TEMPLATE = [
+  { id: 'official', name: 'Official Documents', code: 'SOFF', children: [] },
+  { id: 'projects', name: 'My Projects', code: 'SFYP', children: [] },
+  { id: 'archive', name: 'Archive Project', code: 'SARC', children: [] }
+]
+
 function buildUserForm(overrides = {}) {
   const role = overrides.role || 'REGISTRAR'
   return {
@@ -73,6 +107,9 @@ function buildUserForm(overrides = {}) {
     role,
     department: overrides.department ?? roleDepartments[role] ?? '',
     privileges: overrides.privileges ?? defaultPrivilegesByRole[role] ?? [],
+    studentNumber: overrides.studentNumber ?? '',
+    faculty: overrides.faculty ?? '',
+    academicDepartment: overrides.academicDepartment ?? '',
     ...overrides
   }
 }
@@ -120,13 +157,36 @@ export default function AdminDashboard({ onNotify }) {
   const [editingUser, setEditingUser] = useState(null)
   const [form, setForm] = useState(emptyUserForm)
   const [activityScope, setActivityScope] = useState('REGISTRAR')
-  const [activePanel, setActivePanel] = useState('activity')
+  const [activePanel, setActivePanel] = useState('users')
   const [roleActivities, setRoleActivities] = useState([])
   const [activityTotal, setActivityTotal] = useState(0)
   const [activitiesLoading, setActivitiesLoading] = useState(false)
+  const [studentLinkPreview, setStudentLinkPreview] = useState(null)
+  const [studentLinkError, setStudentLinkError] = useState('')
+  const [studentLinkBusy, setStudentLinkBusy] = useState(false)
+  const [studentPlacementLocked, setStudentPlacementLocked] = useState(false)
+  const [allowAdminEditPlacement, setAllowAdminEditPlacement] = useState(false)
+
+  const filteredArchiveTemplate = useMemo(
+    () => (form.role === 'STUDENT'
+      ? STUDENT_WORKSPACE_TEMPLATE
+      : filterArchiveTreeForOffice(archiveTemplate, form.role)),
+    [archiveTemplate, form.role]
+  )
+
+  const studentDepartmentOptions = useMemo(() => {
+    const faculty = studentFacultyOptions.find((entry) => (
+      String(entry.value || '').trim().toLowerCase() === String(form.faculty || '').trim().toLowerCase()
+    ))
+    return faculty?.departments || []
+  }, [form.faculty])
 
   const officeMembers = useMemo(
-    () => officeMembersForRole(offices, form.role, form.role === 'HOD' ? form.department : null),
+    () => officeMembersForRole(
+      offices,
+      form.role,
+      usesScopedDepartmentPicker(form.role) ? form.department : null
+    ),
     [offices, form.role, form.department]
   )
 
@@ -213,6 +273,7 @@ export default function AdminDashboard({ onNotify }) {
     setForm(buildUserForm())
     setWizardStep(1)
     setEnabledCategories(OFFICE_META.REGISTRAR?.categories || [])
+    resetStudentLookupState()
     setModalMode('create')
   }
 
@@ -220,10 +281,93 @@ export default function AdminDashboard({ onNotify }) {
     setForm((current) => ({
       ...current,
       role,
-      department: role === 'HOD' ? '' : (roleDepartments[role] || current.department),
-      privileges: defaultPrivilegesByRole[role] || []
+      department: usesScopedDepartmentPicker(role) ? '' : (roleDepartments[role] || current.department),
+      privileges: defaultPrivilegesByRole[role] || [],
+      studentNumber: role === 'STUDENT' ? current.studentNumber : '',
+      faculty: role === 'STUDENT' ? current.faculty : '',
+      academicDepartment: role === 'STUDENT' ? current.academicDepartment : ''
     }))
     setEnabledCategories(OFFICE_META[role]?.categories || [])
+    if (role !== 'STUDENT') {
+      setStudentLinkPreview(null)
+      setStudentLinkError('')
+      setStudentPlacementLocked(false)
+      setAllowAdminEditPlacement(false)
+    }
+  }
+
+  function resetStudentLookupState() {
+    setStudentLinkPreview(null)
+    setStudentLinkError('')
+    setStudentPlacementLocked(false)
+    setAllowAdminEditPlacement(false)
+  }
+
+  async function lookupStudentForAdmin(studentNumber) {
+    const trimmed = String(studentNumber || '').trim()
+    if (!trimmed) {
+      resetStudentLookupState()
+      setStudentLinkError('Please enter a student ID.')
+      return null
+    }
+    setStudentLinkBusy(true)
+    setStudentLinkError('')
+    setAllowAdminEditPlacement(false)
+    try {
+      const enrollment = await getStudentEnrollment(trimmed)
+      if (!enrollment.registered) {
+        resetStudentLookupState()
+        setStudentLinkError(`Student ${trimmed} is not registered in the archive. Ask the Registrar to create this student ID first.`)
+        return null
+      }
+      const linkedAccount = (data?.users || []).find((user) => (
+        user.role === 'STUDENT'
+        && String(user.studentNumber || '').trim().toUpperCase()
+          === String(enrollment.studentNumber || trimmed).trim().toUpperCase()
+      ))
+      const preview = {
+        studentNumber: enrollment.studentNumber || trimmed,
+        studentName: enrollment.studentName || trimmed,
+        faculty: enrollment.faculty || '',
+        department: enrollment.department || '',
+        hasLoginAccount: Boolean(linkedAccount),
+        loginUsername: linkedAccount?.username || '',
+        loginActive: linkedAccount ? linkedAccount.active !== false : false,
+        linkedUser: linkedAccount || null
+      }
+      if (preview.hasLoginAccount) {
+        setStudentLinkPreview(preview)
+        setStudentPlacementLocked(true)
+        setStudentLinkError('')
+        setForm((current) => ({
+          ...current,
+          studentNumber: preview.studentNumber,
+          fullName: preview.studentName || current.fullName,
+          faculty: preview.faculty || current.faculty,
+          academicDepartment: preview.department || current.academicDepartment,
+          department: roleDepartments.STUDENT
+        }))
+        return preview
+      }
+      const hasExistingPlacement = Boolean(preview.faculty && preview.department)
+      setStudentLinkPreview(preview)
+      setStudentPlacementLocked(hasExistingPlacement)
+      setForm((current) => ({
+        ...current,
+        studentNumber: preview.studentNumber,
+        fullName: preview.studentName || current.fullName,
+        faculty: preview.faculty || current.faculty,
+        academicDepartment: preview.department || current.academicDepartment,
+        department: roleDepartments.STUDENT
+      }))
+      return preview
+    } catch (err) {
+      resetStudentLookupState()
+      setStudentLinkError(err.message || 'Unable to look up this student ID.')
+      return null
+    } finally {
+      setStudentLinkBusy(false)
+    }
   }
 
   function validateForm(step = null) {
@@ -233,8 +377,31 @@ export default function AdminDashboard({ onNotify }) {
     if ((step === null || step >= 4) && !form.fullName.trim()) {
       return 'Please enter the user full name.'
     }
-    if ((step === null || step >= 4) && !form.department.trim()) {
-      return form.role === 'HOD' ? 'Please select an academic department.' : 'Please enter a department.'
+    if ((step === null || step === 2 || step >= 4) && !form.department.trim()) {
+      return form.role === 'HOD'
+        ? 'Please select an academic department.'
+        : form.role === 'DEAN_OF_FACULTY'
+          ? 'Please select a faculty.'
+          : 'Please enter a department.'
+    }
+    if (form.role === 'STUDENT' && (step === null || step === 2 || step >= 4)) {
+      if (!String(form.studentNumber || '').trim()) {
+        return 'Please enter the student ID to link this account.'
+      }
+      if (modalMode === 'create' && !studentLinkPreview) {
+        return studentLinkError || 'Look up the student ID and confirm the archive record before continuing.'
+      }
+      if (modalMode === 'create' && studentLinkPreview?.hasLoginAccount) {
+        return studentLinkPreview.loginActive
+          ? `This student already has login "${studentLinkPreview.loginUsername}". Use Fix login to reset the password instead of creating another account.`
+          : `This student already has login "${studentLinkPreview.loginUsername}", but it is inactive — that is why they cannot sign in. Use Fix login to activate and set a password.`
+      }
+      if (!String(form.faculty || '').trim()) {
+        return 'Please select the faculty this student belongs to.'
+      }
+      if (!String(form.academicDepartment || '').trim()) {
+        return 'Please select the department this student belongs to.'
+      }
     }
     if (modalMode === 'create' && (step === null || step >= 4) && form.password.length < 6) {
       return 'Password must be at least 6 characters.'
@@ -254,8 +421,20 @@ export default function AdminDashboard({ onNotify }) {
       role: user.role,
       department: user.department,
       active: user.active,
-      privileges: user.privileges || []
+      privileges: user.privileges || [],
+      studentNumber: user.studentNumber || '',
+      faculty: '',
+      academicDepartment: ''
     })
+    setStudentLinkPreview(user.role === 'STUDENT' && user.studentNumber
+      ? {
+          studentNumber: user.studentNumber,
+          studentName: user.fullName,
+          faculty: '',
+          department: user.department
+        }
+      : null)
+    setStudentLinkError('')
     setModalMode('edit')
   }
 
@@ -265,6 +444,7 @@ export default function AdminDashboard({ onNotify }) {
     setEditingUser(null)
     setWizardStep(1)
     setForm(emptyUserForm)
+    resetStudentLookupState()
   }
 
   function togglePrivilege(code) {
@@ -317,7 +497,10 @@ export default function AdminDashboard({ onNotify }) {
           role: form.role,
           department: form.department.trim(),
           active: form.active,
-          privileges: form.privileges
+          privileges: form.privileges,
+          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() : null,
+          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
+          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
         })
         onNotify?.('User account created successfully.')
       } else if (editingUser) {
@@ -327,7 +510,10 @@ export default function AdminDashboard({ onNotify }) {
           department: form.department.trim(),
           active: form.active,
           privileges: form.privileges,
-          password: form.password.trim() || null
+          password: form.password.trim() || null,
+          studentNumber: form.role === 'STUDENT' ? form.studentNumber.trim() : null,
+          faculty: form.role === 'STUDENT' ? form.faculty.trim() || null : null,
+          academicDepartment: form.role === 'STUDENT' ? form.academicDepartment.trim() || null : null
         })
         onNotify?.('User account updated successfully.')
       }
@@ -349,7 +535,11 @@ export default function AdminDashboard({ onNotify }) {
   }
 
   return (
-    <section className="admin-page admin-dashboard-page" id="admin-activity-panel">
+    <section
+      className={`admin-page admin-dashboard-page${activePanel === 'users' ? ' admin-dashboard-page--users' : ''}`}
+      id="admin-activity-panel"
+      data-panel={activePanel}
+    >
       <header className="admin-top">
         <div className="admin-top-copy">
           <h1>Users</h1>
@@ -489,47 +679,55 @@ export default function AdminDashboard({ onNotify }) {
               </tr>
             </thead>
             <tbody>
-              {(data?.users || []).map((user) => (
-                <tr key={user.id}>
-                  <td>
-                    <div className="admin-user-cell">
-                      <strong>{user.fullName}</strong>
-                      <span>{user.username}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="admin-user-cell">
-                      <strong>{user.roleLabel}</strong>
-                      <span>
-                        {roleLabel(user.role)} office
-                        {usersByRole[user.role] > 1 ? ` · shared with ${usersByRole[user.role] - 1} other(s)` : ''}
-                      </span>
-                    </div>
-                  </td>
-                  <td>{user.department}</td>
-                  <td>
-                    <div className="admin-privilege-tags">
-                      {(user.privileges || []).slice(0, 2).map((privilege) => (
-                        <span key={privilege} className="admin-tag">{privilege.replaceAll('_', ' ').toLowerCase()}</span>
-                      ))}
-                      {(user.privileges || []).length > 2 ? (
-                        <span className="admin-tag admin-tag-more">+{user.privileges.length - 2}</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td>
-                    <span className={`admin-status ${user.active ? 'is-active' : 'is-inactive'}`}>
-                      {user.active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="admin-muted-cell">{formatDateTime(user.lastLoginAt)}</td>
-                  <td>
-                    <button type="button" className="admin-row-action" onClick={() => openEditModal(user)}>
-                      Edit
-                    </button>
+              {(data?.users || []).length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="admin-muted-cell">
+                    No user accounts to show.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                (data?.users || []).map((user) => (
+                  <tr key={user.id}>
+                    <td>
+                      <div className="admin-user-cell">
+                        <strong>{user.fullName}</strong>
+                        <span>{user.username}{user.role === 'STUDENT' && user.studentNumber ? ` · ${user.studentNumber}` : ''}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="admin-user-cell">
+                        <strong>{user.roleLabel}</strong>
+                        <span>
+                          {roleLabel(user.role)} office
+                          {usersByRole[user.role] > 1 ? ` · shared with ${usersByRole[user.role] - 1} other(s)` : ''}
+                        </span>
+                      </div>
+                    </td>
+                    <td>{user.department}</td>
+                    <td>
+                      <div className="admin-privilege-tags">
+                        {(user.privileges || []).slice(0, 2).map((privilege) => (
+                          <span key={privilege} className="admin-tag">{privilege.replaceAll('_', ' ').toLowerCase()}</span>
+                        ))}
+                        {(user.privileges || []).length > 2 ? (
+                          <span className="admin-tag admin-tag-more">+{user.privileges.length - 2}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`admin-status ${user.active ? 'is-active' : 'is-inactive'}`}>
+                        {user.active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="admin-muted-cell">{formatDateTime(user.lastLoginAt)}</td>
+                    <td>
+                      <button type="button" className="admin-row-action" onClick={() => openEditModal(user)}>
+                        Edit
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -539,116 +737,412 @@ export default function AdminDashboard({ onNotify }) {
 
       {modalMode ? (
         <div className="modal-backdrop" onClick={closeModal} role="presentation">
-          <div className="modal admin-user-modal" onClick={(event) => event.stopPropagation()} role="presentation">
+          <div
+            className={`modal admin-user-modal${
+              modalMode === 'create' ? ` admin-user-modal-step${wizardStep}` : ''
+            }`}
+            onClick={(event) => event.stopPropagation()}
+            role="presentation"
+          >
             <div className="modal-head admin-modal-head">
               <div>
                 <h2>{modalMode === 'create' ? 'New user' : form.fullName}</h2>
                 <p>
                   {modalMode === 'create'
-                    ? `Step ${wizardStep} of 4 · Shared office setup`
+                    ? (wizardStep === 1
+                      ? 'Step 1 of 4 · Choose the account role'
+                      : wizardStep === 2
+                        ? 'Step 2 of 4 · Assign office scope'
+                        : wizardStep === 3
+                          ? 'Step 3 of 4 · Archive placement'
+                          : 'Step 4 of 4 · Account details')
                     : 'Update account details'}
                 </p>
               </div>
-              <button type="button" className="ghost-icon" onClick={closeModal}>
+              <button type="button" className="ghost-icon" onClick={closeModal} aria-label="Close">
                 <XIcon className="icon" />
               </button>
             </div>
 
             {modalMode === 'create' ? (
               <div className="admin-wizard">
-                <div className="admin-wizard-steps">
+                <div className="admin-wizard-steps" aria-label="Setup steps">
                   {['Role', 'Office', 'Archive tree', 'Account'].map((label, index) => (
                     <span
                       key={label}
                       className={`admin-wizard-step ${wizardStep === index + 1 ? 'active' : wizardStep > index + 1 ? 'done' : ''}`}
                     >
-                      {index + 1}. {label}
+                      <em>{index + 1}</em>
+                      {label}
                     </span>
                   ))}
                 </div>
 
                 {wizardStep === 1 ? (
-                  <div className="admin-wizard-panel">
-                    <label>
+                  <div className="admin-wizard-panel admin-wizard-panel-role">
+                    <div className="admin-wizard-lead">
+                      <strong>Who is this account for?</strong>
+                      <p>Choose a role. Office access and archive scope follow this selection.</p>
+                    </div>
+                    <label className="admin-role-combo">
                       <span>Role</span>
-                      <select value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
-                        {roleOptions.filter((option) => option.value !== 'ADMIN').map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
+                      <div className="admin-role-combo-shell">
+                        <select
+                          value={form.role}
+                          onChange={(event) => handleRoleChange(event.target.value)}
+                          aria-label="Who is this account for?"
+                        >
+                          {roleOptions.filter((option) => option.value !== 'ADMIN').map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </label>
+                    <div className="admin-role-combo-hint" aria-live="polite">
+                      <em>{roleLabel(form.role)}</em>
+                      <p>{roleChoiceHints[form.role] || OFFICE_META[form.role]?.summary || ''}</p>
+                    </div>
                   </div>
                 ) : null}
 
                 {wizardStep === 2 ? (
-                  <div className="admin-wizard-panel">
-                    <div className="admin-office-assignment">
-                      {officeMembers.length ? (
-                        <>
-                          <strong>
-                            {form.role === 'HOD'
-                              ? `Join existing HOD access for ${form.department || 'this department'}`
-                              : `Join existing ${roleLabel(form.role)} office`}
-                          </strong>
-                          <p>
-                            {form.role === 'HOD'
-                              ? `This user will share the same department-scoped archive with ${officeMembers.length} existing HOD account(s).`
-                              : `This user will share the same dashboard and archive tree with ${officeMembers.length} existing member(s).`}
-                          </p>
-                          <ul className="admin-office-member-list">
-                            {officeMembers.map((member) => (
-                              <li key={member.id}>{member.fullName} · {member.username}</li>
-                            ))}
-                          </ul>
-                        </>
-                      ) : (
-                        <>
-                          <strong>
-                            {form.role === 'HOD' ? 'First HOD for this department' : `Creates new ${roleLabel(form.role)} office`}
-                          </strong>
-                          <p>
-                            {form.role === 'HOD'
-                              ? 'They will only see their faculty path and this academic department in the archive tree.'
-                              : 'This is the first account for this role. They will use the shared global archive tree.'}
-                          </p>
-                        </>
-                      )}
+                  <div className="admin-wizard-panel admin-wizard-panel-office">
+                    <div className="admin-wizard-lead">
+                      <strong>
+                        {form.role === 'STUDENT'
+                          ? 'Student ID and academic placement'
+                          : form.role === 'HOD'
+                            ? 'Assign academic department'
+                            : form.role === 'DEAN_OF_FACULTY'
+                              ? 'Assign faculty'
+                              : `Confirm ${roleLabel(form.role)} office`}
+                      </strong>
+                      <p>
+                        {form.role === 'STUDENT'
+                          ? 'Look up an existing student. Their workspace loads automatically; Admin may unlock placement to change it.'
+                          : form.role === 'HOD'
+                            ? 'They only browse their faculty and this department.'
+                            : form.role === 'DEAN_OF_FACULTY'
+                              ? 'They browse every department under this faculty.'
+                              : 'This office shares one dashboard and archive branch for the role.'}
+                      </p>
                     </div>
-                    <label>
-                      <span>{form.role === 'HOD' ? 'Academic department' : 'Department'}</span>
-                      {form.role === 'HOD' ? (
-                        <select
-                          value={form.department}
-                          onChange={(event) => setForm({ ...form, department: event.target.value })}
-                          required
-                        >
-                          <option value="">Select department…</option>
-                          {academicDepartmentOptions.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          value={form.department}
-                          onChange={(event) => setForm({ ...form, department: event.target.value })}
-                          required
-                        />
-                      )}
-                    </label>
+
+                    <div className="admin-office-role-chip">
+                      <span>Role</span>
+                      <strong>{roleLabel(form.role)}</strong>
+                    </div>
+
+                    {form.role === 'STUDENT' ? (
+                      <div className="admin-office-fields">
+                        <label className="admin-office-field">
+                          <span>Student ID</span>
+                          <div className="admin-inline-field-row">
+                            <input
+                              value={form.studentNumber}
+                              onChange={(event) => {
+                                resetStudentLookupState()
+                                setForm({
+                                  ...form,
+                                  studentNumber: event.target.value,
+                                  faculty: '',
+                                  academicDepartment: '',
+                                  fullName: ''
+                                })
+                              }}
+                              placeholder="e.g. 20251SEN001"
+                              required
+                            />
+                            <button
+                              type="button"
+                              className="ghost-btn"
+                              onClick={() => lookupStudentForAdmin(form.studentNumber)}
+                              disabled={studentLinkBusy}
+                            >
+                              {studentLinkBusy ? 'Searching…' : 'Look up'}
+                            </button>
+                          </div>
+                        </label>
+                        {studentLinkError ? <p className="admin-field-error">{studentLinkError}</p> : null}
+
+                        {studentLinkPreview?.hasLoginAccount ? (
+                          <div className="admin-student-preview admin-student-existing admin-student-has-login">
+                            <div>
+                              <strong>{studentLinkPreview.studentName}</strong>
+                              <span>{studentLinkPreview.studentNumber}</span>
+                            </div>
+                            <p>
+                              Login already exists as <strong>{studentLinkPreview.loginUsername}</strong>
+                              {studentLinkPreview.loginActive
+                                ? '. A second account cannot be created for the same student ID.'
+                                : ', but the account is inactive — that is why this student cannot sign in.'}
+                            </p>
+                            <p>
+                              {studentLinkPreview.loginActive
+                                ? 'If the password is unknown, open Fix login and set a new password.'
+                                : 'Open Fix login to activate the account and set a password.'}
+                            </p>
+                            <div className="admin-placement-lock-bar">
+                              <p>
+                                Existing placement:
+                                {' '}
+                                {[studentLinkPreview.faculty, studentLinkPreview.department].filter(Boolean).join(' · ')
+                                  || 'not set'}
+                              </p>
+                              <button
+                                type="button"
+                                className="primary-btn admin-placement-edit-btn"
+                                onClick={() => {
+                                  if (studentLinkPreview.linkedUser) {
+                                    openEditModal({
+                                      ...studentLinkPreview.linkedUser,
+                                      active: true
+                                    })
+                                  }
+                                }}
+                              >
+                                Fix login
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {studentLinkPreview && !studentLinkPreview.hasLoginAccount ? (
+                          <>
+                            <div className="admin-student-preview admin-student-existing">
+                              <div>
+                                <strong>{studentLinkPreview.studentName}</strong>
+                                <span>{studentLinkPreview.studentNumber}</span>
+                              </div>
+                              <p>
+                                Existing archive found
+                                {studentLinkPreview.faculty || studentLinkPreview.department
+                                  ? `: ${[studentLinkPreview.faculty, studentLinkPreview.department].filter(Boolean).join(' · ')}`
+                                  : '. Set faculty and department below.'}
+                              </p>
+                              <div className="admin-student-workspace-preview">
+                                <span>Student login workspace</span>
+                                <ul>
+                                  {STUDENT_WORKSPACE_TEMPLATE.map((folder) => (
+                                    <li key={folder.id}>{folder.name}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+
+                            <div className="admin-placement-lock-bar">
+                              <p>
+                                {studentPlacementLocked && !allowAdminEditPlacement
+                                  ? 'Placement is locked to the existing archive. Admin can unlock to change it.'
+                                  : allowAdminEditPlacement
+                                    ? 'Admin edit enabled. Changing faculty/department updates Registrar storage placement.'
+                                    : 'Choose faculty and department for this student.'}
+                              </p>
+                              {studentPlacementLocked ? (
+                                <button
+                                  type="button"
+                                  className="ghost-btn admin-placement-edit-btn"
+                                  onClick={() => {
+                                    if (allowAdminEditPlacement) {
+                                      setAllowAdminEditPlacement(false)
+                                      setForm((current) => ({
+                                        ...current,
+                                        faculty: studentLinkPreview.faculty || '',
+                                        academicDepartment: studentLinkPreview.department || ''
+                                      }))
+                                    } else {
+                                      setAllowAdminEditPlacement(true)
+                                    }
+                                  }}
+                                >
+                                  {allowAdminEditPlacement ? 'Keep existing placement' : 'Change placement'}
+                                </button>
+                              ) : null}
+                            </div>
+
+                            <label className="admin-office-field">
+                              <span>Faculty</span>
+                              <select
+                                value={form.faculty}
+                                onChange={(event) => setForm({
+                                  ...form,
+                                  faculty: event.target.value,
+                                  academicDepartment: ''
+                                })}
+                                disabled={studentPlacementLocked && !allowAdminEditPlacement}
+                                required
+                              >
+                                <option value="">Select faculty…</option>
+                                {facultyOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="admin-office-field">
+                              <span>Department</span>
+                              <select
+                                value={form.academicDepartment}
+                                onChange={(event) => setForm({ ...form, academicDepartment: event.target.value })}
+                                disabled={!form.faculty || (studentPlacementLocked && !allowAdminEditPlacement)}
+                                required
+                              >
+                                <option value="">
+                                  {form.faculty ? 'Select department…' : 'Choose faculty first'}
+                                </option>
+                                {studentDepartmentOptions.map((department) => (
+                                  <option key={department} value={department}>{department}</option>
+                                ))}
+                              </select>
+                            </label>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {form.role === 'HOD' ? (
+                      <div className="admin-office-fields">
+                        <label className="admin-office-field">
+                          <span>Academic department</span>
+                          <select
+                            value={form.department}
+                            onChange={(event) => setForm({ ...form, department: event.target.value })}
+                            required
+                          >
+                            <option value="">Select department…</option>
+                            {academicDepartmentOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.faculty} · {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {form.department ? (
+                          <div className="admin-office-assignment compact">
+                            <strong>
+                              {officeMembers.length
+                                ? `Join HOD access · ${form.department}`
+                                : `First HOD · ${form.department}`}
+                            </strong>
+                            <p>
+                              {facultyForAcademicDepartment(form.department)
+                                ? `${facultyForAcademicDepartment(form.department)} → ${form.department}`
+                                : form.department}
+                              {officeMembers.length
+                                ? ` · ${officeMembers.length} existing account(s)`
+                                : ''}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {form.role === 'DEAN_OF_FACULTY' ? (
+                      <div className="admin-office-fields">
+                        <label className="admin-office-field">
+                          <span>Faculty</span>
+                          <select
+                            value={form.department}
+                            onChange={(event) => setForm({ ...form, department: event.target.value })}
+                            required
+                          >
+                            <option value="">Select faculty…</option>
+                            {facultyOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {form.department ? (
+                          <div className="admin-office-assignment compact">
+                            <strong>
+                              {officeMembers.length
+                                ? `Join Dean access · ${form.department}`
+                                : `First Dean · ${form.department}`}
+                            </strong>
+                            <p>
+                              {officeMembers.length
+                                ? `${officeMembers.length} existing Dean account(s) in this faculty.`
+                                : 'Faculty-wide archive for this dean.'}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {form.role !== 'STUDENT' && form.role !== 'HOD' && form.role !== 'DEAN_OF_FACULTY' ? (
+                      <div className="admin-office-fields">
+                        <div className="admin-office-assignment compact">
+                          <strong>
+                            {officeMembers.length
+                              ? `Join existing ${roleLabel(form.role)} office`
+                              : `${roleLabel(form.role)} office`}
+                          </strong>
+                          <p>
+                            {officeMembers.length
+                              ? `Shared with ${officeMembers.length} member(s).`
+                              : 'Uses this role’s shared archive branch.'}
+                          </p>
+                        </div>
+                        <label className="admin-office-field">
+                          <span>{departmentFieldLabel(form.role)}</span>
+                          <input
+                            value={form.department}
+                            onChange={(event) => setForm({ ...form, department: event.target.value })}
+                            required
+                          />
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
                 {wizardStep === 3 ? (
-                  <div className="admin-wizard-panel">
-                    <p className="admin-template-lead">Default archive structure (Faculty → Department → Year → Semester):</p>
-                    {templateLoading ? (
+                  <div className="admin-wizard-panel admin-wizard-panel-tree">
+                    <div className="admin-wizard-lead">
+                      <strong>
+                        {form.role === 'STUDENT'
+                          ? 'Student archive workspace'
+                          : `${roleLabel(form.role)} archive tree`}
+                      </strong>
+                      <p>
+                        {form.role === 'STUDENT'
+                          ? 'This is what the student sees after login. Faculty/department from step 2 only store them in the Registrar archive.'
+                          : 'Preview of folders this role can browse (Year → Semester → Student → Document type).'}
+                      </p>
+                    </div>
+                    <div className="admin-office-role-chip">
+                      <span>Role</span>
+                      <strong>{roleLabel(form.role)}</strong>
+                      {form.role === 'STUDENT' && form.faculty ? (
+                        <>
+                          <span>Stored under</span>
+                          <strong>
+                            {[form.faculty, form.academicDepartment].filter(Boolean).join(' · ')}
+                          </strong>
+                        </>
+                      ) : null}
+                      {form.role === 'HOD' && form.department ? (
+                        <>
+                          <span>Dept</span>
+                          <strong>{form.department}</strong>
+                        </>
+                      ) : null}
+                      {form.role === 'DEAN_OF_FACULTY' && form.department ? (
+                        <>
+                          <span>Faculty</span>
+                          <strong>{form.department}</strong>
+                        </>
+                      ) : null}
+                    </div>
+                    {templateLoading && form.role !== 'STUDENT' ? (
                       <p className="admin-muted-cell">Loading archive template…</p>
                     ) : (
-                      <TemplateTree nodes={archiveTemplate} />
+                      <TemplateTree nodes={filteredArchiveTemplate} />
                     )}
-                    {roleCategories.length ? (
+                    {form.role !== 'STUDENT' && roleCategories.length ? (
                       <div className="admin-category-picker">
-                        <span className="admin-field-label">Document categories for this office</span>
+                        <span className="admin-field-label">Document categories</span>
                         <div className="admin-privilege-grid">
                           {roleCategories.map((category) => (
                             <label key={category} className={`admin-privilege-option ${enabledCategories.includes(category) ? 'checked' : ''}`}>
@@ -669,7 +1163,21 @@ export default function AdminDashboard({ onNotify }) {
                 ) : null}
 
                 {wizardStep === 4 ? (
-                  <form className="admin-user-form" onSubmit={handleSubmit}>
+                  <form className="admin-user-form admin-user-form-step4" onSubmit={handleSubmit}>
+                    <div className="admin-wizard-lead">
+                      <strong>Account details</strong>
+                      <p>Finish with the login name and password for this {roleLabel(form.role).toLowerCase()}.</p>
+                    </div>
+                    <div className="admin-office-role-chip">
+                      <span>Role</span>
+                      <strong>{roleLabel(form.role)}</strong>
+                      {form.role === 'STUDENT' && form.studentNumber ? (
+                        <>
+                          <span>ID</span>
+                          <strong>{form.studentNumber}</strong>
+                        </>
+                      ) : null}
+                    </div>
                     <label>
                       <span>Username</span>
                       <input
@@ -749,7 +1257,7 @@ export default function AdminDashboard({ onNotify }) {
                   </select>
                 </label>
                 <label>
-                  <span>{form.role === 'HOD' ? 'Academic department' : 'Department'}</span>
+                  <span>{departmentFieldLabel(form.role)}</span>
                   {form.role === 'HOD' ? (
                     <select
                       value={form.department}
@@ -761,6 +1269,17 @@ export default function AdminDashboard({ onNotify }) {
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
+                  ) : form.role === 'DEAN_OF_FACULTY' ? (
+                    <select
+                      value={form.department}
+                      onChange={(event) => setForm({ ...form, department: event.target.value })}
+                      required
+                    >
+                      <option value="">Select faculty…</option>
+                      {facultyOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
                   ) : (
                     <input
                       value={form.department}
@@ -769,6 +1288,35 @@ export default function AdminDashboard({ onNotify }) {
                     />
                   )}
                 </label>
+                {form.role === 'STUDENT' ? (
+                  <>
+                    <label>
+                      <span>Student ID</span>
+                      <div className="admin-inline-field-row">
+                        <input
+                          value={form.studentNumber}
+                          onChange={(event) => setForm({ ...form, studentNumber: event.target.value })}
+                          placeholder="Registered student ID"
+                          required
+                        />
+                        <button
+                          type="button"
+                          className="ghost-btn"
+                          onClick={() => lookupStudentForAdmin(form.studentNumber)}
+                          disabled={studentLinkBusy}
+                        >
+                          {studentLinkBusy ? 'Searching…' : 'Look up'}
+                        </button>
+                      </div>
+                    </label>
+                    {studentLinkError ? <p className="admin-field-error">{studentLinkError}</p> : null}
+                    {studentLinkPreview ? (
+                      <p className="admin-muted-cell">
+                        Linked archive: {studentLinkPreview.studentName} · {[studentLinkPreview.faculty, studentLinkPreview.department].filter(Boolean).join(' · ')}
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
                 <label>
                   <span>New password (optional)</span>
                   <input

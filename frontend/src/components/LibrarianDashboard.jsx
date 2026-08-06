@@ -1,5 +1,23 @@
 import React, { useState, useMemo } from 'react'
-import { CheckIcon, DocumentIcon, DownloadIcon, FolderIcon, SearchIcon, XIcon } from './Icons'
+import { CheckIcon, ChevronDownIcon, DocumentIcon, DownloadIcon, FolderIcon } from './Icons'
+
+const LIBRARIAN_FYP_PANEL_KEY = 'librarian-fyp-panel-open'
+const LIBRARIAN_ACTIVITY_PANEL_KEY = 'librarian-activity-panel-open'
+
+function loadPanelOpen(storageKey, defaultOpen = true) {
+  if (typeof window === 'undefined') {
+    return defaultOpen
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (raw == null) {
+      return defaultOpen
+    }
+    return raw !== 'false'
+  } catch {
+    return defaultOpen
+  }
+}
 
 function formatBytes(bytes) {
   if (!bytes) return '0 B'
@@ -86,7 +104,8 @@ export default function LibrarianDashboard({
 }) {
   const [submissionTab, setSubmissionTab] = useState('pending')
   const [activityCategoryFilter, setActivityCategoryFilter] = useState('ALL')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [fypPanelOpen, setFypPanelOpen] = useState(() => loadPanelOpen(LIBRARIAN_FYP_PANEL_KEY, true))
+  const [activityPanelOpen, setActivityPanelOpen] = useState(() => loadPanelOpen(LIBRARIAN_ACTIVITY_PANEL_KEY, true))
 
   const approvalList = dashboard.awaitingApproval || []
   const pendingApprovals = useMemo(
@@ -107,25 +126,17 @@ export default function LibrarianDashboard({
     : 0
 
   const visibleSubmissions = useMemo(() => {
-    let list = submissionTab === 'pending'
-      ? pendingApprovals
-      : submissionTab === 'accepted'
-        ? acceptedApprovals
-        : submissionTab === 'rejected'
-          ? rejectedApprovals
-          : approvalList
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase()
-      list = list.filter((task) =>
-        String(task.documentTitle || '').toLowerCase().includes(q) ||
-        String(task.requestedBy || '').toLowerCase().includes(q) ||
-        String(task.studentNumber || '').toLowerCase().includes(q)
-      )
+    if (submissionTab === 'pending') {
+      return pendingApprovals
     }
-
-    return list
-  }, [submissionTab, pendingApprovals, acceptedApprovals, rejectedApprovals, approvalList, searchQuery])
+    if (submissionTab === 'accepted') {
+      return acceptedApprovals
+    }
+    if (submissionTab === 'rejected') {
+      return rejectedApprovals
+    }
+    return approvalList
+  }, [submissionTab, pendingApprovals, acceptedApprovals, rejectedApprovals, approvalList])
 
   const rawActivities = dashboard.recentActivity || dashboard.departmentActivity || []
   
@@ -139,6 +150,18 @@ export default function LibrarianDashboard({
     })
   }, [rawActivities, activityCategoryFilter])
 
+  function togglePanel(storageKey, setter) {
+    setter((current) => {
+      const next = !current
+      try {
+        window.localStorage.setItem(storageKey, String(next))
+      } catch {
+        // ignore storage failures
+      }
+      return next
+    })
+  }
+
   return (
     <section className="librarian-dashboard">
       {/* Top Header Banner */}
@@ -146,11 +169,7 @@ export default function LibrarianDashboard({
         <div className="librarian-top-copy">
           <div className="librarian-title-row">
             <h1>Library Dashboard</h1>
-            <span className="librarian-pulse-badge">
-              <span className="pulse-dot" /> Live Sync
-            </span>
           </div>
-          <p>Review final year project submissions, audit approvals, and manage library archives.</p>
         </div>
         <div className="librarian-top-actions">
           {onBrowse ? (
@@ -162,8 +181,9 @@ export default function LibrarianDashboard({
         </div>
       </header>
 
-      {/* Metrics Grid */}
-      <div className="librarian-metrics">
+      {/* Unified workspace card */}
+      <div className="librarian-workspace-card">
+        <div className="librarian-metrics">
         <article className="librarian-metric metric-pending">
           <div className="librarian-metric-icon-wrap" aria-hidden="true">
             <DocumentIcon className="icon" />
@@ -175,7 +195,7 @@ export default function LibrarianDashboard({
               {pendingApprovals.length > 0 ? (
                 <span className="librarian-badge-chip pending-chip">Needs attention</span>
               ) : (
-                <span className="librarian-badge-chip clear-chip">All caught up</span>
+                <span className="librarian-badge-chip neutral-chip">All caught up</span>
               )}
             </div>
             <span className="librarian-metric-caption">FYP submissions awaiting review</span>
@@ -190,7 +210,7 @@ export default function LibrarianDashboard({
             <span className="librarian-metric-label">Department Files</span>
             <div className="librarian-metric-val-row">
               <strong>{dashboard.departmentFiles ?? 0}</strong>
-              <span className="librarian-badge-chip info-chip">Total Documents</span>
+              <span className="librarian-badge-chip neutral-chip">Total Documents</span>
             </div>
             <span className="librarian-metric-caption">Across all academic departments</span>
           </div>
@@ -204,7 +224,7 @@ export default function LibrarianDashboard({
             <span className="librarian-metric-label">Storage Capacity</span>
             <div className="librarian-metric-val-row">
               <strong>{formatBytes(dashboard.storageUsedBytes)}</strong>
-              <span className="librarian-metric-caption-right">
+              <span className="librarian-badge-chip neutral-chip">
                 {storagePercent.toFixed(0)}% used
               </span>
             </div>
@@ -219,66 +239,56 @@ export default function LibrarianDashboard({
             </span>
           </div>
         </article>
-      </div>
-
-      {/* FYP Submissions Table Card */}
-      <div className="librarian-card">
-        <div className="librarian-card-head">
-          <div>
-            <h2>Final Year Project Submissions</h2>
-            <p>Review student FYP documents, accept into Archive project, or reject with feedback reasons.</p>
-          </div>
-          <div className="librarian-tabs-and-search">
-            <div className="librarian-search-inline">
-              <SearchIcon className="icon search" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search project title or student..."
-                aria-label="Filter submissions"
-              />
-              {searchQuery ? (
-                <button type="button" className="clear-btn" onClick={() => setSearchQuery('')}>
-                  <XIcon className="icon tiny" />
-                </button>
-              ) : null}
-            </div>
-
-            <div className="librarian-tabs" role="tablist">
-              <button
-                type="button"
-                className={`librarian-tab ${submissionTab === 'pending' ? 'active' : ''}`}
-                onClick={() => setSubmissionTab('pending')}
-              >
-                Pending ({pendingApprovals.length})
-              </button>
-              <button
-                type="button"
-                className={`librarian-tab ${submissionTab === 'accepted' ? 'active' : ''}`}
-                onClick={() => setSubmissionTab('accepted')}
-              >
-                Accepted ({acceptedApprovals.length})
-              </button>
-              <button
-                type="button"
-                className={`librarian-tab ${submissionTab === 'rejected' ? 'active' : ''}`}
-                onClick={() => setSubmissionTab('rejected')}
-              >
-                Rejected ({rejectedApprovals.length})
-              </button>
-              <button
-                type="button"
-                className={`librarian-tab ${submissionTab === 'all' ? 'active' : ''}`}
-                onClick={() => setSubmissionTab('all')}
-              >
-                All ({approvalList.length})
-              </button>
-            </div>
-          </div>
         </div>
 
-        <div className="table-shell librarian-table-shell">
+        <section className={`librarian-panel ${fypPanelOpen ? 'is-open' : 'is-collapsed'}`}>
+          <button
+            type="button"
+            className="librarian-panel-toggle"
+            aria-expanded={fypPanelOpen}
+            onClick={() => togglePanel(LIBRARIAN_FYP_PANEL_KEY, setFypPanelOpen)}
+          >
+            <h2 className="librarian-panel-title">Final Year Project Submissions</h2>
+            <span className="librarian-panel-count">{approvalList.length} total</span>
+            <ChevronDownIcon className={`icon small librarian-panel-chevron ${fypPanelOpen ? 'is-open' : ''}`} />
+          </button>
+
+          {fypPanelOpen ? (
+            <div className="librarian-panel-body">
+              <div className="librarian-panel-toolbar">
+                <div className="librarian-tabs" role="tablist">
+                  <button
+                    type="button"
+                    className={`librarian-tab ${submissionTab === 'pending' ? 'active' : ''}`}
+                    onClick={() => setSubmissionTab('pending')}
+                  >
+                    Pending ({pendingApprovals.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`librarian-tab ${submissionTab === 'accepted' ? 'active' : ''}`}
+                    onClick={() => setSubmissionTab('accepted')}
+                  >
+                    Accepted ({acceptedApprovals.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`librarian-tab ${submissionTab === 'rejected' ? 'active' : ''}`}
+                    onClick={() => setSubmissionTab('rejected')}
+                  >
+                    Rejected ({rejectedApprovals.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`librarian-tab ${submissionTab === 'all' ? 'active' : ''}`}
+                    onClick={() => setSubmissionTab('all')}
+                  >
+                    All ({approvalList.length})
+                  </button>
+                </div>
+              </div>
+
+              <div className="table-shell librarian-table-shell">
           <table className="librarian-table">
             <thead>
               <tr>
@@ -381,49 +391,59 @@ export default function LibrarianDashboard({
               )}
             </tbody>
           </table>
-        </div>
-      </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
 
-      {/* Arranged Live Activity Timeline Card */}
-      <div className="librarian-card librarian-activity-card">
-        <div className="librarian-card-head">
-          <div>
-            <h2>Recent Activity Timeline</h2>
-            <p>Chronological feed of approvals, uploads, and library archive management actions.</p>
-          </div>
-          <div className="activity-filter-tabs">
-            <button
-              type="button"
-              className={`activity-filter-btn ${activityCategoryFilter === 'ALL' ? 'active' : ''}`}
-              onClick={() => setActivityCategoryFilter('ALL')}
-            >
-              All Activity
-            </button>
-            <button
-              type="button"
-              className={`activity-filter-btn ${activityCategoryFilter === 'APPROVAL' ? 'active' : ''}`}
-              onClick={() => setActivityCategoryFilter('APPROVAL')}
-            >
-              Approvals
-            </button>
-            <button
-              type="button"
-              className={`activity-filter-btn ${activityCategoryFilter === 'UPLOAD' ? 'active' : ''}`}
-              onClick={() => setActivityCategoryFilter('UPLOAD')}
-            >
-              Uploads
-            </button>
-            <button
-              type="button"
-              className={`activity-filter-btn ${activityCategoryFilter === 'ARCHIVE' ? 'active' : ''}`}
-              onClick={() => setActivityCategoryFilter('ARCHIVE')}
-            >
-              Archive
-            </button>
-          </div>
-        </div>
+        <section className={`librarian-panel librarian-activity-panel ${activityPanelOpen ? 'is-open' : 'is-collapsed'}`}>
+          <button
+            type="button"
+            className="librarian-panel-toggle"
+            aria-expanded={activityPanelOpen}
+            onClick={() => togglePanel(LIBRARIAN_ACTIVITY_PANEL_KEY, setActivityPanelOpen)}
+          >
+            <h2 className="librarian-panel-title">Recent Activity Timeline</h2>
+            <span className="librarian-panel-count">{filteredActivities.length} shown</span>
+            <ChevronDownIcon className={`icon small librarian-panel-chevron ${activityPanelOpen ? 'is-open' : ''}`} />
+          </button>
 
-        <div className="librarian-timeline-shell">
+          {activityPanelOpen ? (
+            <div className="librarian-panel-body">
+              <div className="librarian-panel-toolbar">
+                <div className="activity-filter-tabs">
+                  <button
+                    type="button"
+                    className={`activity-filter-btn ${activityCategoryFilter === 'ALL' ? 'active' : ''}`}
+                    onClick={() => setActivityCategoryFilter('ALL')}
+                  >
+                    All Activity
+                  </button>
+                  <button
+                    type="button"
+                    className={`activity-filter-btn ${activityCategoryFilter === 'APPROVAL' ? 'active' : ''}`}
+                    onClick={() => setActivityCategoryFilter('APPROVAL')}
+                  >
+                    Approvals
+                  </button>
+                  <button
+                    type="button"
+                    className={`activity-filter-btn ${activityCategoryFilter === 'UPLOAD' ? 'active' : ''}`}
+                    onClick={() => setActivityCategoryFilter('UPLOAD')}
+                  >
+                    Uploads
+                  </button>
+                  <button
+                    type="button"
+                    className={`activity-filter-btn ${activityCategoryFilter === 'ARCHIVE' ? 'active' : ''}`}
+                    onClick={() => setActivityCategoryFilter('ARCHIVE')}
+                  >
+                    Archive
+                  </button>
+                </div>
+              </div>
+
+              <div className="librarian-timeline-shell">
           {filteredActivities.length ? (
             <div className="librarian-timeline">
               {filteredActivities.map((entry, index) => {
@@ -469,7 +489,10 @@ export default function LibrarianDashboard({
               </div>
             </div>
           )}
-        </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
       </div>
     </section>
   )

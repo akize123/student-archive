@@ -2,11 +2,14 @@ package com.auca.archive.service;
 
 import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.DocumentStatus;
+import com.auca.archive.domain.FacultyCatalog;
+import com.auca.archive.domain.SharePermission;
 import com.auca.archive.domain.StudentDocumentCategory;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.ActivityEntryEntity;
 import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.model.FolderEntity;
+import com.auca.archive.model.StudentEntity;
 import org.springframework.stereotype.Service;
 
 import java.util.HashSet;
@@ -53,7 +56,9 @@ public class ArchiveAccessService {
             return false;
         }
         if (category == null) {
-            return role == UserRole.REGISTRAR || role == UserRole.HOD;
+            return role == UserRole.REGISTRAR
+                    || role == UserRole.FINANCE
+                    || role == UserRole.HOD;
         }
         return allowedUploadCategories(role).contains(category);
     }
@@ -96,6 +101,10 @@ public class ArchiveAccessService {
             return matchesDepartment(activity.getAcademicDepartment(), viewerDepartment);
         }
 
+        if (viewerRole == UserRole.DEAN_OF_FACULTY) {
+            return isActivityInDeanFaculty(activity.getAcademicDepartment(), viewerDepartment);
+        }
+
         if (activity.getSourceRole() == viewerRole || activity.getTargetRole() == viewerRole) {
             return true;
         }
@@ -105,6 +114,7 @@ public class ArchiveAccessService {
         }
 
         if (viewerRole == UserRole.REGISTRAR
+                || viewerRole == UserRole.FINANCE
                 || viewerRole == UserRole.EXAMINATION_OFFICER
                 || viewerRole == UserRole.LIBRARIAN) {
             return false;
@@ -137,9 +147,18 @@ public class ArchiveAccessService {
             if (viewerRole == ownerRole) {
                 return true;
             }
-            return viewerRole == UserRole.LIBRARIAN
+            if (viewerRole == UserRole.LIBRARIAN
                     && ownerRole == UserRole.STUDENT
-                    && document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT;
+                    && document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
+                return true;
+            }
+            if (viewerRole == UserRole.DEAN_OF_FACULTY
+                    && ownerRole == UserRole.STUDENT
+                    && document.getCategory() == StudentDocumentCategory.FINAL_YEAR_PROJECT
+                    && document.getStatus() == DocumentStatus.APPROVED) {
+                return true;
+            }
+            return false;
         }
 
         StudentDocumentCategory category = document.getCategory();
@@ -148,18 +167,80 @@ public class ArchiveAccessService {
         }
 
         return switch (category) {
-            case REGISTRATION_FORM, REINTEGRATION_FORM -> viewerRole == UserRole.REGISTRAR;
-            case EXAMINATION_DOCUMENTS -> viewerRole == UserRole.EXAMINATION_OFFICER;
-            case APPLICATION_DOCUMENTS -> viewerRole == UserRole.REGISTRAR || viewerRole == UserRole.HOD;
-            case FINAL_YEAR_PROJECT -> viewerRole == UserRole.LIBRARIAN || viewerRole == UserRole.STUDENT;
+            case REGISTRATION_FORM, REINTEGRATION_FORM -> viewerRole == UserRole.REGISTRAR
+                    || viewerRole == UserRole.DEAN_OF_FACULTY;
+            case EXAMINATION_DOCUMENTS -> viewerRole == UserRole.EXAMINATION_OFFICER
+                    || viewerRole == UserRole.DEAN_OF_FACULTY;
+            // Untagged legacy application files default to registrar office only.
+            case APPLICATION_DOCUMENTS -> viewerRole == UserRole.REGISTRAR
+                    || viewerRole == UserRole.HOD
+                    || viewerRole == UserRole.DEAN_OF_FACULTY;
+            case FINAL_YEAR_PROJECT -> viewerRole == UserRole.LIBRARIAN
+                    || viewerRole == UserRole.STUDENT
+                    || (viewerRole == UserRole.DEAN_OF_FACULTY && document.getStatus() == DocumentStatus.APPROVED);
         };
     }
 
     public boolean isOfficeStaffRole(UserRole role) {
-        return role == UserRole.REGISTRAR
+        return role != null && (role == UserRole.REGISTRAR
+                || role == UserRole.FINANCE
                 || role == UserRole.EXAMINATION_OFFICER
                 || role == UserRole.HOD
-                || role == UserRole.LIBRARIAN;
+                || role == UserRole.DEAN_OF_FACULTY
+                || role == UserRole.LIBRARIAN);
+    }
+
+    public void rejectDeanApproval(UserRole role) {
+        if (role == UserRole.DEAN_OF_FACULTY) {
+            throw new IllegalArgumentException("Deans cannot approve or reject documents.");
+        }
+    }
+
+    public boolean isStudentInDeanFaculty(StudentEntity student, String viewerFaculty) {
+        if (student == null || viewerFaculty == null || viewerFaculty.isBlank()) {
+            return false;
+        }
+        if (student.getFaculty() != null
+                && !student.getFaculty().isBlank()
+                && matchesFaculty(student.getFaculty(), viewerFaculty)) {
+            return true;
+        }
+        return student.getDepartment() != null
+                && FacultyCatalog.isDepartmentInFaculty(student.getDepartment(), viewerFaculty);
+    }
+
+    public void requireStudentInDeanFaculty(StudentEntity student, String viewerFaculty) {
+        if (student == null) {
+            throw new IllegalArgumentException("Student record not found.");
+        }
+        if (!isStudentInDeanFaculty(student, viewerFaculty)) {
+            throw new IllegalArgumentException(formatDeanFacultyMismatchMessage(student.getFaculty(), viewerFaculty));
+        }
+    }
+
+    public void requireDeanFacultyMatch(UserRole role, String viewerFaculty, String targetFaculty) {
+        if (role != UserRole.DEAN_OF_FACULTY) {
+            return;
+        }
+        requireDeanFaculty(role, viewerFaculty);
+        if (targetFaculty == null || targetFaculty.isBlank()) {
+            throw new IllegalArgumentException("Could not determine the faculty for this archive location.");
+        }
+        if (!matchesFaculty(targetFaculty, viewerFaculty)) {
+            throw new IllegalArgumentException(formatDeanFacultyMismatchMessage(targetFaculty, viewerFaculty));
+        }
+    }
+
+    public String formatDeanFacultyMismatchMessage(String studentFaculty, String viewerFaculty) {
+        String studentFacultyLabel = studentFaculty == null || studentFaculty.isBlank()
+                ? "another faculty"
+                : studentFaculty.trim();
+        String viewerLabel = viewerFaculty == null || viewerFaculty.isBlank()
+                ? "your assigned faculty"
+                : viewerFaculty.trim();
+        return "This student belongs to " + studentFacultyLabel
+                + ", not " + viewerLabel
+                + ". You can only manage students within your assigned faculty.";
     }
 
     private boolean hasScopeMetadata(ActivityEntryEntity activity) {
@@ -198,9 +279,14 @@ public class ArchiveAccessService {
         return switch (role) {
             case ADMIN -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "SEXM", "FLD", "ENR", "EXM", "GRD", "TRN", "STD", "SFYP", "SOFF", "SMY");
             case REGISTRAR -> List.of("AUCA", "FAC", "AY", "SEM", "REG", "SREG", "SRIN", "SAPP", "FLD", "STD", "SOFF");
+            case FINANCE -> List.of("AUCA", "FAC", "AY", "SEM", "FIN", "SREG", "SRIN", "SAPP", "FLD", "STD", "SOFF");
             case EXAMINATION_OFFICER -> List.of("AUCA", "FAC", "AY", "SEM", "SEXM", "FLD", "STD", "SOFF");
             case HOD -> List.of("AUCA", "FAC", "AY", "SEM", "SAPP", "FLD", "STD", "SOFF", "SMY");
-            case LIBRARIAN -> List.of("AUCA", "FAC", "AY", "SEM", "STD", "SFYP", "FLD", "SMY", "SOFF", "SARC", "LIB", "FYP", "ACC", "REJ");
+            case DEAN_OF_FACULTY -> List.of("AUCA", "FAC", "AY", "SEM", "SAPP", "FLD", "STD", "SOFF", "SMY");
+            case LIBRARIAN -> List.of(
+                    "AUCA", "FAC", "AY", "SEM",
+                    "FLD", "STD", "SFYP", "SMY", "SOFF", "SARC", "LIB", "FYP", "ACC", "REJ"
+            );
             case STUDENT -> List.of("STD", "SFYP", "SREG", "SRIN", "SAPP", "SOFF", "SMY", "SARC", "MY", "PRF");
         };
     }
@@ -217,8 +303,18 @@ public class ArchiveAccessService {
                     StudentDocumentCategory.REINTEGRATION_FORM,
                     StudentDocumentCategory.APPLICATION_DOCUMENTS
             );
+            case FINANCE -> Set.of(
+                    StudentDocumentCategory.REGISTRATION_FORM,
+                    StudentDocumentCategory.REINTEGRATION_FORM,
+                    StudentDocumentCategory.APPLICATION_DOCUMENTS
+            );
             case EXAMINATION_OFFICER -> Set.of(StudentDocumentCategory.EXAMINATION_DOCUMENTS);
             case HOD -> Set.of(StudentDocumentCategory.APPLICATION_DOCUMENTS);
+            case DEAN_OF_FACULTY -> Set.of(
+                    StudentDocumentCategory.REGISTRATION_FORM,
+                    StudentDocumentCategory.REINTEGRATION_FORM,
+                    StudentDocumentCategory.APPLICATION_DOCUMENTS
+            );
             case LIBRARIAN -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT);
             case STUDENT -> Set.of(StudentDocumentCategory.FINAL_YEAR_PROJECT, StudentDocumentCategory.APPLICATION_DOCUMENTS);
         };
@@ -280,6 +376,21 @@ public class ArchiveAccessService {
             throw new IllegalArgumentException(
                     "Your account is not linked to an academic department. Contact the administrator.");
         }
+    }
+
+    public void requireDeanFaculty(UserRole role, String viewerFaculty) {
+        if (role != UserRole.DEAN_OF_FACULTY) {
+            return;
+        }
+        if (viewerFaculty == null || viewerFaculty.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Your account is not linked to a faculty. Contact the administrator.");
+        }
+    }
+
+    public void requireScopedViewerAssignment(UserRole role, String viewerScope) {
+        requireHodDepartment(role, viewerScope);
+        requireDeanFaculty(role, viewerScope);
     }
 
     public String normalizeViewerDepartment(String viewerDepartment) {
@@ -364,9 +475,114 @@ public class ArchiveAccessService {
 
     public boolean hodShouldIncludeDepartmentChild(FolderEntity departmentFolder, String viewerDepartment) {
         if (departmentFolder == null || !isDepartmentFolder(departmentFolder)) {
-            return true;
+            return false;
         }
         return matchesDepartment(departmentFolder.getName(), viewerDepartment);
+    }
+
+    /** HOD only sees the faculty that owns their assigned academic department. */
+    public boolean hodShouldIncludeFacultyChild(FolderEntity facultyFolder, String viewerDepartment) {
+        if (facultyFolder == null || !isFacultyFolder(facultyFolder)) {
+            return false;
+        }
+        String normalizedViewer = normalizeViewerDepartment(viewerDepartment);
+        if (normalizedViewer == null) {
+            return false;
+        }
+        return FacultyCatalog.facultyForDepartment(normalizedViewer)
+                .map(faculty -> matchesFaculty(facultyFolder.getName(), faculty))
+                .orElse(false);
+    }
+
+    public boolean matchesFaculty(String folderFacultyName, String viewerFaculty) {
+        if (folderFacultyName == null || folderFacultyName.isBlank()) {
+            return false;
+        }
+        if (viewerFaculty == null || viewerFaculty.isBlank()) {
+            return false;
+        }
+        return folderFacultyName.trim().equalsIgnoreCase(viewerFaculty.trim());
+    }
+
+    public boolean deanShouldIncludeFacultyChild(FolderEntity facultyFolder, String viewerFaculty) {
+        if (facultyFolder == null || !isFacultyFolder(facultyFolder)) {
+            return true;
+        }
+        return matchesFaculty(facultyFolder.getName(), viewerFaculty);
+    }
+
+    public boolean deanShouldIncludeDepartmentChild(FolderEntity departmentFolder, String viewerFaculty) {
+        if (departmentFolder == null || !isDepartmentFolder(departmentFolder)) {
+            return true;
+        }
+        return FacultyCatalog.isDepartmentInFaculty(departmentFolder.getName(), viewerFaculty);
+    }
+
+    public String resolveFacultyForFolder(FolderEntity folder, Map<Long, FolderEntity> folderById) {
+        if (folder == null || folderById == null || folderById.isEmpty()) {
+            return null;
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (isFacultyFolder(current)) {
+                return current.getName();
+            }
+            Long parentId = current.getParentId();
+            current = parentId == null ? null : folderById.get(parentId);
+        }
+        return null;
+    }
+
+    public boolean isFolderInDeanFaculty(
+            FolderEntity folder,
+            String viewerFaculty,
+            Map<Long, FolderEntity> folderById
+    ) {
+        if (folder == null) {
+            return false;
+        }
+        String normalizedViewer = normalizeViewerDepartment(viewerFaculty);
+        if (normalizedViewer == null) {
+            return false;
+        }
+        String facultyName = resolveFacultyForFolder(folder, folderById);
+        return matchesFaculty(facultyName, normalizedViewer);
+    }
+
+    public boolean isDocumentInDeanFaculty(
+            DocumentEntity document,
+            String viewerFaculty,
+            Map<Long, FolderEntity> folderById
+    ) {
+        if (document == null) {
+            return false;
+        }
+        String normalizedViewer = normalizeViewerDepartment(viewerFaculty);
+        if (normalizedViewer == null) {
+            return false;
+        }
+        if (document.getDepartment() != null && !document.getDepartment().isBlank()) {
+            return FacultyCatalog.isDepartmentInFaculty(document.getDepartment(), normalizedViewer);
+        }
+        if (document.getFolderId() == null || folderById == null) {
+            return false;
+        }
+        FolderEntity folder = folderById.get(document.getFolderId());
+        if (folder == null) {
+            return false;
+        }
+        return isFolderInDeanFaculty(folder, normalizedViewer, folderById);
+    }
+
+    public boolean isActivityInDeanFaculty(String academicDepartment, String viewerFaculty) {
+        if (viewerFaculty == null || viewerFaculty.isBlank()) {
+            return false;
+        }
+        if (academicDepartment == null || academicDepartment.isBlank()) {
+            return false;
+        }
+        return FacultyCatalog.isDepartmentInFaculty(academicDepartment, viewerFaculty);
     }
 
     private String sanitizeStudentCode(String value) {
@@ -381,5 +597,42 @@ public class ArchiveAccessService {
             return null;
         }
         return value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * Returns the office role that owns this folder branch (academic year / semester structure).
+     * Legacy seeded years without an explicit owner are treated as registrar-owned.
+     */
+    public UserRole resolveStructureOwnerRole(FolderEntity folder, Map<Long, FolderEntity> folderById) {
+        if (folder == null) {
+            return null;
+        }
+        FolderEntity current = folder;
+        Set<Long> visited = new HashSet<>();
+        while (current != null && visited.add(current.getId())) {
+            if (current.getOwnerRole() != null) {
+                return current.getOwnerRole();
+            }
+            String code = current.getCode();
+            if (code != null && AcademicTermService.isAcademicYearFolderCode(code)) {
+                return AcademicTermService.inferOwnerRoleFromAcademicYearCode(code);
+            }
+            if (current.getParentId() == null || folderById == null) {
+                break;
+            }
+            current = folderById.get(current.getParentId());
+        }
+        return null;
+    }
+
+    public boolean canViewStructureFolder(FolderEntity folder, UserRole viewerRole, Map<Long, FolderEntity> folderById) {
+        if (viewerRole == null || viewerRole == UserRole.ADMIN || folder == null) {
+            return true;
+        }
+        UserRole ownerRole = resolveStructureOwnerRole(folder, folderById);
+        if (viewerRole == UserRole.DEAN_OF_FACULTY) {
+            return ownerRole == null || ownerRole == UserRole.REGISTRAR;
+        }
+        return ownerRole == null || ownerRole == viewerRole;
     }
 }

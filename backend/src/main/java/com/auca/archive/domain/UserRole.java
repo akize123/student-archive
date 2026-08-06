@@ -3,8 +3,10 @@ package com.auca.archive.domain;
 public enum UserRole {
     ADMIN("System Administrator", "System Maintenance Dashboard", "ICT Office", "admin"),
     REGISTRAR("Registrar", "Registrar Dashboard", "Registrar Office", "registrar"),
+    FINANCE("Finance Officer", "Finance Dashboard", "Finance Office", "finance"),
     EXAMINATION_OFFICER("Examination Officer", "Examination Dashboard", "Examination Office", "examination-officer"),
     HOD("HOD", "HOD Dashboard", "Department Office", "hod"),
+    DEAN_OF_FACULTY("Dean of Faculty", "Dean Dashboard", "Faculty Office", "dean-of-faculty"),
     LIBRARIAN("Librarian", "Library Dashboard", "University Library", "librarian"),
     STUDENT("Student", "Student Dashboard", "Student Workspace", "student");
 
@@ -34,5 +36,30 @@ public enum UserRole {
 
     public String getDashboardKey() {
         return dashboardKey;
+    }
+
+    public boolean isRegistrarOffice() {
+        return this == REGISTRAR;
+    }
+
+    public boolean isFinanceOffice() {
+        return this == FINANCE;
+    }
+
+    public boolean isIndependentOffice() {
+        return this == REGISTRAR
+                || this == FINANCE
+                || this == EXAMINATION_OFFICER
+                || this == HOD;
+    }
+
+    /** Roles that may use ZIP/folder Import (Year → Semester → Document type → Subcategory). */
+    public boolean canImportIntoArchive() {
+        return this == REGISTRAR
+                || this == FINANCE
+                || this == EXAMINATION_OFFICER
+                || this == HOD
+                || this == DEAN_OF_FACULTY
+                || this == ADMIN;
     }
 }

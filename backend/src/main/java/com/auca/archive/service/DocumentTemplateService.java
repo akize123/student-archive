@@ -245,7 +245,7 @@ public class DocumentTemplateService {
     }
 
     private void requireManageRole(UserRole role) {
-        if (role != UserRole.ADMIN && role != UserRole.REGISTRAR && role != UserRole.EXAMINATION_OFFICER) {
+        if (role != UserRole.ADMIN && !role.isRegistrarOffice() && role != UserRole.FINANCE && role != UserRole.EXAMINATION_OFFICER) {
             throw new IllegalArgumentException("You are not allowed to manage document templates.");
         }
     }

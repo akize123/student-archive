@@ -4,7 +4,8 @@ import {
   deleteMobileScanPage,
   finalizeMobileScanSession,
   getMobileScanSession,
-  reorderMobileScanPages
+  reorderMobileScanPages,
+  startNextMobileScanBatch
 } from '../api'
 import { canvasToJpegBlob, enhanceDocumentImage } from '../documentScan'
 import { CheckIcon, ChevronDownIcon, ArrowUpIcon, TrashIcon } from './Icons'
@@ -17,13 +18,20 @@ export default function MobileScanPage({ token }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
+  const [lastSendMode, setLastSendMode] = useState('combined')
+  const [sendMode, setSendMode] = useState('combined')
+  const [sentBatches, setSentBatches] = useState(0)
   const [cameraReady, setCameraReady] = useState(false)
 
   useEffect(() => {
     let active = true
     getMobileScanSession(token)
       .then((data) => {
-        if (active) setSession(data)
+        if (!active) return
+        setSession(data)
+        if (data?.ready) {
+          setDone(true)
+        }
       })
       .catch((err) => {
         if (active) setError(err.message || 'Scan session not found.')
@@ -32,6 +40,28 @@ export default function MobileScanPage({ token }) {
       active = false
     }
   }, [token])
+
+  // When the computer imports and starts the next batch, unlock the phone for more captures.
+  useEffect(() => {
+    if (!done || !token) return undefined
+    let active = true
+    const timer = window.setInterval(() => {
+      getMobileScanSession(token)
+        .then((data) => {
+          if (!active || !data) return
+          setSession(data)
+          if (!data.ready && !data.pageCount) {
+            clearLocalPages()
+            setDone(false)
+          }
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [done, token])
 
   useEffect(() => {
     let active = true
@@ -61,6 +91,15 @@ export default function MobileScanPage({ token }) {
       streamRef.current?.getTracks().forEach((track) => track.stop())
     }
   }, [])
+
+  function clearLocalPages() {
+    setPages((current) => {
+      current.forEach((page) => {
+        if (page.preview) URL.revokeObjectURL(page.preview)
+      })
+      return []
+    })
+  }
 
   async function uploadPageBlob(blob) {
     setBusy(true)
@@ -115,7 +154,11 @@ export default function MobileScanPage({ token }) {
     try {
       const nextSession = await deleteMobileScanPage(token, pageId)
       setSession(nextSession)
-      setPages((current) => current.filter((page) => page.id !== pageId))
+      setPages((current) => {
+        const target = current.find((page) => page.id === pageId)
+        if (target?.preview) URL.revokeObjectURL(target.preview)
+        return current.filter((page) => page.id !== pageId)
+      })
     } catch (err) {
       setError(err.message || 'Unable to remove page.')
     } finally {
@@ -144,14 +187,32 @@ export default function MobileScanPage({ token }) {
     }
   }
 
-  async function handleFinish() {
+  async function handleFinish(mode = sendMode) {
     setBusy(true)
     setError('')
     try {
-      await finalizeMobileScanSession(token)
+      const next = await finalizeMobileScanSession(token, mode)
+      setSession(next)
+      setLastSendMode(mode)
+      setSentBatches((count) => count + 1)
       setDone(true)
     } catch (err) {
       setError(err.message || 'Unable to finish scan session.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleScanAnother() {
+    setBusy(true)
+    setError('')
+    try {
+      const next = await startNextMobileScanBatch(token)
+      setSession(next)
+      clearLocalPages()
+      setDone(false)
+    } catch (err) {
+      setError(err.message || 'Unable to start the next scan. Ask the computer for a new QR if the session expired.')
     } finally {
       setBusy(false)
     }
@@ -163,8 +224,20 @@ export default function MobileScanPage({ token }) {
         <div className="mobile-scan-card success">
           <CheckIcon className="icon" />
           <h1>Scan sent</h1>
-          <p>Return to your computer and click <strong>Use scanned PDF</strong> in the upload window.</p>
+          <p>
+            {lastSendMode === 'individual'
+              ? 'Pages were sent. The computer joins them into one PDF and shows a preview.'
+              : 'Combined PDF was sent. The computer should import it, show a preview, and join later sends into the same document.'}
+          </p>
+          <p className="inline-note">
+            Same phone pairing stays active{sentBatches > 1 ? ` · ${sentBatches} sends this session` : ''}.
+            Waiting for the computer, or tap below to scan more.
+          </p>
+          <button type="button" className="primary-btn" onClick={handleScanAnother} disabled={busy}>
+            {busy ? 'Preparing…' : 'Scan another document'}
+          </button>
         </div>
+        {error ? <div className="banner warning">{error}</div> : null}
       </div>
     )
   }
@@ -175,7 +248,7 @@ export default function MobileScanPage({ token }) {
         <div>
           <p className="eyebrow">AUCA phone scanner</p>
           <h1>Scan hard-copy pages</h1>
-          <p>Align each page inside the frame. Pages are auto-detected, then you can reorder or remove them before sending.</p>
+          <p>Capture pages, choose combined or individual send, then keep scanning more documents without re-pairing.</p>
         </div>
         <span className="mobile-scan-count">{pages.length} page{pages.length === 1 ? '' : 's'}</span>
       </header>
@@ -202,8 +275,33 @@ export default function MobileScanPage({ token }) {
         <section className="mobile-scan-pages">
           <div className="mobile-scan-pages-head">
             <h2>Captured pages</h2>
-            <p>Reorder or remove pages before confirming upload.</p>
+            <p>Reorder or remove pages, then choose how to send them.</p>
           </div>
+
+          <div className="mobile-scan-send-modes" role="group" aria-label="Send mode">
+            <button
+              type="button"
+              className={`ghost-btn ${sendMode === 'combined' ? 'active' : ''}`}
+              onClick={() => setSendMode('combined')}
+              disabled={busy}
+            >
+              Combined PDF
+            </button>
+            <button
+              type="button"
+              className={`ghost-btn ${sendMode === 'individual' ? 'active' : ''}`}
+              onClick={() => setSendMode('individual')}
+              disabled={busy}
+            >
+              Individual PDFs
+            </button>
+          </div>
+          <p className="mobile-scan-send-hint">
+            {sendMode === 'individual'
+              ? 'Each page becomes its own PDF on the computer.'
+              : 'All pages are merged into one multi-page PDF.'}
+          </p>
+
           <div className="mobile-scan-page-list">
             {pages.map((page, index) => (
               <article key={page.id} className="mobile-scan-page-item">
@@ -225,8 +323,12 @@ export default function MobileScanPage({ token }) {
               </article>
             ))}
           </div>
-          <button type="button" className="primary-btn mobile-scan-finish" onClick={handleFinish} disabled={busy}>
-            Send {pages.length} page{pages.length === 1 ? '' : 's'} to computer
+          <button type="button" className="primary-btn mobile-scan-finish" onClick={() => handleFinish(sendMode)} disabled={busy}>
+            {busy
+              ? 'Sending…'
+              : sendMode === 'individual'
+                ? `Send ${pages.length} individual PDF${pages.length === 1 ? '' : 's'}`
+                : `Send combined PDF (${pages.length} page${pages.length === 1 ? '' : 's'})`}
           </button>
         </section>
       ) : null}

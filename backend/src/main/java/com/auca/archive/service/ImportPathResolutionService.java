@@ -185,7 +185,10 @@ public class ImportPathResolutionService {
                 studentExists,
                 existingStudentName,
                 existingFolderId,
-                folderMatch.folderExistsHere()
+                folderMatch.folderExistsHere(),
+                true,
+                "PDF",
+                null
         );
     }
 
@@ -271,7 +274,7 @@ public class ImportPathResolutionService {
             if (code.matches("^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$")) {
                 department = name;
             }
-            if (code.matches(".*-AY-\\d{8}$") || name.matches("^\\d{4}-\\d{4}$")) {
+            if (code.matches(".*-AY-\\d{8}(-[A-Z]+)?$") || name.matches("^\\d{4}-\\d{4}$")) {
                 academicYear = name;
             }
             if ((code.contains("-SEM-") && !code.contains("-STU-")) || name.matches("^\\d{4}/\\d$")) {

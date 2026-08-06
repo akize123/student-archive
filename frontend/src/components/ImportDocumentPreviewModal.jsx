@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { XIcon } from './Icons'
 
-function LocalPdfPreview({ pdfBlob, title }) {
+export function LocalPdfPreview({ pdfBlob, title }) {
   const containerRef = useRef(null)
   const [pageCount, setPageCount] = useState(0)
   const [renderError, setRenderError] = useState('')

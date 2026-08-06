@@ -3,6 +3,7 @@ package com.auca.archive.controller;
 import com.auca.archive.dto.AdminActivityPageResponse;
 import com.auca.archive.dto.AdminDashboardResponse;
 import com.auca.archive.dto.AdminOfficeResponse;
+import com.auca.archive.dto.AdminReportResponse;
 import com.auca.archive.dto.ArchiveTemplateNodeResponse;
 import com.auca.archive.dto.CreateUserRequest;
 import com.auca.archive.dto.RequestActor;
@@ -52,6 +53,11 @@ public class AdminController {
     @GetMapping("/dashboard")
     public AdminDashboardResponse dashboard(@RequestHeader(value = "X-User-Role", required = false) String role) {
         return adminService.getDashboard(role);
+    }
+
+    @GetMapping("/reports")
+    public AdminReportResponse reports(@RequestHeader(value = "X-User-Role", required = false) String role) {
+        return adminService.getReport(role);
     }
 
     @GetMapping("/users")

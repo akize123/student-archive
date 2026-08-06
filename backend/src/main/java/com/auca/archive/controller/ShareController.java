@@ -3,7 +3,10 @@ package com.auca.archive.controller;
 import com.auca.archive.dto.ShareFolderResponse;
 import com.auca.archive.dto.ShareItemsRequest;
 import com.auca.archive.dto.SharedItemResponse;
+import com.auca.archive.service.AccountService;
+import com.auca.archive.service.ArchiveAccessService;
 import com.auca.archive.service.FolderService;
+import com.auca.archive.web.SessionRequestContext;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,9 +22,21 @@ import java.util.Map;
 @RequestMapping("/api/shares")
 public class ShareController {
     private final FolderService folderService;
+    private final AccountService accountService;
+    private final ArchiveAccessService accessService;
 
-    public ShareController(FolderService folderService) {
+    public ShareController(
+            FolderService folderService,
+            AccountService accountService,
+            ArchiveAccessService accessService
+    ) {
         this.folderService = folderService;
+        this.accountService = accountService;
+        this.accessService = accessService;
+    }
+
+    private String resolveViewerDepartment(String role, String accountId, String departmentHeader) {
+        return SessionRequestContext.resolveViewerDepartment(accountService, accessService, role, accountId, departmentHeader);
     }
 
     @PostMapping
@@ -30,8 +45,10 @@ public class ShareController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-User-Name", required = false) String actorName,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
-            @RequestHeader(value = "X-User-Username", required = false) String username
+            @RequestHeader(value = "X-User-Username", required = false) String username,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         return folderService.shareItems(
                 request.folderIds(),
                 request.documentIds(),
@@ -42,7 +59,8 @@ public class ShareController {
                 request.allowReshare(),
                 role,
                 actorName,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
     }
 

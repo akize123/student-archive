@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -61,7 +62,7 @@ public class ArchiveTreeService {
 
     @Transactional
     public StudentWorkspace ensureStudentWorkspace(StudentEntity student) {
-        return ensureStudentWorkspace(student, null, null, null, null, true);
+        return ensureStudentWorkspace(student, null, null, null, null, true, null);
     }
 
     @Transactional
@@ -78,7 +79,8 @@ public class ArchiveTreeService {
                 departmentOverride,
                 academicYearOverride,
                 semesterOverride,
-                true
+                true,
+                null
         );
     }
 
@@ -91,6 +93,27 @@ public class ArchiveTreeService {
             String semesterOverride,
             boolean createDefaultBuckets
     ) {
+        return ensureStudentWorkspace(
+                student,
+                facultyOverride,
+                departmentOverride,
+                academicYearOverride,
+                semesterOverride,
+                createDefaultBuckets,
+                null
+        );
+    }
+
+    @Transactional
+    public StudentWorkspace ensureStudentWorkspace(
+            StudentEntity student,
+            String facultyOverride,
+            String departmentOverride,
+            String academicYearOverride,
+            String semesterOverride,
+            boolean createDefaultBuckets,
+            UserRole structureOwnerRole
+    ) {
         if (student == null || student.getStudentNumber() == null || student.getStudentNumber().isBlank()) {
             throw new IllegalArgumentException("Student profile is required to create the workspace");
         }
@@ -101,7 +124,8 @@ public class ArchiveTreeService {
                 faculty,
                 department,
                 academicYearOverride,
-                semesterOverride
+                semesterOverride,
+                structureOwnerRole
         );
         if (!createDefaultBuckets) {
             return new StudentWorkspace(studentFolder, studentFolder, studentFolder, studentFolder, studentFolder, studentFolder);
@@ -295,7 +319,8 @@ public class ArchiveTreeService {
                 placement.department(),
                 placement.academicYear(),
                 placement.semester(),
-                !staffPlacementUpload
+                !staffPlacementUpload,
+                staffPlacementUpload ? role : null
         );
 
         if (role == UserRole.STUDENT && request.category() == StudentDocumentCategory.FINAL_YEAR_PROJECT) {
@@ -347,8 +372,9 @@ public class ArchiveTreeService {
 
     /**
      * Inside student folder only:
-     * {@code {DocAY}/{DocSem}/{Category}/{SubType}/}
-     * Document year/semester arrange files under the student ID — they do not move the student folder.
+     * {@code {DocAY}/{DocSem}/{DocumentType}/{SubType?}/}
+     * Document year/semester and document type arrange files under the student ID —
+     * they do not move the student folder.
      */
     @Transactional
     public FolderEntity ensureStudentDocumentPath(
@@ -537,6 +563,18 @@ public class ArchiveTreeService {
         }
 
         if (role != null && role != UserRole.STUDENT) {
+            String documentAcademicYear = trim(request.academicYear());
+            String documentSemester = trim(request.semester());
+            if (documentAcademicYear != null && documentSemester != null) {
+                return appendDocumentInnerPath(
+                        studentBase,
+                        documentAcademicYear,
+                        documentSemester,
+                        studentNumber,
+                        categoryName,
+                        documentTypeName
+                );
+            }
             return studentBase;
         }
 
@@ -587,24 +625,67 @@ public class ArchiveTreeService {
             StudentEntity student,
             String faculty,
             String department,
-            String academicYear,
-            String semester,
+            String placementAcademicYear,
+            String placementSemester,
+            String documentAcademicYear,
+            String documentSemester,
             String categoryName,
             String documentTypeName
     ) {
         String studentNumber = student.getStudentNumber();
-        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(studentNumber, academicYear, semester);
+        AcademicTermService.ResolvedTerm term = academicTermService.resolveTerm(
+                studentNumber,
+                placementAcademicYear,
+                placementSemester
+        );
         Path studentBase = storageRoot
                 .resolve(sanitizePath(faculty))
                 .resolve(sanitizePath(department))
                 .resolve(sanitizePath(term.academicYear()))
                 .resolve(sanitizePath(term.semesterFolderName()))
                 .resolve(sanitizePath(studentNumber));
-        return studentBase;
+        String innerYear = trim(documentAcademicYear);
+        String innerSemester = trim(documentSemester);
+        if (innerYear != null && innerSemester != null) {
+            return appendDocumentInnerPath(
+                    studentBase,
+                    innerYear,
+                    innerSemester,
+                    studentNumber,
+                    categoryName,
+                    documentTypeName
+            );
+        }
+        // Import / flat office layout: Year/Sem/Student/Type[/Sub]
+        return appendCategoryTypePath(studentBase, categoryName, documentTypeName);
+    }
+
+    public Path resolveImportStoragePath(
+            Path storageRoot,
+            StudentEntity student,
+            String faculty,
+            String department,
+            String academicYear,
+            String semester,
+            String categoryName,
+            String documentTypeName
+    ) {
+        return resolveImportStoragePath(
+                storageRoot,
+                student,
+                faculty,
+                department,
+                academicYear,
+                semester,
+                null,
+                null,
+                categoryName,
+                documentTypeName
+        );
     }
 
     /**
-     * Under student ID only: {@code {DocAY}/{DocSem}/{Category}/{SubType}/}.
+     * Under student ID only: {@code {DocAY}/{DocSem}/{DocumentType}/{SubType?}/}.
      */
     private Path appendDocumentInnerPath(
             Path studentBase,
@@ -719,7 +800,7 @@ public class ArchiveTreeService {
             if (code.matches("^FAC-[A-Z0-9]+-DEPT-[A-Z0-9]+$")) {
                 department = name;
             }
-            if (code.matches(".*-AY-\\d{8}$") || name.matches("^\\d{4}-\\d{4}$")) {
+            if (code.matches(".*-AY-\\d{8}(-[A-Z]+)?$") || name.matches("^\\d{4}-\\d{4}$")) {
                 academicYear = name;
             }
             if ((code.contains("-SEM-") && !code.contains("-STU-")) || name.matches("^\\d{4}/\\d$")) {
@@ -755,6 +836,7 @@ public class ArchiveTreeService {
     /**
      * Registrar uploads use document-type subfolders (FLD) under the semester student root
      * so files appear in the archive tree instead of being hidden at the student ID level.
+     * Reuses an existing child with the same name when present (any code).
      */
     @Transactional
     public FolderEntity ensureRegistrarDocumentSubfolder(FolderEntity folder, String subfolderName) {
@@ -765,8 +847,88 @@ public class ArchiveTreeService {
             return folder;
         }
         String trimmedName = subfolderName.trim();
+        Optional<FolderEntity> existing = findChildFolderByName(folder.getId(), trimmedName);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
         String code = folder.getCode() + "-FLD-" + sanitizeCode(trimmedName);
         return folderService.resolveOrCreateFolder(trimmedName, code, folder.getId());
+    }
+
+    /**
+     * Import path matching the office archive tree:
+     * {@code Year → Semester → Student → Document type → Subcategory?}.
+     * Reuses existing document-type folders under the student (e.g. Transcript Request).
+     */
+    @Transactional
+    public FolderEntity ensureImportDocumentTypePath(
+            FolderEntity studentRoot,
+            String primaryDocumentType,
+            String documentTypeOrSubtype
+    ) {
+        if (studentRoot == null) {
+            throw new IllegalArgumentException("Student folder is required for import.");
+        }
+        FolderEntity root = studentRoot;
+        if (!isSemesterStudentRootFolder(root.getCode())) {
+            root = folderService.resolveSemesterStudentRootFolder(studentRoot)
+                    .orElseThrow(() -> new IllegalArgumentException("Could not resolve the student folder for import."));
+        }
+        String primary = firstNonBlank(primaryDocumentType, documentTypeOrSubtype, "Documents");
+        String leaf = firstNonBlank(documentTypeOrSubtype, primary);
+
+        FolderEntity typeFolder = ensureNamedDocumentSubfolder(root, primary);
+        if (primary.equalsIgnoreCase(leaf)) {
+            return typeFolder;
+        }
+        return ensureNamedDocumentSubfolder(typeFolder, leaf);
+    }
+
+    /**
+     * Ensures the student folder under the chosen placement year/semester in the office tree
+     * (same structure shown in the explorer: Year → Semester → Student ID).
+     */
+    @Transactional
+    public FolderEntity ensureOfficeStudentFolder(
+            String studentNumber,
+            String faculty,
+            String department,
+            String academicYear,
+            String semester,
+            UserRole structureOwnerRole
+    ) {
+        if (studentNumber == null || studentNumber.isBlank()) {
+            throw new IllegalArgumentException("Student ID is required.");
+        }
+        return resolveStudentRootFolder(
+                studentNumber.trim().toUpperCase(Locale.ROOT),
+                faculty,
+                department,
+                academicYear,
+                semester,
+                structureOwnerRole
+        );
+    }
+
+    private FolderEntity ensureNamedDocumentSubfolder(FolderEntity parent, String folderName) {
+        String trimmedName = folderName.trim();
+        Optional<FolderEntity> existing = findChildFolderByName(parent.getId(), trimmedName);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        String code = parent.getCode() + "-FLD-" + sanitizeCode(trimmedName);
+        return folderService.resolveOrCreateFolder(trimmedName, code, parent.getId());
+    }
+
+    private Optional<FolderEntity> findChildFolderByName(Long parentId, String folderName) {
+        if (parentId == null || folderName == null || folderName.isBlank()) {
+            return Optional.empty();
+        }
+        String normalized = folderName.trim();
+        return folderRepository.findAll().stream()
+                .filter(folder -> Objects.equals(folder.getParentId(), parentId))
+                .filter(folder -> folder.getName() != null && folder.getName().equalsIgnoreCase(normalized))
+                .findFirst();
     }
 
     public static boolean isStudentDefaultFolderCode(String code) {
@@ -779,6 +941,14 @@ public class ArchiveTreeService {
                 || normalized.endsWith("-" + ARCHIVE_PROJECT_SUFFIX)
                 || normalized.endsWith("-" + MY_PROJECTS_PENDING_SUFFIX)
                 || normalized.endsWith("-" + MY_PROJECTS_REJECTED_SUFFIX);
+    }
+
+    /** Document-type subfolder created under a semester student ID during office upload/import. */
+    public static boolean isOfficeUploadSubfolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).contains("-FLD-");
     }
 
     /** Nested year/category folders previously created under a student ID during upload. */
@@ -840,7 +1010,8 @@ public class ArchiveTreeService {
             String faculty,
             String department,
             String academicYearOverride,
-            String semesterOverride
+            String semesterOverride,
+            UserRole structureOwnerRole
     ) {
         FolderEntity root = folderService.getFolderByCodeOrThrow(ROOT_CODE);
         FolderEntity facultyFolder = resolveFacultyFolder(faculty, root.getId());
@@ -854,12 +1025,14 @@ public class ArchiveTreeService {
 
         String academicYearCode = academicTermService.buildAcademicYearFolderCode(
                 departmentFolder.getCode(),
-                term.academicYear()
+                term.academicYear(),
+                structureOwnerRole
         );
         FolderEntity academicYearFolder = folderService.resolveOrCreateFolder(
                 term.academicYear(),
                 academicYearCode,
-                departmentFolder.getId()
+                departmentFolder.getId(),
+                structureOwnerRole
         );
 
         String semesterCode = academicTermService.buildSemesterFolderCode(
@@ -870,7 +1043,8 @@ public class ArchiveTreeService {
         FolderEntity semesterFolder = folderService.resolveOrCreateFolder(
                 term.semesterFolderName(),
                 semesterCode,
-                academicYearFolder.getId()
+                academicYearFolder.getId(),
+                structureOwnerRole
         );
 
         String studentCode = semesterFolder.getCode() + "-STU-" + sanitizeCode(studentNumber);

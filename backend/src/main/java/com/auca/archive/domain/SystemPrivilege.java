@@ -34,9 +34,10 @@ public enum SystemPrivilege {
         }
         return switch (role) {
             case ADMIN -> EnumSet.allOf(SystemPrivilege.class);
-            case REGISTRAR -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
+            case REGISTRAR, FINANCE -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
             case EXAMINATION_OFFICER -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
             case HOD -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_APPROVAL);
+            case DEAN_OF_FACULTY -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
             case LIBRARIAN -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_APPROVAL);
             case STUDENT -> EnumSet.of(ARCHIVE_ACCESS, DOCUMENT_UPLOAD);
         };

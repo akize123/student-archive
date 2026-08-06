@@ -6,7 +6,9 @@ import com.auca.archive.dto.ActivityResponse;
 import com.auca.archive.dto.ApprovalTaskResponse;
 import com.auca.archive.dto.DashboardResponse;
 import com.auca.archive.dto.DocumentListItemResponse;
+import com.auca.archive.model.AccountEntity;
 import com.auca.archive.model.DocumentEntity;
+import com.auca.archive.repository.AccountRepository;
 import com.auca.archive.repository.ApprovalTaskRepository;
 import com.auca.archive.repository.DocumentRepository;
 import org.springframework.stereotype.Service;
@@ -21,6 +23,7 @@ public class DashboardService {
     private static final long STORAGE_LIMIT_BYTES = 100L * 1024 * 1024 * 1024;
 
     private final DocumentRepository documentRepository;
+    private final AccountRepository accountRepository;
     private final ApprovalTaskRepository approvalTaskRepository;
     private final FolderService folderService;
     private final DocumentService documentService;
@@ -30,6 +33,7 @@ public class DashboardService {
 
     public DashboardService(
             DocumentRepository documentRepository,
+            AccountRepository accountRepository,
             ApprovalTaskRepository approvalTaskRepository,
             FolderService folderService,
             DocumentService documentService,
@@ -38,6 +42,7 @@ public class DashboardService {
             StudentStorageService studentStorageService
     ) {
         this.documentRepository = documentRepository;
+        this.accountRepository = accountRepository;
         this.approvalTaskRepository = approvalTaskRepository;
         this.folderService = folderService;
         this.documentService = documentService;
@@ -59,13 +64,22 @@ public class DashboardService {
     }
 
     public DashboardResponse getDashboard(String rawRole, String rawStudentNumber, String rawViewerDepartment) {
+        return getDashboard(rawRole, rawStudentNumber, rawViewerDepartment, null);
+    }
+
+    public DashboardResponse getDashboard(
+            String rawRole,
+            String rawStudentNumber,
+            String rawViewerDepartment,
+            String rawAccountId
+    ) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String studentNumber = rawStudentNumber == null || rawStudentNumber.isBlank() ? null : rawStudentNumber.trim();
         String viewerDepartment = rawViewerDepartment == null || rawViewerDepartment.isBlank()
                 ? null
                 : rawViewerDepartment.trim();
         accessService.requireStudentAccount(role, studentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         List<DocumentEntity> visibleDocuments = documentRepository.findAll().stream()
                 .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
                 .sorted((left, right) -> {
@@ -80,7 +94,10 @@ public class DashboardService {
         long recentUploads = visibleDocuments.stream()
                 .filter(document -> document.getCreatedAt() != null && document.getCreatedAt().isAfter(LocalDateTime.now().minusDays(7)))
                 .count();
-        boolean includeApprovals = role != UserRole.REGISTRAR;
+        boolean includeApprovals = role != null
+                && !role.isRegistrarOffice()
+                && role != UserRole.FINANCE
+                && role != UserRole.DEAN_OF_FACULTY;
         long pendingApprovals = includeApprovals
                 ? approvalTaskRepository.findAll().stream()
                         .filter(task -> task.getStatus() == ApprovalStatus.PENDING)
@@ -100,7 +117,7 @@ public class DashboardService {
                 .toList();
         ActivityResponse latestActivity = recentActivity.isEmpty() ? null : recentActivity.get(0);
         DocumentListItemResponse latestDocument = recentFiles.isEmpty() ? null : recentFiles.get(0);
-        String workspaceDepartment = role == UserRole.HOD && viewerDepartment != null
+        String workspaceDepartment = (role == UserRole.HOD || role == UserRole.DEAN_OF_FACULTY) && viewerDepartment != null
                 ? viewerDepartment
                 : (role == null
                 ? (latestDocument == null ? "" : latestDocument.department())
@@ -114,7 +131,7 @@ public class DashboardService {
                 latestActivity == null ? "" : latestActivity.actor(),
                 role == null ? (latestActivity == null ? "" : humanize(latestActivity.category())) : role.getDisplayName(),
                 workspaceDepartment,
-                latestActivity == null ? "" : formatRelativeTime(latestActivity.createdAt()),
+                resolveLastSignIn(rawAccountId),
                 (int) pendingApprovals,
                 recentUploads,
                 pendingApprovals,
@@ -161,6 +178,21 @@ public class DashboardService {
         }
         String normalized = value.replace('_', ' ').toLowerCase(Locale.ROOT);
         return Character.toUpperCase(normalized.charAt(0)) + normalized.substring(1);
+    }
+
+    private String resolveLastSignIn(String rawAccountId) {
+        if (rawAccountId == null || rawAccountId.isBlank()) {
+            return "";
+        }
+        try {
+            Long accountId = Long.parseLong(rawAccountId.trim());
+            return accountRepository.findById(accountId)
+                    .map(AccountEntity::getLastLoginAt)
+                    .map(this::formatRelativeTime)
+                    .orElse("");
+        } catch (NumberFormatException ex) {
+            return "";
+        }
     }
 
     private String formatRelativeTime(LocalDateTime timestamp) {

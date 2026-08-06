@@ -9,6 +9,7 @@ public record MobileScanSessionResponse(
         String status,
         boolean ready,
         int pageCount,
-        List<MobileScanPageResponse> pages
+        List<MobileScanPageResponse> pages,
+        String deliveryFormat
 ) {
 }

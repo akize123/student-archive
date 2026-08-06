@@ -1,5 +1,6 @@
 package com.auca.archive.service;
 
+import com.auca.archive.domain.UserRole;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -59,17 +60,74 @@ public class AcademicTermService {
     }
 
     public String buildAcademicYearFolderCode(String departmentCode, String academicYear) {
+        return buildAcademicYearFolderCode(departmentCode, academicYear, null);
+    }
+
+    public String buildAcademicYearFolderCode(String departmentCode, String academicYear, UserRole ownerRole) {
         String normalized = normalizeAcademicYear(academicYear);
         if (normalized == null) {
             throw new IllegalArgumentException("Academic year must use the format 2025-2026");
         }
         int startYear = parseStartYear(normalized);
         int endYear = startYear + 1;
-        return departmentCode + "-AY-" + startYear + endYear;
+        String base = departmentCode + "-AY-" + startYear + endYear;
+        String suffix = roleFolderSuffix(ownerRole);
+        return suffix == null ? base : base + "-" + suffix;
     }
 
     public String buildSemesterFolderCode(String academicYearFolderCode, int startYear, int semesterNumber) {
         return academicYearFolderCode + "-SEM-" + startYear + "-" + semesterNumber;
+    }
+
+    public static String roleFolderSuffix(UserRole role) {
+        if (role == null || role == UserRole.REGISTRAR || role == UserRole.DEAN_OF_FACULTY) {
+            return null;
+        }
+        return switch (role) {
+            case FINANCE -> "FIN";
+            case LIBRARIAN -> "LIB";
+            case EXAMINATION_OFFICER -> "EXAM";
+            case HOD -> "HOD";
+            default -> null;
+        };
+    }
+
+    public static UserRole inferOwnerRoleFromAcademicYearCode(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        String normalized = code.trim().toUpperCase(Locale.ROOT);
+        if (!isAcademicYearFolderCode(normalized)) {
+            return null;
+        }
+        if (normalized.endsWith("-FIN")) {
+            return UserRole.FINANCE;
+        }
+        if (normalized.endsWith("-EXAM")) {
+            return UserRole.EXAMINATION_OFFICER;
+        }
+        if (normalized.endsWith("-LIB")) {
+            return UserRole.LIBRARIAN;
+        }
+        if (normalized.endsWith("-HOD")) {
+            return UserRole.HOD;
+        }
+        return UserRole.REGISTRAR;
+    }
+
+    public static boolean isAcademicYearFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return code.toUpperCase(Locale.ROOT).matches(".*-AY-\\d{8}(-[A-Z]+)?$");
+    }
+
+    public static boolean isSemesterStructureFolderCode(String code) {
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        String normalized = code.toUpperCase(Locale.ROOT);
+        return normalized.contains("-SEM-") && !normalized.contains("-STU-");
     }
 
     public ResolvedTerm resolveTerm(String studentNumber, String academicYearOverride, String semesterOverride) {

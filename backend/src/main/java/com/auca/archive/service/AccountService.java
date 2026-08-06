@@ -77,6 +77,30 @@ public class AccountService {
         return accountRepository.save(account);
     }
 
+    /**
+     * Demo student seed: keep username/password predictable and student ID linked.
+     */
+    @Transactional
+    public AccountEntity ensureDemoStudentAccount(
+            String username,
+            String fullName,
+            String rawPassword,
+            String studentNumber
+    ) {
+        AccountEntity account = ensureAccount(
+                username,
+                fullName,
+                rawPassword,
+                UserRole.STUDENT,
+                UserRole.STUDENT.getDepartment(),
+                studentNumber
+        );
+        account.setPasswordHash(passwordHasher.hash(rawPassword));
+        account.setActive(Boolean.TRUE);
+        account.setStudentNumber(studentNumber == null ? null : studentNumber.trim().toUpperCase(Locale.ROOT));
+        return accountRepository.save(account);
+    }
+
     @Transactional
     public LoginResponse login(LoginRequest request) {
         String username = normalizeUsername(request.username());
@@ -84,7 +108,11 @@ public class AccountService {
 
         account.setLastLoginAt(LocalDateTime.now());
         if (account.getRole() == UserRole.STUDENT) {
-            studentAccountProvisioningService.syncStudentAccount(account);
+            try {
+                studentAccountProvisioningService.syncStudentAccount(account);
+            } catch (RuntimeException ignored) {
+                // Login should still succeed if workspace sync fails; admin can repair archive later.
+            }
         }
         accountRepository.save(account);
 
@@ -100,10 +128,18 @@ public class AccountService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
         }
 
+        // Students often sign in with their student ID; staff use username.
         AccountEntity account = accountRepository.findByUsername(username)
+                .or(() -> accountRepository.findByStudentNumberIgnoreCase(username))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password"));
 
-        if (!Boolean.TRUE.equals(account.getActive()) || !passwordHasher.matches(password, account.getPasswordHash())) {
+        if (!Boolean.TRUE.equals(account.getActive())) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "This account is inactive. Ask an administrator to activate it and set a password."
+            );
+        }
+        if (!passwordHasher.matches(password, account.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password");
         }
         return account;
@@ -125,6 +161,21 @@ public class AccountService {
                 }
             });
         }
+    }
+
+    /** Keep a single active demo HOD; deactivate every other HOD account. */
+    @Transactional
+    public void deactivateAllHodAccountsExcept(String keepUsername) {
+        String keep = normalizeUsername(keepUsername);
+        accountRepository.findAll().stream()
+                .filter(account -> account.getRole() == UserRole.HOD)
+                .filter(account -> !keep.equalsIgnoreCase(account.getUsername()))
+                .forEach(account -> {
+                    if (Boolean.TRUE.equals(account.getActive())) {
+                        account.setActive(Boolean.FALSE);
+                        accountRepository.save(account);
+                    }
+                });
     }
 
     @Transactional
@@ -164,12 +215,12 @@ public class AccountService {
     }
 
     public String resolveViewerDepartment(Long accountId, UserRole role, String headerDepartment) {
-        if (role != UserRole.HOD) {
+        if (role != UserRole.HOD && role != UserRole.DEAN_OF_FACULTY) {
             return null;
         }
         if (accountId != null) {
             Optional<String> fromAccount = accountRepository.findById(accountId)
-                    .filter(account -> account.getRole() == UserRole.HOD)
+                    .filter(account -> account.getRole() == role)
                     .map(AccountEntity::getDepartment)
                     .filter(value -> value != null && !value.isBlank())
                     .map(String::trim);

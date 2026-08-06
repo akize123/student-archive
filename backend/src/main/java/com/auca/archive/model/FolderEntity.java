@@ -1,6 +1,9 @@
 package com.auca.archive.model;
 
+import com.auca.archive.domain.UserRole;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -20,6 +23,9 @@ public class FolderEntity {
     private Long parentId;
     private LocalDateTime archivedAt;
     private String archivedBy;
+
+    @Enumerated(EnumType.STRING)
+    private UserRole ownerRole;
 
     public FolderEntity() {}
 
@@ -41,4 +47,6 @@ public class FolderEntity {
     public void setArchivedAt(LocalDateTime archivedAt) { this.archivedAt = archivedAt; }
     public String getArchivedBy() { return archivedBy; }
     public void setArchivedBy(String archivedBy) { this.archivedBy = archivedBy; }
+    public UserRole getOwnerRole() { return ownerRole; }
+    public void setOwnerRole(UserRole ownerRole) { this.ownerRole = ownerRole; }
 }

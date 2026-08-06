@@ -3,11 +3,13 @@ package com.auca.archive.service;
 import com.auca.archive.domain.ActivityCategory;
 import com.auca.archive.domain.SystemPrivilege;
 import com.auca.archive.domain.AcademicDepartmentCatalog;
+import com.auca.archive.domain.FacultyCatalog;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.dto.AdminActivityPageResponse;
 import com.auca.archive.dto.AdminDashboardResponse;
 import com.auca.archive.dto.AdminOfficeMemberResponse;
 import com.auca.archive.dto.AdminOfficeResponse;
+import com.auca.archive.dto.AdminReportResponse;
 import com.auca.archive.dto.ArchiveTemplateNodeResponse;
 import com.auca.archive.dto.CreateUserRequest;
 import com.auca.archive.dto.FolderNodeResponse;
@@ -16,13 +18,19 @@ import com.auca.archive.dto.UpdateUserRequest;
 import com.auca.archive.dto.UserAccountResponse;
 import com.auca.archive.dto.ActivityScope;
 import com.auca.archive.model.AccountEntity;
+import com.auca.archive.model.ActivityEntryEntity;
+import com.auca.archive.model.DocumentEntity;
 import com.auca.archive.repository.AccountRepository;
 import com.auca.archive.repository.ActivityEntryRepository;
+import com.auca.archive.repository.DocumentRepository;
+import com.auca.archive.repository.FolderShareRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
@@ -42,10 +50,16 @@ public class AdminService {
                     "Registration, reintegration, and application archive work.",
                     List.of("REGISTRATION_FORM", "REINTEGRATION_FORM", "APPLICATION_DOCUMENTS")
             ),
+            UserRole.FINANCE, new OfficeMeta(
+                    "Finance Office",
+                    "Finance Office",
+                    "Independent finance archive branch under each department. Uploads here stay in Finance, not Registrar.",
+                    List.of("REGISTRATION_FORM", "REINTEGRATION_FORM", "APPLICATION_DOCUMENTS")
+            ),
             UserRole.EXAMINATION_OFFICER, new OfficeMeta(
                     "Examination Office",
                     "Examination Office",
-                    "Exam papers, marks, and course-level archive work.",
+                    "Exam papers and marks using the same archive structure as other offices, with examination-only records.",
                     List.of("EXAMINATION_DOCUMENTS")
             ),
             UserRole.HOD, new OfficeMeta(
@@ -53,6 +67,18 @@ public class AdminService {
                     "Department Office",
                     "Department approvals and application submissions.",
                     List.of("APPLICATION_DOCUMENTS")
+            ),
+            UserRole.DEAN_OF_FACULTY, new OfficeMeta(
+                    "Dean of Faculty",
+                    "Faculty Office",
+                    "Faculty-wide access to registration, application, examination, and approved project records within the assigned faculty.",
+                    List.of(
+                            "REGISTRATION_FORM",
+                            "REINTEGRATION_FORM",
+                            "APPLICATION_DOCUMENTS",
+                            "EXAMINATION_DOCUMENTS",
+                            "FINAL_YEAR_PROJECT"
+                    )
             ),
             UserRole.LIBRARIAN, new OfficeMeta(
                     "Librarian",
@@ -63,15 +89,17 @@ public class AdminService {
             UserRole.STUDENT, new OfficeMeta(
                     "Student",
                     "Student Workspace",
-                    "Student project uploads and personal archive files.",
-                    List.of("FINAL_YEAR_PROJECT")
+                    "Personal workspace linked to a registered student ID: Official Documents, My Projects, and Archive Project.",
+                    List.of("REGISTRATION_FORM", "REINTEGRATION_FORM", "APPLICATION_DOCUMENTS", "FINAL_YEAR_PROJECT")
             )
     );
 
     private static final List<UserRole> OFFICE_ORDER = List.of(
             UserRole.REGISTRAR,
+            UserRole.FINANCE,
             UserRole.EXAMINATION_OFFICER,
             UserRole.HOD,
+            UserRole.DEAN_OF_FACULTY,
             UserRole.LIBRARIAN,
             UserRole.STUDENT
     );
@@ -81,6 +109,8 @@ public class AdminService {
     private final ArchiveAccessService accessService;
     private final ActivityService activityService;
     private final ActivityEntryRepository activityEntryRepository;
+    private final DocumentRepository documentRepository;
+    private final FolderShareRepository folderShareRepository;
     private final FolderService folderService;
     private final StudentAccountProvisioningService studentAccountProvisioningService;
 
@@ -90,6 +120,8 @@ public class AdminService {
             ArchiveAccessService accessService,
             ActivityService activityService,
             ActivityEntryRepository activityEntryRepository,
+            DocumentRepository documentRepository,
+            FolderShareRepository folderShareRepository,
             FolderService folderService,
             StudentAccountProvisioningService studentAccountProvisioningService
     ) {
@@ -98,6 +130,8 @@ public class AdminService {
         this.accessService = accessService;
         this.activityService = activityService;
         this.activityEntryRepository = activityEntryRepository;
+        this.documentRepository = documentRepository;
+        this.folderShareRepository = folderShareRepository;
         this.folderService = folderService;
         this.studentAccountProvisioningService = studentAccountProvisioningService;
     }
@@ -118,6 +152,85 @@ public class AdminService {
         );
     }
 
+    public AdminReportResponse getReport(String rawRole) {
+        requireAdmin(rawRole);
+        List<UserAccountResponse> users = listUsers(rawRole);
+        int activeUsers = (int) users.stream().filter(UserAccountResponse::active).count();
+        Map<String, Long> usersByRole = users.stream()
+                .collect(Collectors.groupingBy(UserAccountResponse::role, LinkedHashMap::new, Collectors.counting()));
+
+        List<DocumentEntity> documents = documentRepository.findAll();
+        int archivedDocuments = (int) documents.stream().filter(DocumentEntity::isArchivedForRemoval).count();
+        int activeDocuments = documents.size() - archivedDocuments;
+        Map<String, Long> documentsByCategory = documents.stream()
+                .filter(document -> !document.isArchivedForRemoval())
+                .filter(document -> document.getCategory() != null)
+                .collect(Collectors.groupingBy(
+                        document -> document.getCategory().name(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ));
+        Map<String, Long> documentsByStatus = documents.stream()
+                .filter(document -> !document.isArchivedForRemoval())
+                .filter(document -> document.getStatus() != null)
+                .collect(Collectors.groupingBy(
+                        document -> document.getStatus().name(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ));
+
+        LocalDateTime weekAgo = LocalDateTime.now().minusDays(7);
+        long uploadsLast7Days = documents.stream()
+                .filter(document -> document.getCreatedAt() != null && document.getCreatedAt().isAfter(weekAgo))
+                .count();
+
+        List<AdminReportResponse.TrendPoint> uploadTrend = new ArrayList<>();
+        DateTimeFormatter dayFormat = DateTimeFormatter.ISO_LOCAL_DATE;
+        for (int offset = 6; offset >= 0; offset--) {
+            LocalDate day = LocalDate.now().minusDays(offset);
+            long count = documents.stream()
+                    .filter(document -> document.getCreatedAt() != null
+                            && document.getCreatedAt().toLocalDate().equals(day))
+                    .count();
+            uploadTrend.add(new AdminReportResponse.TrendPoint(day.format(dayFormat), count));
+        }
+
+        List<ActivityEntryEntity> activities = activityEntryRepository.findAll();
+        Map<String, Long> activitiesByCategory = activities.stream()
+                .filter(entry -> entry.getCategory() != null)
+                .collect(Collectors.groupingBy(
+                        entry -> entry.getCategory().name(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ));
+        Map<String, Long> activitiesByOffice = activities.stream()
+                .filter(entry -> entry.getSourceRole() != null)
+                .collect(Collectors.groupingBy(
+                        entry -> entry.getSourceRole().name(),
+                        LinkedHashMap::new,
+                        Collectors.counting()
+                ));
+
+        return new AdminReportResponse(
+                LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                users.size(),
+                activeUsers,
+                users.size() - activeUsers,
+                usersByRole,
+                documents.size(),
+                activeDocuments,
+                archivedDocuments,
+                documentsByCategory,
+                documentsByStatus,
+                uploadsLast7Days,
+                activities.size(),
+                activitiesByCategory,
+                activitiesByOffice,
+                folderShareRepository.count(),
+                uploadTrend
+        );
+    }
+
     public List<UserAccountResponse> listUsers(String rawRole) {
         requireAdmin(rawRole);
         return accountRepository.findAll().stream()
@@ -133,6 +246,7 @@ public class AdminService {
             throw new IllegalArgumentException("Username already exists");
         }
         validateHodDepartment(request.role(), request.department());
+        validateDeanFaculty(request.role(), request.department());
 
         AccountEntity account = new AccountEntity();
         account.setUsername(username);
@@ -174,6 +288,7 @@ public class AdminService {
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + id));
 
         validateHodDepartment(request.role(), request.department());
+        validateDeanFaculty(request.role(), request.department());
 
         account.setFullName(request.fullName().trim());
         account.setRole(request.role());
@@ -297,6 +412,7 @@ public class AdminService {
                         member.getId(),
                         member.getUsername(),
                         member.getFullName(),
+                        member.getDepartment(),
                         Boolean.TRUE.equals(member.getActive()),
                         activityEntryRepository.countByActorAccountId(member.getId())
                 ))
@@ -400,6 +516,13 @@ public class AdminService {
             return;
         }
         AcademicDepartmentCatalog.requireValidHodDepartment(department);
+    }
+
+    private void validateDeanFaculty(UserRole role, String faculty) {
+        if (role != UserRole.DEAN_OF_FACULTY) {
+            return;
+        }
+        FacultyCatalog.requireValidDeanFaculty(faculty);
     }
 
     private record OfficeMeta(String label, String department, String summary, List<String> categories) {

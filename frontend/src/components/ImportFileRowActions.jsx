@@ -1,11 +1,13 @@
 import React from 'react'
-import { EyeIcon, RefreshIcon } from './Icons'
+import { EyeIcon, RefreshIcon, XIcon } from './Icons'
 
 export default function ImportFileRowActions({
   replaced = false,
+  excluded = false,
   previewBusy = false,
   onPreview,
-  onReplace
+  onReplace,
+  onRemove
 }) {
   return (
     <div className="import-file-actions">
@@ -13,16 +15,32 @@ export default function ImportFileRowActions({
         type="button"
         className="ghost-btn import-file-action"
         onClick={onPreview}
-        disabled={previewBusy}
+        disabled={previewBusy || excluded}
       >
         <EyeIcon className="icon" />
         Preview
       </button>
-      <button type="button" className="ghost-btn import-file-action" onClick={onReplace}>
+      <button
+        type="button"
+        className="ghost-btn import-file-action"
+        onClick={onReplace}
+        disabled={excluded}
+      >
         <RefreshIcon className="icon" />
         Replace
       </button>
+      {onRemove ? (
+        <button
+          type="button"
+          className={`ghost-btn import-file-action ${excluded ? 'active' : ''}`}
+          onClick={onRemove}
+        >
+          <XIcon className="icon" />
+          {excluded ? 'Include' : 'Remove'}
+        </button>
+      ) : null}
       {replaced ? <span className="import-preview-badge replaced">Replaced</span> : null}
+      {excluded ? <span className="import-preview-badge muted">Excluded</span> : null}
     </div>
   )
 }

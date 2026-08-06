@@ -281,8 +281,10 @@ public class ActivityService {
         return switch (role) {
             case ADMIN -> "System Administrator";
             case REGISTRAR -> "Registrar";
+            case FINANCE -> "Finance Office";
             case EXAMINATION_OFFICER -> "Examination Officer";
             case HOD -> "Head of Department";
+            case DEAN_OF_FACULTY -> "Dean of Faculty";
             case LIBRARIAN -> "Librarian";
             case STUDENT -> "Student";
         };

@@ -4,10 +4,12 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Demo HOD sign-in: short usernames per department, shared password {@code Hod@123}.
+ * Demo HOD sign-in: one seeded account ({@code hod} / {@code Head@123}) for Software Engineering.
  */
 public final class HodLoginPasswords {
-    public static final String DEMO_PASSWORD = "Hod@123";
+    public static final String DEMO_USERNAME = "hod";
+    public static final String DEMO_PASSWORD = "Head@123";
+    public static final String DEMO_DEPARTMENT = "Software Engineering";
 
     private HodLoginPasswords() {
     }
@@ -16,60 +18,35 @@ public final class HodLoginPasswords {
         if (department == null || department.isBlank()) {
             throw new IllegalArgumentException("Department is required");
         }
-        String trimmed = department.trim();
-        if ("Accounting".equalsIgnoreCase(trimmed)) {
-            return "hod.acc";
+        if (DEMO_DEPARTMENT.equalsIgnoreCase(department.trim())) {
+            return DEMO_USERNAME;
         }
-        if ("Management".equalsIgnoreCase(trimmed)) {
-            return "hod.man";
-        }
-        if ("Finance".equalsIgnoreCase(trimmed)) {
-            return "hod.fin";
-        }
-        if ("Software Engineering".equalsIgnoreCase(trimmed)) {
-            return "hod.sof";
-        }
-        if ("Networking & Communication Systems".equalsIgnoreCase(trimmed)) {
-            return "hod.net";
-        }
-        if ("Information Management".equalsIgnoreCase(trimmed)) {
-            return "hod.inf";
-        }
-        if ("Educational Psychology".equalsIgnoreCase(trimmed)) {
-            return "hod.psy";
-        }
-        if ("Languages (English / French)".equalsIgnoreCase(trimmed)) {
-            return "hod.lan";
-        }
-        if ("Religious Studies".equalsIgnoreCase(trimmed)) {
-            return "hod.rel";
-        }
-        if ("Business Accounting & Computer Science".equalsIgnoreCase(trimmed)) {
-            return "hod.bus";
-        }
-        if ("Nursing".equalsIgnoreCase(trimmed)) {
-            return "hod.nur";
-        }
-        if ("Midwifery".equalsIgnoreCase(trimmed)) {
-            return "hod.mid";
-        }
-        if ("Theology (Pastoral Training)".equalsIgnoreCase(trimmed)) {
-            return "hod.theo";
-        }
-        throw new IllegalArgumentException("No demo HOD username for department: " + trimmed);
+        throw new IllegalArgumentException("No demo HOD username for department: " + department.trim());
     }
 
     public static Optional<String> demoPasswordForDepartment(String department) {
-        if (!AcademicDepartmentCatalog.isKnownAcademicDepartment(department)) {
-            return Optional.empty();
+        if (department != null && DEMO_DEPARTMENT.equalsIgnoreCase(department.trim())) {
+            return Optional.of(DEMO_PASSWORD);
         }
-        return Optional.of(DEMO_PASSWORD);
+        return Optional.empty();
     }
 
-    /** Older demo HOD usernames that should be turned off after the short-username rename. */
+    /** Former per-department demo HOD usernames — deactivated on startup. */
     public static List<String> legacyDemoUsernames() {
         return List.of(
-                "hod",
+                "hod.sof",
+                "hod.acc",
+                "hod.man",
+                "hod.fin",
+                "hod.net",
+                "hod.inf",
+                "hod.psy",
+                "hod.lan",
+                "hod.rel",
+                "hod.bus",
+                "hod.nur",
+                "hod.mid",
+                "hod.theo",
                 "hod.im",
                 "hod.accounting",
                 "hod.management",

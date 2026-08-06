@@ -19,6 +19,9 @@ public record ImportPreviewItemResponse(
         Boolean studentExists,
         String existingStudentName,
         Long existingFolderId,
-        Boolean folderExistsHere
+        Boolean folderExistsHere,
+        boolean importable,
+        String fileKind,
+        String skipReason
 ) {
 }

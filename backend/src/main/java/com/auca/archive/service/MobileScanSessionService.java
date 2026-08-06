@@ -35,8 +35,11 @@ import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Service
 public class MobileScanSessionService {
@@ -57,16 +60,21 @@ public class MobileScanSessionService {
     }
 
     public MobileScanNetworkResponse getNetworkResponse(int frontendPort) {
+        return getNetworkResponse(frontendPort, "https");
+    }
+
+    public MobileScanNetworkResponse getNetworkResponse(int frontendPort, String scheme) {
         String host = resolveLanHost();
         if (host == null || host.isBlank()) {
             throw new IllegalStateException("Could not detect a local network address. Connect this computer to Wi-Fi and try again.");
         }
         int safeFrontendPort = frontendPort > 0 ? frontendPort : 5173;
+        String protocol = "http".equalsIgnoreCase(scheme) ? "http" : "https";
         return new MobileScanNetworkResponse(
                 host,
                 safeFrontendPort,
                 apiPort,
-                "http://" + host + ":" + safeFrontendPort,
+                protocol + "://" + host + ":" + safeFrontendPort,
                 "http://" + host + ":" + apiPort
         );
     }
@@ -177,15 +185,39 @@ public class MobileScanSessionService {
 
     @Transactional
     public MobileScanSessionResponse finalizeSession(String token) throws IOException {
+        return finalizeSession(token, "combined");
+    }
+
+    @Transactional
+    public MobileScanSessionResponse finalizeSession(String token, String mode) throws IOException {
         MobileScanSessionEntity session = requireSession(token);
         List<MobileScanPageEntity> pages = loadPages(token);
         if (pages.isEmpty()) {
             throw new IllegalArgumentException("Add at least one scanned page before finishing.");
         }
-        session.setPdfBytes(buildPdf(pages));
+        String normalizedMode = mode == null ? "combined" : mode.trim().toLowerCase(Locale.ROOT);
+        if ("individual".equals(normalizedMode)) {
+            session.setPdfBytes(buildZipOfSinglePagePdfs(pages));
+        } else {
+            session.setPdfBytes(buildPdf(pages));
+        }
         session.setReady(true);
         sessionRepository.save(session);
         return toResponse(session, pages);
+    }
+
+    /**
+     * Keep the same paired token/QR and clear pages so the phone can scan another document.
+     */
+    @Transactional
+    public MobileScanSessionResponse startNextBatch(String token) {
+        MobileScanSessionEntity session = requireSession(token);
+        pageRepository.deleteBySessionToken(token);
+        session.setPdfBytes(null);
+        session.setReady(false);
+        session.setExpiresAt(LocalDateTime.now().plusMinutes(SESSION_MINUTES));
+        sessionRepository.save(session);
+        return toResponse(session, List.of());
     }
 
     public byte[] getPdf(String token) {
@@ -194,6 +226,13 @@ public class MobileScanSessionService {
             throw new IllegalArgumentException("The scanned PDF is not ready yet.");
         }
         return session.getPdfBytes();
+    }
+
+    public boolean isZipDelivery(byte[] payload) {
+        return payload != null
+                && payload.length >= 2
+                && payload[0] == 'P'
+                && payload[1] == 'K';
     }
 
     private byte[] buildPdf(List<MobileScanPageEntity> pages) throws IOException {
@@ -218,6 +257,26 @@ public class MobileScanSessionService {
             }
             document.save(output);
             return output.toByteArray();
+        }
+    }
+
+    private byte[] buildZipOfSinglePagePdfs(List<MobileScanPageEntity> pages) throws IOException {
+        List<MobileScanPageEntity> ordered = pages.stream()
+                .sorted(Comparator.comparingInt(MobileScanPageEntity::getPageOrder))
+                .toList();
+        try (ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(zipBytes)) {
+            int index = 1;
+            for (MobileScanPageEntity page : ordered) {
+                byte[] singlePdf = buildPdf(List.of(page));
+                ZipEntry entry = new ZipEntry("scan-page-" + index + ".pdf");
+                zip.putNextEntry(entry);
+                zip.write(singlePdf);
+                zip.closeEntry();
+                index += 1;
+            }
+            zip.finish();
+            return zipBytes.toByteArray();
         }
     }
 
@@ -342,13 +401,17 @@ public class MobileScanSessionService {
                 .map(page -> new MobileScanPageResponse(page.getPageId(), page.getPageOrder()))
                 .toList();
         String status = session.isReady() ? "READY" : pageResponses.isEmpty() ? "WAITING" : "IN_PROGRESS";
+        String deliveryFormat = !session.isReady() || session.getPdfBytes() == null
+                ? null
+                : (isZipDelivery(session.getPdfBytes()) ? "ZIP" : "PDF");
         return new MobileScanSessionResponse(
                 session.getToken(),
                 session.getExpiresAt(),
                 status,
                 session.isReady(),
                 pageResponses.size(),
-                pageResponses
+                pageResponses,
+                deliveryFormat
         );
     }
 }

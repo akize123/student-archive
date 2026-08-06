@@ -30,5 +30,21 @@ public class ShareSchemaMigration implements CommandLineRunner {
                 ADD CONSTRAINT folder_shares_permission_check
                 CHECK (permission IN ('VIEW_ONLY', 'READ_ONLY', 'WRITE', 'EDIT'))
                 """);
+        widenRoleColumn("folder_shares", "target_role");
+    }
+
+    private void widenRoleColumn(String table, String column) {
+        String constraint = table + "_" + column + "_check";
+        jdbcTemplate.execute("ALTER TABLE " + table + " DROP CONSTRAINT IF EXISTS " + constraint);
+        try {
+            jdbcTemplate.execute("ALTER TABLE " + table + " ALTER COLUMN " + column + " VARCHAR(32)");
+        } catch (Exception ignored) {
+            // Column may already be plain VARCHAR on fresh databases.
+        }
+        jdbcTemplate.execute("""
+                ALTER TABLE %s
+                ADD CONSTRAINT %s
+                CHECK (%s IN ('ADMIN', 'REGISTRAR', 'FINANCE', 'EXAMINATION_OFFICER', 'HOD', 'DEAN_OF_FACULTY', 'LIBRARIAN', 'STUDENT'))
+                """.formatted(table, constraint, column));
     }
 }

@@ -1,13 +1,6 @@
-const API_PORT = import.meta.env.VITE_API_PORT || '8081'
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (
-  import.meta.env.DEV
-    ? ''
-    : (
-      typeof window !== 'undefined'
-        ? `http://${window.location.hostname}:${API_PORT}`
-        : `http://localhost:${API_PORT}`
-    )
-)
+// Same-origin by default so HTTPS frontend uses the Vite/reverse-proxy /api path
+// (avoids mixed content and CORS). Override with VITE_API_BASE_URL when needed.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const AUTH_SESSION_KEY = 'auca-archive-session'
 
 function getSessionRoleHeader() {
@@ -50,6 +43,9 @@ export function formatLoginError(message) {
   const text = String(message || '').trim()
   if (!text) {
     return 'Unable to sign in. Please try again.'
+  }
+  if (text.includes('inactive')) {
+    return 'This account is inactive. Ask an administrator to activate it and set a password.'
   }
   if (text.includes('Invalid username or password')) {
     return 'Invalid username or password. Please try again.'
@@ -126,6 +122,17 @@ export function getStudentArchive(studentNumber) {
 
 export function lookupStudent(studentNumber) {
   return request(`/api/students/${encodeURIComponent(String(studentNumber || '').trim())}/lookup`)
+}
+
+export function getStudentEnrollment(studentNumber) {
+  return request(`/api/students/${encodeURIComponent(String(studentNumber || '').trim())}/enrollment`)
+}
+
+export function linkStudentToSemester(semesterFolderId, studentNumber) {
+  return request(`/api/folders/${semesterFolderId}/link-student`, {
+    method: 'POST',
+    body: JSON.stringify({ studentNumber: String(studentNumber || '').trim() })
+  })
 }
 
 export function getFolder(folderId) {
@@ -519,6 +526,10 @@ export function getAdminDashboard() {
   return request('/api/admin/dashboard')
 }
 
+export function getAdminReport() {
+  return request('/api/admin/reports')
+}
+
 export function getAdminPrivileges() {
   return request('/api/admin/privileges')
 }
@@ -564,9 +575,12 @@ export function createMobileScanSession() {
   return request('/api/mobile-scan/sessions', { method: 'POST' })
 }
 
-export function getMobileScanNetworkUrl(frontendPort = 5173) {
+export function getMobileScanNetworkUrl(frontendPort = 5173, scheme = 'https') {
   const port = Number(frontendPort) > 0 ? Number(frontendPort) : 5173
-  return request(`/api/mobile-scan/network-url?frontendPort=${encodeURIComponent(port)}`)
+  const protocol = scheme === 'http' ? 'http' : 'https'
+  return request(
+    `/api/mobile-scan/network-url?frontendPort=${encodeURIComponent(port)}&scheme=${encodeURIComponent(protocol)}`
+  )
 }
 
 export function getMobileScanSession(token) {
@@ -595,8 +609,16 @@ export function deleteMobileScanPage(token, pageId) {
   })
 }
 
-export function finalizeMobileScanSession(token) {
-  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/finalize`, {
+export function finalizeMobileScanSession(token, mode = 'combined') {
+  const sendMode = mode === 'individual' ? 'individual' : 'combined'
+  return request(
+    `/api/mobile-scan/sessions/${encodeURIComponent(token)}/finalize?mode=${encodeURIComponent(sendMode)}`,
+    { method: 'POST' }
+  )
+}
+
+export function startNextMobileScanBatch(token) {
+  return request(`/api/mobile-scan/sessions/${encodeURIComponent(token)}/next-batch`, {
     method: 'POST'
   })
 }
@@ -611,5 +633,8 @@ export async function downloadMobileScanPdf(token) {
     const message = await response.text()
     throw new Error(message || 'Unable to download scanned PDF.')
   }
-  return response.blob()
+  const blob = await response.blob()
+  const disposition = response.headers.get('Content-Disposition') || ''
+  const contentType = response.headers.get('Content-Type') || blob.type || ''
+  return { blob, disposition, contentType }
 }

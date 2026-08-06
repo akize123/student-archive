@@ -1329,6 +1329,17 @@ textarea:focus {
   min-height: 0;
 }
 
+.dashboard-workspace-admin .admin-system-workspace .admin-dashboard-page {
+  height: auto;
+  max-height: 42%;
+}
+
+.dashboard-workspace-admin .admin-system-workspace .admin-dashboard-page.admin-dashboard-page--users {
+  height: auto;
+  max-height: none;
+  min-height: min(520px, 68%);
+}
+
 .dashboard-workspace-admin .admin-dashboard-panel {
   flex: 1;
   min-height: 0;

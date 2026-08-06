@@ -99,7 +99,8 @@ public class DocumentCategoryDefinitionService {
 
     private void requireManageRole(UserRole role) {
         if (role != UserRole.ADMIN
-                && role != UserRole.REGISTRAR
+                && !role.isRegistrarOffice()
+                && role != UserRole.FINANCE
                 && role != UserRole.EXAMINATION_OFFICER
                 && role != UserRole.HOD) {
             throw new IllegalArgumentException("You are not allowed to manage document categories.");

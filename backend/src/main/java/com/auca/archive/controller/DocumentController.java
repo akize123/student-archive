@@ -270,12 +270,15 @@ public class DocumentController {
             @RequestHeader(value = "X-User-Role", required = false) String role,
             @RequestHeader(value = "X-Account-Id", required = false) String accountId,
             @RequestHeader(value = "X-User-Username", required = false) String username,
-            @RequestHeader(value = "X-User-Name", required = false) String actorName
+            @RequestHeader(value = "X-User-Name", required = false) String actorName,
+            @RequestHeader(value = "X-User-Department", required = false) String department
     ) {
+        String viewerDepartment = resolveViewerDepartment(role, accountId, department);
         documentService.archiveDocument(
                 id,
                 role,
-                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName)
+                com.auca.archive.dto.RequestActor.fromHeaders(accountId, username, actorName),
+                viewerDepartment
         );
         Map<String, String> response = new java.util.LinkedHashMap<>();
         response.put("message", "Document moved to archive");

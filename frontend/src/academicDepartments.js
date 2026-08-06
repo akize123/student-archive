@@ -26,6 +26,8 @@ export const studentFacultyOptions = [
   }
 ]
 
+export const facultyOptions = studentFacultyOptions.map(({ value, label }) => ({ value, label }))
+
 export const academicDepartmentOptions = studentFacultyOptions.flatMap((faculty) =>
   faculty.departments.map((department) => ({
     faculty: faculty.label,
@@ -33,3 +35,15 @@ export const academicDepartmentOptions = studentFacultyOptions.flatMap((faculty)
     label: department
   }))
 )
+
+/** Faculty that owns an academic department (e.g. Software Engineering → Faculty of Information Technology). */
+export function facultyForAcademicDepartment(department) {
+  const needle = String(department || '').trim().toLowerCase()
+  if (!needle) {
+    return null
+  }
+  const match = studentFacultyOptions.find((faculty) =>
+    (faculty.departments || []).some((entry) => String(entry).trim().toLowerCase() === needle)
+  )
+  return match?.value || null
+}

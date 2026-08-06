@@ -10,6 +10,7 @@ import { CheckIcon, FolderIcon, UploadIcon, XIcon } from './Icons'
 export default function ImportStudentLinkModal({
   open,
   busy,
+  userRole = 'REGISTRAR',
   phase = 'link',
   importError = '',
   onDismissImportError,
@@ -35,6 +36,7 @@ export default function ImportStudentLinkModal({
   const [entryMode, setEntryMode] = useState('idle')
 
   const zipPhase = phase === 'zip'
+  const canRegister = userRole === 'REGISTRAR' || userRole === 'ADMIN'
   const displayStudentNumber = confirmedContext?.studentNumber || linkedStudentNumber || ''
   const displayStudentName = confirmedContext?.studentName || linkedStudentName || ''
 
@@ -81,14 +83,31 @@ export default function ImportStudentLinkModal({
     try {
       const data = await lookupStudent(trimmed)
       if (!data.found) {
+        if (!canRegister) {
+          setLookupResult(null)
+          setEntryMode('idle')
+          setLookupError(`Student ${trimmed} is not registered. Ask the Registrar to create this student ID first.`)
+          setLookupInfo('')
+          setStudentNumber(trimmed)
+          return null
+        }
         setLookupResult(null)
         setEntryMode('new')
         setLookupError('')
         setLookupInfo(
           placementSummary
-            ? `No archive record for ${trimmed}. Enter the full name to link this ID under ${placementSummary}.`
-            : `No archive record for ${trimmed}. Enter the full name to link this student ID.`
+            ? `No archive record for ${trimmed}. Enter the full name to register this ID under ${placementSummary}.`
+            : `No archive record for ${trimmed}. Enter the full name to register this student ID.`
         )
+        setStudentNumber(trimmed)
+        return null
+      }
+
+      if (!data.registeredByRegistrar && !canRegister) {
+        setLookupResult(null)
+        setEntryMode('idle')
+        setLookupError(`Student ${trimmed} is not registered. Ask the Registrar to create this student ID first.`)
+        setLookupInfo('')
         setStudentNumber(trimmed)
         return null
       }
@@ -142,8 +161,11 @@ export default function ImportStudentLinkModal({
       setLookupError(departmentError)
       return
     }
-    if (entryMode === 'new' && !String(studentName || '').trim()) {
-      setLookupError('Enter the student full name to link this new ID.')
+    if (entryMode === 'new' && canRegister && !String(studentName || '').trim()) {
+      setLookupError('Enter the student full name to register this new ID.')
+      return
+    }
+    if (!canRegister && lookupError) {
       return
     }
 
@@ -158,7 +180,7 @@ export default function ImportStudentLinkModal({
 
   return (
     <div className="modal-backdrop" onClick={busy ? undefined : onClose} role="presentation">
-      <div className="modal import-link-modal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+      <div className="modal import-link-modal upload-modal-compact" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
         <div className="modal-head">
           <div>
             <p className="eyebrow">Import documents</p>
@@ -196,7 +218,7 @@ export default function ImportStudentLinkModal({
         ) : null}
 
         {zipPhase ? (
-          <section className="import-link-zip-panel">
+          <section className="upload-record-panel">
             <p className="upload-record-linked-summary">
               Linked to student ID: <strong>{displayStudentNumber || '—'}</strong>
               {displayStudentName ? (
@@ -208,7 +230,7 @@ export default function ImportStudentLinkModal({
             </p>
           </section>
         ) : insideStudentTree ? (
-          <section className="import-link-linked-panel">
+          <section className="upload-record-panel">
             <p className="upload-record-linked-summary">
               Linked to student ID: <strong>{linkedStudentNumber || '—'}</strong>
               {linkedStudentName ? (
@@ -220,7 +242,7 @@ export default function ImportStudentLinkModal({
             </p>
           </section>
         ) : (
-          <section className="import-link-form">
+          <section className="upload-record-panel">
             <label className="upload-record-input">
               <span>Student ID</span>
               <div className="lookup-input-row">

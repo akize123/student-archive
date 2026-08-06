@@ -1,6 +1,5 @@
 package com.auca.archive.service;
 
-import com.auca.archive.domain.AcademicDepartmentCatalog;
 import com.auca.archive.domain.HodLoginPasswords;
 import com.auca.archive.domain.UserRole;
 import com.auca.archive.model.StudentEntity;
@@ -33,19 +32,25 @@ public class AccountSeedData implements CommandLineRunner {
     public void run(String... args) {
         accountService.ensureAccount("admin", "System Administrator", "Admin@123", UserRole.ADMIN, UserRole.ADMIN.getDepartment());
         accountService.ensureAccount("registrar", "Registrar Office", "Registrar@123", UserRole.REGISTRAR, UserRole.REGISTRAR.getDepartment());
+        accountService.ensureAccount("finance", "Finance Office", "Finance@123", UserRole.FINANCE, UserRole.FINANCE.getDepartment());
         accountService.ensureAccount("exam.officer", "Examination Officer", "Exam@123", UserRole.EXAMINATION_OFFICER, UserRole.EXAMINATION_OFFICER.getDepartment());
+        accountService.ensureAccount(
+                "dean",
+                "Dean of Faculty (FIT)",
+                "Dean@123",
+                UserRole.DEAN_OF_FACULTY,
+                "Faculty of Information Technology"
+        );
         accountService.ensureAccount("librarian", "University Librarian", "Library@123", UserRole.LIBRARIAN, UserRole.LIBRARIAN.getDepartment());
 
-        for (String department : AcademicDepartmentCatalog.all()) {
-            String username = HodLoginPasswords.demoUsernameForDepartment(department);
-            accountService.ensureDemoHodAccount(
-                    username,
-                    "Head of Department (" + department + ")",
-                    HodLoginPasswords.DEMO_PASSWORD,
-                    department
-            );
-        }
+        accountService.ensureDemoHodAccount(
+                HodLoginPasswords.DEMO_USERNAME,
+                "Head of Department (" + HodLoginPasswords.DEMO_DEPARTMENT + ")",
+                HodLoginPasswords.DEMO_PASSWORD,
+                HodLoginPasswords.DEMO_DEPARTMENT
+        );
         accountService.deactivateLegacyDemoHodAccounts(HodLoginPasswords.legacyDemoUsernames());
+        accountService.deactivateAllHodAccountsExcept(HodLoginPasswords.DEMO_USERNAME);
 
         StudentEntity student = studentRepository.findByStudentNumber(DEMO_STUDENT_NUMBER)
                 .or(() -> studentRepository.findByStudentNumber(LEGACY_DEMO_STUDENT_NUMBER))
@@ -53,15 +58,16 @@ public class AccountSeedData implements CommandLineRunner {
                         DEMO_STUDENT_NUMBER,
                         "Abikunda Mugisha",
                         "Faculty of Information Technology",
-                        "Software Engineering"
+                        "Software Engineering",
+                        false,
+                        UserRole.ADMIN
                 ));
 
-        accountService.ensureAccount(
+        // Keep demo student login predictable (username = student ID, password Student@123).
+        accountService.ensureDemoStudentAccount(
                 student.getStudentNumber(),
                 student.getFullName(),
                 "Student@123",
-                UserRole.STUDENT,
-                UserRole.STUDENT.getDepartment(),
                 student.getStudentNumber()
         );
     }

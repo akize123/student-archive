@@ -52,6 +52,7 @@ public class DocumentService {
     private final DocumentRepository documentRepository;
     private final FolderService folderService;
     private final StudentService studentService;
+    private final StudentEnrollmentService studentEnrollmentService;
     private final ArchiveAccessService accessService;
     private final DocumentScanService documentScanService;
     private final ArchiveTreeService archiveTreeService;
@@ -77,6 +78,7 @@ public class DocumentService {
             DocumentRepository documentRepository,
             FolderService folderService,
             StudentService studentService,
+            StudentEnrollmentService studentEnrollmentService,
             ArchiveAccessService accessService,
             DocumentScanService documentScanService,
             ArchiveTreeService archiveTreeService,
@@ -102,6 +104,7 @@ public class DocumentService {
         this.documentRepository = documentRepository;
         this.folderService = folderService;
         this.studentService = studentService;
+        this.studentEnrollmentService = studentEnrollmentService;
         this.accessService = accessService;
         this.documentScanService = documentScanService;
         this.archiveTreeService = archiveTreeService;
@@ -183,7 +186,7 @@ public class DocumentService {
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         String query = filter == null ? null : filter.q();
         StudentDocumentCategory category = filter == null ? null : filter.category();
         boolean hasQuery = query != null && !query.isBlank();
@@ -289,7 +292,7 @@ public class DocumentService {
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         return toDetail(documentRepository.findById(id)
                 .filter(document -> !document.isArchivedForRemoval())
                 .filter(document -> folderService.isDocumentAccessible(document, role, studentNumber, viewerDepartment))
@@ -313,7 +316,7 @@ public class DocumentService {
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         DocumentEntity document = documentRepository.findById(id)
                 .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber, viewerDepartment))
@@ -326,7 +329,7 @@ public class DocumentService {
         String studentNumber = normalizeStudentNumber(rawStudentNumber);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, studentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         DocumentEntity document = documentRepository.findById(id)
                 .filter(entity -> !entity.isArchivedForRemoval())
                 .filter(entity -> folderService.isDocumentAccessible(entity, role, studentNumber, viewerDepartment))
@@ -480,7 +483,7 @@ public class DocumentService {
         String sessionStudentNumber = normalizeStudentNumber(rawStudentNumber);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
         accessService.requireStudentAccount(role, sessionStudentNumber);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Document file is required");
         }
@@ -504,13 +507,7 @@ public class DocumentService {
         }
         ExamPaperType examPaperType = validateExamMetadata(request);
 
-        StudentEntity student = studentService.resolveOrCreate(
-                request.studentNumber(),
-                request.studentName(),
-                request.faculty(),
-                request.department(),
-                usesArchivePlacementContext(role)
-        );
+        StudentEntity student = resolveStudentForUpload(request, role, viewerDepartment);
         String categoryFolderName = resolveCategoryFolderName(request);
         String documentTypeName = resolveDocumentTypeName(request);
         FolderEntity folder;
@@ -540,11 +537,26 @@ public class DocumentService {
         if (registrarSubfolderName == null) {
             registrarSubfolderName = documentTypeName;
         }
-        if (role != UserRole.STUDENT && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+        if (role != UserRole.STUDENT && folderService.isWithinSemesterStudentTree(folder)) {
+            FolderEntity studentRoot = folderService.resolveSemesterStudentRootFolder(folder).orElse(folder);
+            String documentAcademicYear = trimToNull(request.academicYear());
+            String documentSemester = trimToNull(request.semester());
+            if (documentAcademicYear != null && documentSemester != null) {
+                folder = archiveTreeService.ensureStudentDocumentPath(
+                        studentRoot,
+                        documentAcademicYear,
+                        documentSemester,
+                        categoryFolderName,
+                        registrarSubfolderName
+                );
+            } else if (ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
+                folder = archiveTreeService.ensureRegistrarDocumentSubfolder(folder, registrarSubfolderName);
+            }
+        } else if (role != UserRole.STUDENT && ArchiveTreeService.isSemesterStudentRootFolder(folder.getCode())) {
             folder = archiveTreeService.ensureRegistrarDocumentSubfolder(folder, registrarSubfolderName);
         }
         requireDocumentInsideStudentFolder(folder, role);
-        folderService.requireHodFolderPlacement(folder, role, viewerDepartment);
+        folderService.requireScopedFolderPlacement(folder, role, viewerDepartment);
 
         Path studentRoot = archiveTreeService.resolveStoragePath(
                 storageRoot,
@@ -893,6 +905,7 @@ public class DocumentService {
     @Transactional
     public DocumentDetailResponse updateStatus(Long id, DocumentStatus status, String reviewNote, String rawRole) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        accessService.rejectDeanApproval(role);
         DocumentEntity entity = documentRepository.findById(id)
                 .filter(document -> folderService.isDocumentAccessible(document, role, null))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
@@ -994,7 +1007,7 @@ public class DocumentService {
     ) throws IOException {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         if (role == UserRole.STUDENT) {
             throw new IllegalArgumentException("Students cannot replace staff archive documents here");
         }
@@ -1006,7 +1019,7 @@ public class DocumentService {
                 .filter(document -> folderService.isDocumentAccessible(document, role, null, viewerDepartment))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
         if (entity.getFolderId() != null) {
-            folderService.requireHodFolderPlacement(
+            folderService.requireScopedFolderPlacement(
                     folderService.getFolderOrThrow(entity.getFolderId()),
                     role,
                     viewerDepartment
@@ -1081,10 +1094,17 @@ public class DocumentService {
 
     @Transactional
     public void archiveDocument(Long id, String rawRole, RequestActor requestActor) {
+        archiveDocument(id, rawRole, requestActor, null);
+    }
+
+    @Transactional
+    public void archiveDocument(Long id, String rawRole, RequestActor requestActor, String rawViewerDepartment) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         DocumentEntity entity = documentRepository.findById(id)
                 .filter(document -> !document.isArchivedForRemoval())
-                .filter(document -> folderService.isDocumentAccessible(document, role, null))
+                .filter(document -> folderService.isDocumentAccessible(document, role, null, viewerDepartment))
                 .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
 
         entity.setArchivedAt(LocalDateTime.now());
@@ -1103,10 +1123,17 @@ public class DocumentService {
 
     @Transactional
     public void restoreDocument(Long id, String rawRole) {
+        restoreDocument(id, rawRole, null);
+    }
+
+    @Transactional
+    public void restoreDocument(Long id, String rawRole, String rawViewerDepartment) {
         UserRole role = rawRole == null || rawRole.isBlank() ? null : accessService.resolveRole(rawRole);
+        String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
         DocumentEntity entity = documentRepository.findById(id)
                 .filter(document -> document.isArchivedForRemoval())
-                .filter(document -> folderService.isDocumentAccessible(document, role, null))
+                .filter(document -> folderService.isDocumentAccessible(document, role, null, viewerDepartment))
                 .orElseThrow(() -> new IllegalArgumentException("Archived document not found: " + id));
         entity.setArchivedAt(null);
         entity.setArchivedBy(null);
@@ -1194,7 +1221,7 @@ public class DocumentService {
             boolean skipScanForLinkedFolderUpload = role != UserRole.STUDENT && request.targetFolderId() != null;
             if (!validationOverride && !skipScanForLinkedFolderUpload) {
                 documentScanService.requireVerified(fileBytes, request, file.getOriginalFilename(), role.getDepartment());
-            } else if (validationOverride && role != UserRole.ADMIN && role != UserRole.REGISTRAR) {
+            } else if (validationOverride && role != UserRole.ADMIN && !role.isRegistrarOffice() && role != UserRole.FINANCE) {
                 throw new IllegalArgumentException("Only administrators or registrars can override document validation.");
             }
         }
@@ -1610,12 +1637,31 @@ public class DocumentService {
         return rawStudentNumber.trim();
     }
 
+    private StudentEntity resolveStudentForUpload(UploadDocumentRequest request, UserRole role, String viewerFaculty) {
+        if (role == UserRole.REGISTRAR || role == UserRole.ADMIN) {
+            return studentService.resolveOrCreate(
+                    request.studentNumber(),
+                    request.studentName(),
+                    request.faculty(),
+                    request.department(),
+                    usesArchivePlacementContext(role),
+                    role
+            );
+        }
+        if (role == UserRole.STUDENT) {
+            return studentService.requireExistingStudent(request.studentNumber());
+        }
+        studentEnrollmentService.requireEnrollmentForRole(request.studentNumber(), role, viewerFaculty);
+        return studentService.requireExistingStudent(request.studentNumber());
+    }
+
     private boolean usesArchivePlacementContext(UserRole role) {
-        return role == UserRole.REGISTRAR
+        return role != null && (role == UserRole.REGISTRAR
+                || role == UserRole.FINANCE
                 || role == UserRole.EXAMINATION_OFFICER
                 || role == UserRole.HOD
                 || role == UserRole.LIBRARIAN
-                || role == UserRole.ADMIN;
+                || role == UserRole.ADMIN);
     }
 
     private void requireDocumentInsideStudentFolder(FolderEntity folder, UserRole role) {

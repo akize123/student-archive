@@ -69,6 +69,42 @@ class ArchiveAccessServiceDocumentOwnershipTest {
         assertFalse(accessService.canViewOfficeDocument(registrarDocument, UserRole.HOD));
     }
 
+    @Test
+    void financeDoesNotSeeRegistrarUploads() {
+        DocumentEntity document = officeDocument(
+                UserRole.REGISTRAR,
+                StudentDocumentCategory.APPLICATION_DOCUMENTS
+        );
+
+        assertTrue(accessService.canViewOfficeDocument(document, UserRole.REGISTRAR));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.FINANCE));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.LIBRARIAN));
+    }
+
+    @Test
+    void registrarDoesNotSeeFinanceUploads() {
+        DocumentEntity document = officeDocument(
+                UserRole.FINANCE,
+                StudentDocumentCategory.APPLICATION_DOCUMENTS
+        );
+
+        assertTrue(accessService.canViewOfficeDocument(document, UserRole.FINANCE));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.REGISTRAR));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.LIBRARIAN));
+    }
+
+    @Test
+    void librarianDoesNotSeeRegistrarRegistrationForms() {
+        DocumentEntity document = officeDocument(
+                UserRole.REGISTRAR,
+                StudentDocumentCategory.REGISTRATION_FORM
+        );
+
+        assertTrue(accessService.canViewOfficeDocument(document, UserRole.REGISTRAR));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.LIBRARIAN));
+        assertFalse(accessService.canViewOfficeDocument(document, UserRole.FINANCE));
+    }
+
     private DocumentEntity officeDocument(UserRole uploadedByRole, StudentDocumentCategory category) {
         DocumentEntity document = new DocumentEntity();
         document.setUploadedByRole(uploadedByRole);

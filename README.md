@@ -29,26 +29,7 @@ Open **http://localhost:5173/** (not port 8081).
 | Examination Officer | `exam.officer` | `Exam@123` |
 | Librarian | `librarian` | `Library@123` |
 | Student | `20251SEN001` | `Student@123` |
-
-### HOD (one account per academic department)
-
-Password for every HOD: `Hod@123`
-
-| Faculty | Department | Username | Password |
-|---------|------------|----------|----------|
-| Business | Accounting | `hod.acc` | `Hod@123` |
-| Business | Management | `hod.man` | `Hod@123` |
-| Business | Finance | `hod.fin` | `Hod@123` |
-| IT | Software Engineering | `hod.sof` | `Hod@123` |
-| IT | Networking & Communication Systems | `hod.net` | `Hod@123` |
-| IT | Information Management | `hod.inf` | `Hod@123` |
-| Education | Educational Psychology | `hod.psy` | `Hod@123` |
-| Education | Languages (English / French) | `hod.lan` | `Hod@123` |
-| Education | Religious Studies | `hod.rel` | `Hod@123` |
-| Education | Business Accounting & Computer Science | `hod.bus` | `Hod@123` |
-| Health | Nursing | `hod.nur` | `Hod@123` |
-| Health | Midwifery | `hod.mid` | `Hod@123` |
-| Theology | Theology (Pastoral Training) | `hod.theo` | `Hod@123` |
+| HOD (Software Engineering) | `hod` | `Head@123` |
 
 ## Stack
 

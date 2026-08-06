@@ -18,6 +18,8 @@ final class ZipBombGuard {
     static final int MAX_ZIP_RECORDS = 100000;
     /** PDF files extracted for import. */
     static final int MAX_PDF_ENTRIES = 10000;
+    /** Non-PDF files extracted for review visibility (not published). */
+    static final int MAX_NON_PDF_ENTRIES = 10000;
     static final long MAX_UNCOMPRESSED_BYTES = 200L * 1024L * 1024L;
     static final long MAX_SINGLE_ENTRY_BYTES = 20L * 1024L * 1024L;
     static final int MAX_COMPRESSION_RATIO = 150;
@@ -83,6 +85,7 @@ final class ZipBombGuard {
         long totalUncompressed = 0;
         int zipRecords = 0;
         int pdfEntries = 0;
+        int nonPdfEntries = 0;
 
         try (ZipInputStream zipInputStream = new ZipInputStream(new java.io.ByteArrayInputStream(archiveBytes))) {
             ZipEntry entry;
@@ -95,7 +98,7 @@ final class ZipBombGuard {
                 }
 
                 String relativePath = sanitizeRelativePath(entry.getName());
-                if (relativePath == null || entry.isDirectory() || !isPdfPath(relativePath)) {
+                if (relativePath == null || entry.isDirectory()) {
                     zipInputStream.closeEntry();
                     continue;
                 }
@@ -118,16 +121,21 @@ final class ZipBombGuard {
                 }
 
                 byte[] bytes = readLimited(zipInputStream, MAX_SINGLE_ENTRY_BYTES);
-                if (!FileSignatureValidator.isPdf(bytes)) {
-                    zipInputStream.closeEntry();
-                    continue;
-                }
-
-                pdfEntries += 1;
-                if (pdfEntries > MAX_PDF_ENTRIES) {
-                    throw new IllegalArgumentException(
-                            "ZIP archive contains too many PDF files (" + MAX_PDF_ENTRIES + " max). Split it into smaller ZIP files or import a folder instead."
-                    );
+                boolean isPdf = FileSignatureValidator.isPdf(bytes);
+                if (isPdf) {
+                    pdfEntries += 1;
+                    if (pdfEntries > MAX_PDF_ENTRIES) {
+                        throw new IllegalArgumentException(
+                                "ZIP archive contains too many PDF files (" + MAX_PDF_ENTRIES + " max). Split it into smaller ZIP files or import a folder instead."
+                        );
+                    }
+                } else {
+                    nonPdfEntries += 1;
+                    if (nonPdfEntries > MAX_NON_PDF_ENTRIES) {
+                        throw new IllegalArgumentException(
+                                "ZIP archive contains too many non-PDF files (" + MAX_NON_PDF_ENTRIES + " max). Split it into smaller ZIP files or import a folder instead."
+                        );
+                    }
                 }
                 totalUncompressed += bytes.length;
                 if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) {
@@ -146,7 +154,7 @@ final class ZipBombGuard {
         }
 
         if (entries.isEmpty()) {
-            throw new IllegalArgumentException("ZIP archive does not contain any PDF files to import.");
+            throw new IllegalArgumentException("ZIP archive does not contain any files to import.");
         }
         return entries;
     }

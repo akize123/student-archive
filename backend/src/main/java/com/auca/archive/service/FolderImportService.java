@@ -53,6 +53,7 @@ public class FolderImportService {
     private final DocumentRepository documentRepository;
     private final ArchiveAccessService accessService;
     private final StudentService studentService;
+    private final StudentEnrollmentService studentEnrollmentService;
     private final StudentIdFormatService studentIdFormatService;
     private final FileEncryptionService fileEncryptionService;
     private final ActivityService activityService;
@@ -60,6 +61,7 @@ public class FolderImportService {
     private final DocumentTemplateValidationService templateValidationService;
     private final DocumentScanService documentScanService;
     private final ArchiveTreeService archiveTreeService;
+    private final AcademicTermService academicTermService;
     private final DocumentChecksumService checksumService;
     private final PdfOptimizationService pdfOptimizationService;
     private final ArchiveStoragePaths archiveStoragePaths;
@@ -72,6 +74,7 @@ public class FolderImportService {
             DocumentRepository documentRepository,
             ArchiveAccessService accessService,
             StudentService studentService,
+            StudentEnrollmentService studentEnrollmentService,
             StudentIdFormatService studentIdFormatService,
             FileEncryptionService fileEncryptionService,
             ActivityService activityService,
@@ -79,6 +82,7 @@ public class FolderImportService {
             DocumentTemplateValidationService templateValidationService,
             DocumentScanService documentScanService,
             ArchiveTreeService archiveTreeService,
+            AcademicTermService academicTermService,
             DocumentChecksumService checksumService,
             PdfOptimizationService pdfOptimizationService,
             ArchiveStoragePaths archiveStoragePaths,
@@ -89,6 +93,7 @@ public class FolderImportService {
         this.documentRepository = documentRepository;
         this.accessService = accessService;
         this.studentService = studentService;
+        this.studentEnrollmentService = studentEnrollmentService;
         this.studentIdFormatService = studentIdFormatService;
         this.fileEncryptionService = fileEncryptionService;
         this.activityService = activityService;
@@ -96,6 +101,7 @@ public class FolderImportService {
         this.templateValidationService = templateValidationService;
         this.documentScanService = documentScanService;
         this.archiveTreeService = archiveTreeService;
+        this.academicTermService = academicTermService;
         this.checksumService = checksumService;
         this.pdfOptimizationService = pdfOptimizationService;
         this.archiveStoragePaths = archiveStoragePaths;
@@ -140,12 +146,12 @@ public class FolderImportService {
             String rawViewerDepartment
     ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
-        requireImportRole(role);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
+        requireImportRole(role);
 
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
-        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
+        folderService.requireScopedFolderPlacement(targetFolder, role, viewerDepartment);
         folderService.requireShareAtLeast(targetFolder, role, null, SharePermission.WRITE);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
@@ -228,7 +234,10 @@ public class FolderImportService {
                         folderContext.department(),
                         folderContext.academicYear(),
                         folderContext.semester(),
-                        category.getDisplayName()
+                        null,
+                        null,
+                        category.getDisplayName(),
+                        viewerDepartment
                 );
                 importedFiles.add(candidate.relativePath());
             } catch (IllegalArgumentException ex) {
@@ -313,11 +322,11 @@ public class FolderImportService {
             String linkedStudentNumberParam
     ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
-        requireImportRole(role);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
+        requireImportRole(role);
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
-        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
+        folderService.requireScopedFolderPlacement(targetFolder, role, viewerDepartment);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
         }
@@ -346,11 +355,6 @@ public class FolderImportService {
         }
 
         for (ImportCandidate candidate : candidates) {
-            if (!FileSignatureValidator.isPdf(candidate.bytes())) {
-                skippedCount += 1;
-                messages.add("Skipped non-PDF file: " + candidate.relativePath());
-                continue;
-            }
             ImportPreviewItemResponse item = importPathResolutionService.resolveItem(
                     candidate.relativePath(),
                     candidate.fileName(),
@@ -359,8 +363,14 @@ public class FolderImportService {
                     context.department(),
                     context.academicYear(),
                     context.semester(),
-                    candidate.bytes()
+                    FileSignatureValidator.isPdf(candidate.bytes()) ? candidate.bytes() : null
             );
+            if (!FileSignatureValidator.isPdf(candidate.bytes())) {
+                skippedCount += 1;
+                messages.add("Skipped non-PDF file: " + candidate.relativePath());
+                items.add(markNonImportablePreviewItem(item, candidate.bytes()));
+                continue;
+            }
             items.add(item);
         }
 
@@ -379,6 +389,10 @@ public class FolderImportService {
 
         List<ImportPreviewItemResponse> scannedItems = new ArrayList<>();
         for (ImportPreviewItemResponse item : items) {
+            if (!item.importable()) {
+                scannedItems.add(item);
+                continue;
+            }
             byte[] pdfBytes = candidateBytes.get(item.originalPath());
             scannedItems.add(enrichItemWithDocumentScan(
                     item,
@@ -391,9 +405,10 @@ public class FolderImportService {
         }
         items = scannedItems;
 
+        int importableCount = (int) items.stream().filter(ImportPreviewItemResponse::importable).count();
         return new ImportPreviewResponse(
                 candidates.size(),
-                items.size(),
+                importableCount,
                 skippedCount,
                 category,
                 defaultSubtypeId,
@@ -430,11 +445,11 @@ public class FolderImportService {
             String rawViewerDepartment
     ) throws IOException {
         UserRole role = accessService.resolveRole(rawRole);
-        requireImportRole(role);
         String viewerDepartment = accessService.normalizeViewerDepartment(rawViewerDepartment);
-        accessService.requireHodDepartment(role, viewerDepartment);
+        accessService.requireScopedViewerAssignment(role, viewerDepartment);
+        requireImportRole(role);
         FolderEntity targetFolder = folderService.getFolderOrThrow(folderId);
-        folderService.requireHodFolderPlacement(targetFolder, role, viewerDepartment);
+        folderService.requireScopedFolderPlacement(targetFolder, role, viewerDepartment);
         folderService.requireShareAtLeast(targetFolder, role, null, SharePermission.WRITE);
         if (!isSemesterOrDeeperFolder(targetFolder)) {
             throw new IllegalArgumentException("Open a semester folder or deeper before importing files.");
@@ -442,7 +457,7 @@ public class FolderImportService {
 
         String uploadedBy = rawUserName == null || rawUserName.isBlank() ? role.name() : rawUserName.trim();
         ImportPathResolutionService.ArchiveFolderContext context = importPathResolutionService.resolveFolderContext(targetFolder);
-        LinkedImportContext linkedImport = resolveLinkedImportContext(targetFolder, request, context);
+        LinkedImportContext linkedImport = resolveLinkedImportContext(targetFolder, request, context, role, viewerDepartment);
         Map<String, Long> folderCache = new HashMap<>();
         List<String> importedFiles = new ArrayList<>();
         List<String> skippedFiles = new ArrayList<>();
@@ -537,16 +552,6 @@ public class FolderImportService {
                 StudentDocumentCategory category = mapping.category() == null
                         ? (request.defaultCategory() == null ? defaultCategoryForRole(role) : request.defaultCategory())
                         : mapping.category();
-                String documentTypeName = category.getDisplayName();
-                FolderEntity destination = linkedImport.insideStudentTree()
-                        ? targetFolder
-                        : findOrCreateStudentFolder(
-                                linkedImport.semesterFolder(),
-                                targetFolderName,
-                                role,
-                                folderCache,
-                                linkedImport.studentName()
-                        );
                 String registrarSubfolderName = mapping.title() != null && !mapping.title().isBlank()
                         ? mapping.title().trim()
                         : "";
@@ -556,14 +561,47 @@ public class FolderImportService {
                             + ". Choose a document type during import — it becomes the subfolder name.");
                     continue;
                 }
-                destination = archiveTreeService.ensureRegistrarDocumentSubfolder(destination, registrarSubfolderName);
-                if (!linkedImport.insideStudentTree()) {
-                    folderCount += 1;
+                String primaryDocumentType = mapping.documentTypeLabel() != null && !mapping.documentTypeLabel().isBlank()
+                        ? mapping.documentTypeLabel().trim()
+                        : category.getDisplayName();
+                String documentAcademicYear = mapping.academicYear();
+                String documentSemester = mapping.semester();
+                if (documentAcademicYear == null || documentAcademicYear.isBlank()
+                        || documentSemester == null || documentSemester.isBlank()) {
+                    skippedFiles.add(mapping.originalPath());
+                    messages.add("Document academic year and semester are required for "
+                            + mapping.originalPath()
+                            + " (example year 2024-2025, semester 2024/1). "
+                            + "Import uses the existing archive folders: Year → Semester → Student → Document type.");
+                    continue;
                 }
+                // Match explorer tree: Year → Semester → Student → Document type → Subcategory?
+                UserRole structureOwnerRole = role == UserRole.ADMIN ? UserRole.REGISTRAR : role;
+                FolderEntity studentRoot = archiveTreeService.ensureOfficeStudentFolder(
+                        targetFolderName,
+                        context.faculty(),
+                        context.department(),
+                        documentAcademicYear.trim(),
+                        documentSemester.trim(),
+                        structureOwnerRole
+                );
+                folderCache.put(
+                        (studentRoot.getParentId() == null ? "root" : studentRoot.getParentId())
+                                + ":" + studentRoot.getName().toUpperCase(Locale.ROOT),
+                        studentRoot.getId()
+                );
+                folderCount += 1;
+                FolderEntity destination = archiveTreeService.ensureImportDocumentTypePath(
+                        studentRoot,
+                        primaryDocumentType,
+                        registrarSubfolderName
+                );
                 targetFolderIds.add(destination.getId());
-                String fileName = mapping.originalPath().contains("/")
+                String fileName = mapping.uploadFileName() != null && !mapping.uploadFileName().isBlank()
+                        ? mapping.uploadFileName().trim()
+                        : (mapping.originalPath().contains("/")
                         ? mapping.originalPath().substring(mapping.originalPath().lastIndexOf('/') + 1)
-                        : mapping.originalPath();
+                        : mapping.originalPath());
                 importPdf(
                         destination,
                         fileName,
@@ -577,9 +615,13 @@ public class FolderImportService {
                         role,
                         context.faculty(),
                         context.department(),
-                        context.academicYear(),
-                        context.semester(),
-                        documentTypeName
+                        documentAcademicYear.trim(),
+                        documentSemester.trim(),
+                        null,
+                        null,
+                        primaryDocumentType,
+                        registrarSubfolderName,
+                        viewerDepartment
                 );
                 importedFiles.add(mapping.originalPath());
             } catch (IllegalArgumentException ex) {
@@ -728,9 +770,56 @@ public class FolderImportService {
             UserRole role,
             String faculty,
             String department,
-            String academicYear,
-            String semester,
-            String documentTypeName
+            String placementAcademicYear,
+            String placementSemester,
+            String documentAcademicYear,
+            String documentSemester,
+            String documentTypeName,
+            String viewerFaculty
+    ) throws IOException {
+        importPdf(
+                folder,
+                fileName,
+                fileBytes,
+                studentNumber,
+                studentName,
+                category,
+                documentSubtypeId,
+                titleOverride,
+                uploadedBy,
+                role,
+                faculty,
+                department,
+                placementAcademicYear,
+                placementSemester,
+                documentAcademicYear,
+                documentSemester,
+                documentTypeName,
+                documentTypeName,
+                viewerFaculty
+        );
+    }
+
+    private void importPdf(
+            FolderEntity folder,
+            String fileName,
+            byte[] fileBytes,
+            String studentNumber,
+            String studentName,
+            StudentDocumentCategory category,
+            Long documentSubtypeId,
+            String titleOverride,
+            String uploadedBy,
+            UserRole role,
+            String faculty,
+            String department,
+            String placementAcademicYear,
+            String placementSemester,
+            String documentAcademicYear,
+            String documentSemester,
+            String primaryDocumentType,
+            String documentTypeOrSubtype,
+            String viewerFaculty
     ) throws IOException {
         FileSignatureValidator.requirePdf(fileBytes);
         if (fileBytes.length < MIN_FILE_BYTES) {
@@ -751,7 +840,7 @@ public class FolderImportService {
         StudentEntity student = null;
         if (studentNumber != null && !studentNumber.isBlank()) {
             String resolvedName = studentName == null || studentName.isBlank() ? studentNumber : studentName.trim();
-            student = studentService.resolveOrCreate(studentNumber, resolvedName, faculty, department, true);
+            student = resolveStudentForImport(studentNumber, resolvedName, faculty, department, role, viewerFaculty);
         }
 
         Path importRoot = student == null
@@ -761,9 +850,12 @@ public class FolderImportService {
                         student,
                         faculty,
                         department,
-                        academicYear,
-                        semester,
-                        documentTypeName
+                        placementAcademicYear,
+                        placementSemester,
+                        documentAcademicYear,
+                        documentSemester,
+                        primaryDocumentType,
+                        documentTypeOrSubtype
                 );
         Files.createDirectories(importRoot);
 
@@ -798,8 +890,13 @@ public class FolderImportService {
         entity.setType(DocumentType.PDF);
         entity.setCategory(category);
         entity.setDocumentSubtypeId(documentSubtypeId);
-        entity.setAcademicYear(academicYear);
-        entity.setSemester(semester);
+        String storedAcademicYear = documentAcademicYear != null && !documentAcademicYear.isBlank()
+                ? academicTermService.normalizeAcademicYear(documentAcademicYear)
+                : academicTermService.normalizeAcademicYear(placementAcademicYear);
+        entity.setAcademicYear(storedAcademicYear);
+        entity.setSemester(documentSemester != null && !documentSemester.isBlank()
+                ? documentSemester.trim()
+                : placementSemester);
         entity.setContentChecksumSha256(checksumService.sha256Hex(fileBytes));
         entity.setChecksumAlgorithm("SHA-256");
         entity.setCompressed(Boolean.FALSE);
@@ -881,25 +978,44 @@ public class FolderImportService {
         return new FolderResolution(folderService.getFolderOrThrow(created.id()), true);
     }
 
-    private ImportPreviewItemResponse applyLinkedStudentPreview(ImportPreviewItemResponse item, String linkedStudentNumber) {
-        return new ImportPreviewItemResponse(
-                item.originalPath(),
-                linkedStudentNumber,
-                linkedStudentNumber,
+    private ImportPreviewItemResponse markNonImportablePreviewItem(ImportPreviewItemResponse item, byte[] bytes) {
+        boolean image = FileSignatureValidator.isImage(bytes);
+        String fileKind = image ? "IMAGE" : "OTHER";
+        String skipReason = image
+                ? "Not a PDF — images cannot be imported into the archive"
+                : "Not a PDF — only PDF files can be imported into the archive";
+        return copyPreviewItem(
+                item,
+                item.suggestedFolderName(),
+                item.suggestedStudentNumber(),
                 item.suggestedStudentName(),
-                "importContext",
-                item.proposedTitle(),
-                item.warnings(),
-                item.conflicts(),
+                item.resolutionSource(),
                 item.validationSimilarityScore(),
                 item.validationVerified(),
                 item.scanSummary(),
                 item.scanSignals(),
                 item.scanPreview(),
-                item.studentExists(),
-                item.existingStudentName(),
-                item.existingFolderId(),
-                item.folderExistsHere()
+                false,
+                fileKind,
+                skipReason
+        );
+    }
+
+    private ImportPreviewItemResponse applyLinkedStudentPreview(ImportPreviewItemResponse item, String linkedStudentNumber) {
+        return copyPreviewItem(
+                item,
+                linkedStudentNumber,
+                linkedStudentNumber,
+                item.suggestedStudentName(),
+                "importContext",
+                item.validationSimilarityScore(),
+                item.validationVerified(),
+                item.scanSummary(),
+                item.scanSignals(),
+                item.scanPreview(),
+                item.importable(),
+                item.fileKind(),
+                item.skipReason()
         );
     }
 
@@ -931,24 +1047,59 @@ public class FolderImportService {
                 role.getDepartment()
         );
         DocumentScanResponse scan = documentScanService.scanPdf(pdfBytes, scanContext);
-        return new ImportPreviewItemResponse(
-                item.originalPath(),
+        return copyPreviewItem(
+                item,
                 item.suggestedFolderName(),
                 item.suggestedStudentNumber(),
                 item.suggestedStudentName(),
                 item.resolutionSource(),
-                item.proposedTitle(),
-                item.warnings(),
-                item.conflicts(),
                 scan.similarityScore(),
                 scan.verified(),
                 scan.summary(),
                 scan.matchedSignals() == null ? List.of() : scan.matchedSignals(),
                 scan.preview(),
+                item.importable(),
+                item.fileKind(),
+                item.skipReason()
+        );
+    }
+
+    private ImportPreviewItemResponse copyPreviewItem(
+            ImportPreviewItemResponse item,
+            String suggestedFolderName,
+            String suggestedStudentNumber,
+            String suggestedStudentName,
+            String resolutionSource,
+            Integer validationSimilarityScore,
+            Boolean validationVerified,
+            String scanSummary,
+            List<String> scanSignals,
+            String scanPreview,
+            boolean importable,
+            String fileKind,
+            String skipReason
+    ) {
+        return new ImportPreviewItemResponse(
+                item.originalPath(),
+                suggestedFolderName,
+                suggestedStudentNumber,
+                suggestedStudentName,
+                resolutionSource,
+                item.proposedTitle(),
+                item.warnings(),
+                item.conflicts(),
+                validationSimilarityScore,
+                validationVerified,
+                scanSummary,
+                scanSignals,
+                scanPreview,
                 item.studentExists(),
                 item.existingStudentName(),
                 item.existingFolderId(),
-                item.folderExistsHere()
+                item.folderExistsHere(),
+                importable,
+                fileKind,
+                skipReason
         );
     }
 
@@ -979,7 +1130,10 @@ public class FolderImportService {
             return;
         }
         boolean allowOverride = insideStudentTree
-                && (role == UserRole.REGISTRAR || role == UserRole.ADMIN);
+                && (role == UserRole.REGISTRAR
+                || role == UserRole.FINANCE
+                || role == UserRole.DEAN_OF_FACULTY
+                || role == UserRole.ADMIN);
         if (allowOverride) {
             return;
         }
@@ -989,7 +1143,9 @@ public class FolderImportService {
     private LinkedImportContext resolveLinkedImportContext(
             FolderEntity targetFolder,
             ImportCommitRequest request,
-            ImportPathResolutionService.ArchiveFolderContext context
+            ImportPathResolutionService.ArchiveFolderContext context,
+            UserRole role,
+            String viewerFaculty
     ) {
         boolean insideStudentTree = folderService.isWithinSemesterStudentTree(targetFolder);
         if (insideStudentTree) {
@@ -1029,7 +1185,7 @@ public class FolderImportService {
         if (!conflicts.isEmpty()) {
             throw new IllegalArgumentException(String.join(" ", conflicts));
         }
-        studentService.resolveOrCreate(normalized, studentName, context.faculty(), context.department(), true);
+        resolveStudentForImport(normalized, studentName, context.faculty(), context.department(), role, viewerFaculty);
         FolderEntity semesterFolder = resolveSemesterFolderEntity(targetFolder);
         if (semesterFolder == null) {
             throw new IllegalArgumentException("Open a semester folder before importing for a student.");
@@ -1099,10 +1255,7 @@ public class FolderImportService {
     }
 
     private void requireImportRole(UserRole role) {
-        if (role != UserRole.REGISTRAR
-                && role != UserRole.EXAMINATION_OFFICER
-                && role != UserRole.HOD
-                && role != UserRole.ADMIN) {
+        if (role == null || !role.canImportIntoArchive()) {
             throw new IllegalArgumentException("You are not allowed to import files into the archive.");
         }
     }
@@ -1142,5 +1295,28 @@ public class FolderImportService {
     }
 
     private record FolderResolution(FolderEntity folder, boolean created) {
+    }
+
+    private StudentEntity resolveStudentForImport(
+            String studentNumber,
+            String studentName,
+            String faculty,
+            String department,
+            UserRole role,
+            String viewerFaculty
+    ) {
+        if (role == UserRole.REGISTRAR || role == UserRole.ADMIN) {
+            UserRole creatorRole = role == UserRole.ADMIN ? UserRole.REGISTRAR : role;
+            return studentService.resolveOrCreate(
+                    studentNumber,
+                    studentName,
+                    faculty,
+                    department,
+                    true,
+                    creatorRole
+            );
+        }
+        studentEnrollmentService.requireEnrollmentForRole(studentNumber, role, viewerFaculty);
+        return studentService.requireExistingStudent(studentNumber);
     }
 }

@@ -18,7 +18,7 @@ public final class SessionRequestContext {
         UserRole role = rawRole == null || rawRole.isBlank()
                 ? null
                 : accessService.resolveRole(rawRole);
-        if (role != UserRole.HOD) {
+        if (role != UserRole.HOD && role != UserRole.DEAN_OF_FACULTY) {
             return null;
         }
         Long accountId = AccountService.parseAccountIdHeader(rawAccountId);

@@ -1,7 +1,10 @@
 package com.auca.archive.model;
 
+import com.auca.archive.domain.UserRole;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -34,6 +37,10 @@ public class StudentEntity {
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "registered_by_role")
+    private UserRole registeredByRole;
 
     public StudentEntity() {
     }
@@ -90,5 +97,13 @@ public class StudentEntity {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public UserRole getRegisteredByRole() {
+        return registeredByRole;
+    }
+
+    public void setRegisteredByRole(UserRole registeredByRole) {
+        this.registeredByRole = registeredByRole;
     }
 }

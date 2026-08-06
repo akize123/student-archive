@@ -50,5 +50,11 @@ public class DocumentSchemaMigration implements CommandLineRunner {
                 WHERE uploaded_by_role IS NULL
                   AND category = 'FINAL_YEAR_PROJECT'
                 """);
+        jdbcTemplate.execute("""
+                UPDATE documents
+                SET uploaded_by_role = 'REGISTRAR'
+                WHERE uploaded_by_role IS NULL
+                  AND category = 'APPLICATION_DOCUMENTS'
+                """);
     }
 }
